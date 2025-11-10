@@ -1,4 +1,4 @@
-name: UCI
+name: Release Checker
 
 on:
   pull_request_target:
@@ -16,5 +16,4 @@ concurrency:
 
 jobs:
   release-check:
-    name: Release
     uses: sei-protocol/uci/.github/workflows/release-check.yml@v0.0.3 
