@@ -1,4 +1,4 @@
-module github.com/sei-protocol/platform/tools/seictl
+module github.com/sei-protocol/seictl
 
 go 1.25.2
 
