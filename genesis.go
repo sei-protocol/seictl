@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/urfave/cli/v3"
 )
@@ -32,12 +33,17 @@ var genesisCmd = cli.Command{
 			Action: func(ctx context.Context, command *cli.Command) error {
 				var patchBytes []byte
 				if destinations.genesis.patch.file == "" {
+					// Read full multi-line input from stdin
+					var buffer bytes.Buffer
 					scanner := bufio.NewScanner(os.Stdin)
-					scanner.Scan()
+					for scanner.Scan() {
+						buffer.Write(scanner.Bytes())
+						buffer.WriteByte('\n')
+					}
 					if err := scanner.Err(); err != nil {
 						return fmt.Errorf("reading input from stdin: %w", err)
 					}
-					patchBytes = []byte(scanner.Text())
+					patchBytes = buffer.Bytes()
 				} else {
 					var err error
 					patchBytes, err = os.ReadFile(destinations.genesis.patch.file)
@@ -45,10 +51,22 @@ var genesisCmd = cli.Command{
 						return fmt.Errorf("reading patch file: %w", err)
 					}
 				}
+				patchBytes = []byte(strings.TrimSpace(string(patchBytes)))
+				if len(patchBytes) == 0 {
+					return nil
+				}
 
 				patch := make(map[string]any)
 				if err := json.Unmarshal(patchBytes, &patch); err != nil {
 					return fmt.Errorf("parsing patch: %w", err)
+				}
+
+				if destinations.home == "" {
+					userHome, err := os.UserHomeDir()
+					if err != nil {
+						return fmt.Errorf("failed to get user home directory: %w", err)
+					}
+					destinations.home = filepath.Clean(filepath.Join(userHome, ".sei"))
 				}
 
 				genesisPath := filepath.Join(destinations.home, "config", "genesis.json")

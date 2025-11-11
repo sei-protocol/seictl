@@ -92,7 +92,7 @@ var configCmd = cli.Command{
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:        "target",
-			Usage:       "The target TOML configuration file, one of 'app', 'client',or 'config'.",
+			Usage:       "The target TOML configuration file, one of 'app', 'client', or 'config'.",
 			DefaultText: "Automatically determined on best-effort basis.",
 			Destination: &destinations.config.target,
 			Config: cli.StringConfig{
@@ -127,16 +127,21 @@ var configCmd = cli.Command{
 			},
 			Action: func(ctx context.Context, command *cli.Command) error {
 				var patchBytes []byte
-				if destinations.genesis.patch.file == "" {
+				if destinations.config.patch.file == "" {
+					// Read full multi-line input from stdin
+					var buffer bytes.Buffer
 					scanner := bufio.NewScanner(os.Stdin)
-					scanner.Scan()
+					for scanner.Scan() {
+						buffer.Write(scanner.Bytes())
+						buffer.WriteByte('\n')
+					}
 					if err := scanner.Err(); err != nil {
 						return fmt.Errorf("reading input from stdin: %w", err)
 					}
-					patchBytes = []byte(scanner.Text())
+					patchBytes = buffer.Bytes()
 				} else {
 					var err error
-					patchBytes, err = os.ReadFile(destinations.genesis.patch.file)
+					patchBytes, err = os.ReadFile(destinations.config.patch.file)
 					if err != nil {
 						return fmt.Errorf("reading patch file: %w", err)
 					}
@@ -182,11 +187,11 @@ var configCmd = cli.Command{
 				configPath := filepath.Join(destinations.home, "config", destinations.config.target+".toml")
 				configBytes, err := os.ReadFile(configPath)
 				if err != nil {
-					return fmt.Errorf("reading genesis file: %w", err)
+					return fmt.Errorf("reading config file: %w", err)
 				}
 				config := make(map[string]any)
 				if err := toml.Unmarshal(configBytes, &config); err != nil {
-					return fmt.Errorf("parsing genesis: %w", err)
+					return fmt.Errorf("parsing config: %w", err)
 				}
 
 				patchedConfig := mergePatch(config, patch)
@@ -194,7 +199,7 @@ var configCmd = cli.Command{
 				var prettyPatchedConfig bytes.Buffer
 				encoder := toml.NewEncoder(&prettyPatchedConfig)
 				if err := encoder.Encode(patchedConfig); err != nil {
-					return fmt.Errorf("marshalling patched genesis: %w", err)
+					return fmt.Errorf("marshalling patched config: %w", err)
 				}
 				return output(configPath, prettyPatchedConfig)
 			},
