@@ -144,9 +144,7 @@ release:
 
     ### Support
 
-    - 📖 [Documentation](https://github.com/sei-protocol/seictl/tree/main/tools/seictl)
     - 🐛 [Report Issues](https://github.com/sei-protocol/seictl/issues)
-    - 💬 [Community](https://discord.gg/sei)
 
 # Announce the release
 announce:
@@ -156,3 +154,4 @@ source:
   enabled: true
   name_template: '{{ .ProjectName }}-{{ .Version }}-source'
   format: tar.gz
+
