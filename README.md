@@ -24,52 +24,64 @@ the [releases page](https://github.com/sei-protocol/seictl/releases).
 
 #### Quick Install
 
-**Linux (x86_64)**
+<details>
+<summary><b>Linux (x86_64)</b></summary>
 
 ```bash
 curl -LO https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Linux_x86_64.tar.gz
 tar -xzf seictl_Linux_x86_64.tar.gz
 sudo mv seictl /usr/local/bin/
 ```
+</details>
 
-**Linux (ARM64)**
+<details>
+<summary><b>Linux (ARM64)</b></summary>
 
 ```bash
 curl -LO https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Linux_arm64.tar.gz
 tar -xzf seictl_Linux_arm64.tar.gz
 sudo mv seictl /usr/local/bin/
 ```
+</details>
 
-**Linux (ARMv7)**
+<details>
+<summary><b>Linux (ARMv7)</b></summary>
 
 ```bash
 curl -LO https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Linux_armv7.tar.gz
 tar -xzf seictl_Linux_armv7.tar.gz
 sudo mv seictl /usr/local/bin/
 ```
+</details>
 
-**macOS (Apple Silicon)**
+<details>
+<summary><b>macOS (Apple Silicon)</b></summary>
 
 ```bash
 curl -LO https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Darwin_arm64.tar.gz
 tar -xzf seictl_Darwin_arm64.tar.gz
 sudo mv seictl /usr/local/bin/
 ```
+</details>
 
-**macOS (Intel)**
+<details>
+<summary><b>macOS (Intel)</b></summary>
 
 ```bash
 curl -LO https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Darwin_x86_64.tar.gz
 tar -xzf seictl_Darwin_x86_64.tar.gz
 sudo mv seictl /usr/local/bin/
 ```
+</details>
 
-**Windows (x86_64)**
+<details>
+<summary><b>Windows (x86_64)</b></summary>
 
 ```powershell
 # Download from: https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Windows_x86_64.zip
 # Extract and add to PATH
 ```
+</details>
 
 #### Verify Installation
 
@@ -299,13 +311,16 @@ swagger = true
 
 ## Examples
 
-### Update Minimum Gas Prices
+<details>
+<summary><b>Update Minimum Gas Prices</b></summary>
 
 ```bash
 echo 'minimum-gas-prices = "0.02usei"' | seictl config patch -i
 ```
+</details>
 
-### Enable API Endpoint
+<details>
+<summary><b>Enable API Endpoint</b></summary>
 
 ```bash
 cat > patch.toml << EOF
@@ -316,14 +331,18 @@ EOF
 
 seictl config --target app patch patch.toml -i
 ```
+</details>
 
-### Modify Genesis Chain ID
+<details>
+<summary><b>Modify Genesis Chain ID</b></summary>
 
 ```bash
 echo '{"chain_id": "sei-mainnet-1"}' | seictl genesis patch -i
 ```
+</details>
 
-### Update Multiple Configuration Sections
+<details>
+<summary><b>Update Multiple Configuration Sections</b></summary>
 
 ```bash
 cat > patch.toml << EOF
@@ -340,8 +359,10 @@ EOF
 
 seictl config patch patch.toml -i
 ```
+</details>
 
-### Patch a Custom TOML Configuration
+<details>
+<summary><b>Patch a Custom TOML Configuration</b></summary>
 
 ```bash
 # Patch any TOML file outside the Sei directory structure
@@ -353,15 +374,19 @@ EOF
 
 seictl patch --target /etc/myapp/config.toml custom-patch.toml -i
 ```
+</details>
 
-### Patch a Custom JSON Data File
+<details>
+<summary><b>Patch a Custom JSON Data File</b></summary>
 
 ```bash
 # Modify any JSON file
 echo '{"version": "2.0", "debug": true}' | seictl patch --target /path/to/settings.json -i
 ```
+</details>
 
-### Using Custom Sei Home Directory
+<details>
+<summary><b>Using Custom Sei Home Directory</b></summary>
 
 ```bash
 # Via environment variable
@@ -371,6 +396,7 @@ seictl config patch patch.toml
 # Via flag
 seictl --home /custom/path/.sei config patch patch.toml
 ```
+</details>
 
 ## Command Comparison
 
