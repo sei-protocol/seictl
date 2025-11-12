@@ -9,6 +9,7 @@ configuration files (TOML) and genesis files (JSON) with ease. More features to 
 
 - **Configuration Management**: Patch Sei daemon configuration files (`app.toml`, `client.toml`, `config.toml`)
 - **Genesis Management**: Apply merge patches to genesis JSON files
+- **Universal Patching**: Apply merge patches to any TOML or JSON file
 - **Smart Target Detection**: Automatically detects which configuration file to modify based on patch content
 - **Flexible Output**: Write to stdout, a specific file, or modify files in-place
 - **Atomic Writes**: Safe file modifications using atomic write operations
@@ -16,18 +17,107 @@ configuration files (TOML) and genesis files (JSON) with ease. More features to 
 
 ## Installation
 
-### Prerequisites
+### Pre-built Binaries (Recommended)
 
-- Go 1.25.2 or higher
+Pre-built binaries are available for Linux, macOS, and Windows. Download the latest release from
+the [releases page](https://github.com/sei-protocol/seictl/releases).
+
+#### Quick Install
+
+<details>
+<summary><b>Linux (x86_64)</b></summary>
+
+```bash
+curl -LO https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Linux_x86_64.tar.gz
+tar -xzf seictl_Linux_x86_64.tar.gz
+sudo mv seictl /usr/local/bin/
+```
+</details>
+
+<details>
+<summary><b>Linux (ARM64)</b></summary>
+
+```bash
+curl -LO https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Linux_arm64.tar.gz
+tar -xzf seictl_Linux_arm64.tar.gz
+sudo mv seictl /usr/local/bin/
+```
+</details>
+
+<details>
+<summary><b>Linux (ARMv7)</b></summary>
+
+```bash
+curl -LO https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Linux_armv7.tar.gz
+tar -xzf seictl_Linux_armv7.tar.gz
+sudo mv seictl /usr/local/bin/
+```
+</details>
+
+<details>
+<summary><b>macOS (Apple Silicon)</b></summary>
+
+```bash
+curl -LO https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Darwin_arm64.tar.gz
+tar -xzf seictl_Darwin_arm64.tar.gz
+sudo mv seictl /usr/local/bin/
+```
+</details>
+
+<details>
+<summary><b>macOS (Intel)</b></summary>
+
+```bash
+curl -LO https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Darwin_x86_64.tar.gz
+tar -xzf seictl_Darwin_x86_64.tar.gz
+sudo mv seictl /usr/local/bin/
+```
+</details>
+
+<details>
+<summary><b>Windows (x86_64)</b></summary>
+
+```powershell
+# Download from: https://github.com/sei-protocol/seictl/releases/latest/download/seictl_Windows_x86_64.zip
+# Extract and add to PATH
+```
+</details>
+
+#### Verify Installation
+
+```bash
+seictl --version
+```
+
+#### Verify Download (Optional)
+
+All releases include a `checksums.txt` file for verification, e.g.:
+
+```bash
+# Download checksums
+curl -LO https://github.com/sei-protocol/seictl/releases/latest/download/checksums.txt
+
+# Verify (Linux/macOS)
+sha256sum -c checksums.txt 2>&1 | grep seictl_Linux_x86_64.tar.gz
+```
 
 ### Build from Source
 
+If you prefer to build from source or need a specific configuration:
+
+#### Prerequisites
+
+- Go 1.25.4 or higher
+
+#### Build
+
 ```bash
 git clone https://github.com/sei-protocol/seictl.git
+cd seictl
 go build -o seictl
 ```
 
-### Install
+### Install via Go
 
 ```bash
 go install github.com/sei-protocol/seictl@latest
@@ -44,6 +134,41 @@ seictl [global options] command [command options] [arguments...]
 - `--home <path>`: Sei home directory (default: `~/.sei`, can be set via `SEI_HOME` environment variable)
 
 ## Commands
+
+### Patch Command
+
+#### `patch`
+
+Apply a merge-patch to any TOML or JSON file. This is a universal patching command that works with any file format, not
+just Sei-specific configurations.
+
+```bash
+seictl patch --target <file-path> [patch-file]
+```
+
+**Options:**
+
+- `--target <path>`: Path to the TOML or JSON file to patch (required)
+- `-o, --output <path>`: Write output to specified file
+- `-i, --in-place-rewrite`: Modify the target file in-place
+
+**Examples:**
+
+```bash
+# Patch any TOML file
+seictl patch --target /path/to/config.toml patch.toml
+
+# Patch any JSON file from stdin
+echo '{"new_key": "value"}' | seictl patch --target /path/to/data.json
+
+# Patch and save to a new file
+seictl patch --target myconfig.toml patch.toml -o modified.toml
+
+# Patch and modify in-place
+seictl patch --target settings.json patch.json -i
+```
+
+**Note:** The file extension (`.toml` or `.json`) is used to determine the format automatically.
 
 ### Genesis Commands
 
@@ -186,13 +311,16 @@ swagger = true
 
 ## Examples
 
-### Update Minimum Gas Prices
+<details>
+<summary><b>Update Minimum Gas Prices</b></summary>
 
 ```bash
 echo 'minimum-gas-prices = "0.02usei"' | seictl config patch -i
 ```
+</details>
 
-### Enable API Endpoint
+<details>
+<summary><b>Enable API Endpoint</b></summary>
 
 ```bash
 cat > patch.toml << EOF
@@ -203,14 +331,18 @@ EOF
 
 seictl config --target app patch patch.toml -i
 ```
+</details>
 
-### Modify Genesis Chain ID
+<details>
+<summary><b>Modify Genesis Chain ID</b></summary>
 
 ```bash
 echo '{"chain_id": "sei-mainnet-1"}' | seictl genesis patch -i
 ```
+</details>
 
-### Update Multiple Configuration Sections
+<details>
+<summary><b>Update Multiple Configuration Sections</b></summary>
 
 ```bash
 cat > patch.toml << EOF
@@ -227,8 +359,34 @@ EOF
 
 seictl config patch patch.toml -i
 ```
+</details>
 
-### Using Custom Sei Home Directory
+<details>
+<summary><b>Patch a Custom TOML Configuration</b></summary>
+
+```bash
+# Patch any TOML file outside the Sei directory structure
+cat > custom-patch.toml << EOF
+[database]
+host = "localhost"
+port = 5432
+EOF
+
+seictl patch --target /etc/myapp/config.toml custom-patch.toml -i
+```
+</details>
+
+<details>
+<summary><b>Patch a Custom JSON Data File</b></summary>
+
+```bash
+# Modify any JSON file
+echo '{"version": "2.0", "debug": true}' | seictl patch --target /path/to/settings.json -i
+```
+</details>
+
+<details>
+<summary><b>Using Custom Sei Home Directory</b></summary>
 
 ```bash
 # Via environment variable
@@ -238,6 +396,16 @@ seictl config patch patch.toml
 # Via flag
 seictl --home /custom/path/.sei config patch patch.toml
 ```
+</details>
+
+## Command Comparison
+
+### When to Use Each Command
+
+- **`patch`**: Use for patching any arbitrary TOML or JSON file on your system. Requires explicit `--target` path.
+- **`genesis patch`**: Use specifically for Sei genesis files. Automatically uses `$HOME/.sei/config/genesis.json`.
+- **`config patch`**: Use specifically for Sei configuration files with automatic target detection. Automatically uses
+  files in `$HOME/.sei/config/`.
 
 ## File Locations
 
@@ -254,8 +422,10 @@ Where `$HOME` is the value of the `--home` flag or the `SEI_HOME` environment va
 
 - **Atomic Writes**: All file modifications use atomic write operations (write to temp file, then rename)
 - **Permission Preservation**: In-place modifications preserve original file permissions
+- **Format Validation**: Validates file extensions before processing (must be `.toml` or `.json`)
 - **Target Validation**: Prevents accidental modification of wrong configuration files
 - **Auto-detection Safety**: Refuses to proceed if patch could apply to multiple targets
+- **Early Validation**: Checks file format and existence before reading patch data
 
 ## License
 

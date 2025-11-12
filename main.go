@@ -27,6 +27,10 @@ var (
 				file string
 			}
 		}
+		patch struct {
+			file   string
+			target string
+		}
 	}{}
 
 	seictlCmd = cli.Command{
@@ -34,6 +38,7 @@ var (
 		Commands: []*cli.Command{
 			&configCmd,
 			&genesisCmd,
+			&patchCmd,
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
