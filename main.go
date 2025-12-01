@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/urfave/cli/v3"
 )
@@ -31,6 +32,12 @@ var (
 			file   string
 			target string
 		}
+		await struct {
+			timeout   time.Duration
+			validator struct {
+				address string
+			}
+		}
 	}{}
 
 	seictlCmd = cli.Command{
@@ -39,6 +46,7 @@ var (
 			&configCmd,
 			&genesisCmd,
 			&patchCmd,
+			&awaitCmd,
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
