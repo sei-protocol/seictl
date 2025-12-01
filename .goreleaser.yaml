@@ -96,7 +96,7 @@ release:
     name: seictl
   draft: false
   prerelease: auto
-  mode: append
+  mode: replace
   header: |
     ## ⚙️ seictl {{ .Tag }}
 
