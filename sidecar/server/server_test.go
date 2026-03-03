@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sei-protocol/seictl/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
 func newTestEngine(handlers map[engine.TaskType]engine.TaskHandler) *engine.Engine {
@@ -95,7 +95,7 @@ func TestStatusResponse(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode: %v", err)
 	}
-	if resp.Status != "not_ready" {
+	if resp.Status != "Initializing" {
 		t.Fatalf("expected not_ready initially, got %q", resp.Status)
 	}
 
@@ -106,7 +106,7 @@ func TestStatusResponse(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode: %v", err)
 	}
-	if resp.Status != "ready" {
+	if resp.Status != "Ready" {
 		t.Fatalf("expected ready after mark-ready, got %q", resp.Status)
 	}
 }

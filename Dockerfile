@@ -6,7 +6,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -o /go/bin/seictl .
+RUN CGO_ENABLED=0 go build -o /go/bin/seictl ./cmd/seictl
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=BUILD /go/bin/seictl /usr/bin/

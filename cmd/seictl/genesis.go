@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/sei-protocol/seictl/internal/patch"
 	"github.com/urfave/cli/v3"
 )
 
@@ -56,8 +57,8 @@ var genesisCmd = cli.Command{
 					return nil
 				}
 
-				patch := make(map[string]any)
-				if err := json.Unmarshal(patchBytes, &patch); err != nil {
+				patchData := make(map[string]any)
+				if err := json.Unmarshal(patchBytes, &patchData); err != nil {
 					return fmt.Errorf("parsing patch: %w", err)
 				}
 
@@ -79,7 +80,7 @@ var genesisCmd = cli.Command{
 					return fmt.Errorf("parsing genesis: %w", err)
 				}
 
-				patchedGenesis := mergePatch(genesis, patch)
+				patchedGenesis := patch.Merge(genesis, patchData)
 
 				var prettyPatchedGenesis bytes.Buffer
 				encoder := json.NewEncoder(&prettyPatchedGenesis)

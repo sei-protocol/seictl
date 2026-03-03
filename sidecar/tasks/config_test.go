@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BurntSushi/toml"
+	"github.com/sei-protocol/seictl/internal/patch"
 )
 
 // setupConfigFile creates a config.toml in the expected path within homeDir.
@@ -191,8 +191,7 @@ persistent-peers = "old"
 	if err != nil {
 		t.Fatalf("reading config: %v", err)
 	}
-	var doc map[string]any
-	if err := toml.Unmarshal(data, &doc); err != nil {
+	if _, err := patch.UnmarshalTOML(data); err != nil {
 		t.Fatalf("config is not valid TOML after patch: %v", err)
 	}
 }
@@ -366,13 +365,9 @@ func TestParsePatchSet_NoSnapshotGeneration(t *testing.T) {
 
 func readTOML(t *testing.T, path string) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	doc, err := patch.ReadTOML(path)
 	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
-	}
-	var doc map[string]any
-	if err := toml.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("parsing TOML: %v", err)
+		t.Fatalf("reading TOML %s: %v", path, err)
 	}
 	return doc
 }

@@ -138,13 +138,13 @@ func (e *Engine) Healthz() bool {
 // result of the most recent non-scheduled task.
 func (e *Engine) Status() StatusResponse {
 	if e.running.Load() {
-		return StatusResponse{Status: "running"}
+		return StatusResponse{Status: "Running"}
 	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	status := "not_ready"
+	status := "Initializing"
 	if e.ready {
-		status = "ready"
+		status = "Ready"
 	}
 	return StatusResponse{Status: status, LastTask: e.lastTask}
 }

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sei-protocol/seictl/sei-sidecar/engine"
-	"github.com/sei-protocol/seictl/sei-sidecar/server"
-	"github.com/sei-protocol/seictl/sei-sidecar/tasks"
+	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/server"
+	"github.com/sei-protocol/seictl/sidecar/tasks"
 	"github.com/urfave/cli/v3"
 )
 

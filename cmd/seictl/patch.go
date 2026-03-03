@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/sei-protocol/seictl/internal/patch"
 	"github.com/urfave/cli/v3"
 )
 
@@ -78,19 +79,18 @@ var patchCmd = cli.Command{
 		}
 
 		target := make(map[string]any)
-		patch := make(map[string]any)
+		patchData := make(map[string]any)
 
-		// Parse based on file extension
 		switch targetExt {
 		case ".toml":
-			if err := toml.Unmarshal(patchBytes, &patch); err != nil {
+			if err := toml.Unmarshal(patchBytes, &patchData); err != nil {
 				return fmt.Errorf("parsing patch as TOML: %w", err)
 			}
 			if err := toml.Unmarshal(targetBytes, &target); err != nil {
 				return fmt.Errorf("parsing target as TOML: %w", err)
 			}
 		case ".json":
-			if err := json.Unmarshal(patchBytes, &patch); err != nil {
+			if err := json.Unmarshal(patchBytes, &patchData); err != nil {
 				return fmt.Errorf("parsing patch as JSON: %w", err)
 			}
 			if err := json.Unmarshal(targetBytes, &target); err != nil {
@@ -98,7 +98,7 @@ var patchCmd = cli.Command{
 			}
 		}
 
-		patchedTarget := mergePatch(target, patch)
+		patchedTarget := patch.Merge(target, patchData)
 
 		// Marshal the patched result
 		var patchedTargetBuffer bytes.Buffer

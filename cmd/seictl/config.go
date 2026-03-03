@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/sei-protocol/seictl/internal/patch"
 	"github.com/urfave/cli/v3"
 )
 
@@ -128,7 +129,6 @@ var configCmd = cli.Command{
 			Action: func(ctx context.Context, command *cli.Command) error {
 				var patchBytes []byte
 				if destinations.config.patch.file == "" {
-					// Read full multi-line input from stdin
 					var buffer bytes.Buffer
 					scanner := bufio.NewScanner(os.Stdin)
 					for scanner.Scan() {
@@ -151,8 +151,8 @@ var configCmd = cli.Command{
 					return nil
 				}
 
-				patch := make(map[string]any)
-				if err := toml.Unmarshal(patchBytes, &patch); err != nil {
+				patchData := make(map[string]any)
+				if err := toml.Unmarshal(patchBytes, &patchData); err != nil {
 					return fmt.Errorf("parsing patch: %w", err)
 				}
 
@@ -165,7 +165,7 @@ var configCmd = cli.Command{
 				}
 				if destinations.config.target == "" {
 					// Attempt to auto-detect the target config using top-level keys matching hints.
-					for key := range patch {
+					for key := range patchData {
 						switch hint, found := configTargetHints[key]; {
 						case !found:
 							// If not found in hints but destinations.config.target is set already then we
@@ -194,7 +194,7 @@ var configCmd = cli.Command{
 					return fmt.Errorf("parsing config: %w", err)
 				}
 
-				patchedConfig := mergePatch(config, patch)
+				patchedConfig := patch.Merge(config, patchData)
 
 				var prettyPatchedConfig bytes.Buffer
 				encoder := toml.NewEncoder(&prettyPatchedConfig)

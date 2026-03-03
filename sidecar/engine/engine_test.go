@@ -124,10 +124,10 @@ func TestHealthzMonotonicity(t *testing.T) {
 	waitForHealthz(t, eng)
 
 	// Wait for first task to fully release the lock before submitting again.
-	waitForStatus(t, eng, "ready")
+	waitForStatus(t, eng, "Ready")
 
 	eng.Submit(Task{Type: TaskUpdatePeers})
-	waitForStatus(t, eng, "ready")
+	waitForStatus(t, eng, "Ready")
 
 	if !eng.Healthz() {
 		t.Fatal("healthz should remain true after runtime failure")
@@ -141,15 +141,15 @@ func TestStatusReflectsReady(t *testing.T) {
 	defer eng.Close()
 
 	status := eng.Status()
-	if status.Status != "not_ready" {
+	if status.Status != "Initializing" {
 		t.Fatalf("expected not_ready initially, got %q", status.Status)
 	}
 
 	eng.Submit(Task{Type: TaskMarkReady})
-	waitForStatus(t, eng, "ready")
+	waitForStatus(t, eng, "Ready")
 
 	status = eng.Status()
-	if status.Status != "ready" {
+	if status.Status != "Ready" {
 		t.Fatalf("expected ready after mark-ready, got %q", status.Status)
 	}
 }
@@ -175,12 +175,12 @@ func TestStatusReflectsRunning(t *testing.T) {
 	}
 
 	status := eng.Status()
-	if status.Status != "running" {
+	if status.Status != "Running" {
 		t.Fatalf("expected running while task executes, got %q", status.Status)
 	}
 
 	close(blocked)
-	waitForStatus(t, eng, "not_ready")
+	waitForStatus(t, eng, "Initializing")
 }
 
 func TestStatusLastTask(t *testing.T) {

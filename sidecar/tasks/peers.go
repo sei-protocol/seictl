@@ -14,7 +14,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/sei-protocol/seictl/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
 const peersFile = ".sei-sidecar-peers.json"

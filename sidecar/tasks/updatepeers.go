@@ -6,7 +6,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/sei-protocol/seictl/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
 // UpdatePeersHandler returns a TaskHandler that patches persistent_peers

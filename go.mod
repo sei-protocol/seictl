@@ -3,7 +3,6 @@ module github.com/sei-protocol/seictl
 go 1.25.4
 
 require (
-	github.com/BurntSushi/toml v1.6.0
 	github.com/aws/aws-sdk-go-v2 v1.41.2
 	github.com/aws/aws-sdk-go-v2/config v1.32.10
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.293.0

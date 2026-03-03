@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/sei-protocol/seictl/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
 // Server is the HTTP API for the sidecar.

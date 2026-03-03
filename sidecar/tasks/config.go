@@ -1,15 +1,14 @@
 package tasks
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/BurntSushi/toml"
-	"github.com/sei-protocol/seictl/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/internal/patch"
+	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
 // PatchSet describes the TOML patches to apply to config.toml and app.toml.
@@ -64,26 +63,26 @@ func (p *ConfigPatcher) PatchConfig(_ context.Context, ps PatchSet) error {
 
 	configPath := filepath.Join(p.homeDir, "config", "config.toml")
 
-	doc, err := parseTOMLFile(configPath)
+	doc, err := patch.ReadTOML(configPath)
 	if err != nil {
 		return fmt.Errorf("parsing config.toml: %w", err)
 	}
 
 	if len(ps.Peers) > 0 {
-		setNestedValue(doc, "p2p", "persistent-peers", strings.Join(ps.Peers, ","))
+		patch.SetNestedValue(doc, "p2p", "persistent-peers", strings.Join(ps.Peers, ","))
 	}
 	if ps.NodeMode != "" {
-		setNestedValue(doc, "base", "mode", ps.NodeMode)
+		patch.SetNestedValue(doc, "base", "mode", ps.NodeMode)
 	}
 
 	if ssCfg, err := ReadStateSyncFile(p.homeDir); err == nil {
-		setNestedValue(doc, "statesync", "enable", true)
-		setNestedValue(doc, "statesync", "trust-height", ssCfg.TrustHeight)
-		setNestedValue(doc, "statesync", "trust-hash", ssCfg.TrustHash)
-		setNestedValue(doc, "statesync", "rpc-servers", ssCfg.RpcServers)
+		patch.SetNestedValue(doc, "statesync", "enable", true)
+		patch.SetNestedValue(doc, "statesync", "trust-height", ssCfg.TrustHeight)
+		patch.SetNestedValue(doc, "statesync", "trust-hash", ssCfg.TrustHash)
+		patch.SetNestedValue(doc, "statesync", "rpc-servers", ssCfg.RpcServers)
 	}
 
-	if err := atomicWriteTOML(configPath, doc); err != nil {
+	if err := patch.WriteTOML(configPath, doc); err != nil {
 		return err
 	}
 
@@ -104,7 +103,7 @@ func (p *ConfigPatcher) PatchConfig(_ context.Context, ps PatchSet) error {
 func (p *ConfigPatcher) patchAppTOML(sg *SnapshotGenerationPatch) error {
 	appPath := filepath.Join(p.homeDir, "config", "app.toml")
 
-	doc, err := parseTOMLFile(appPath)
+	doc, err := patch.ReadTOML(appPath)
 	if err != nil {
 		return fmt.Errorf("parsing app.toml: %w", err)
 	}
@@ -113,7 +112,7 @@ func (p *ConfigPatcher) patchAppTOML(sg *SnapshotGenerationPatch) error {
 	doc["snapshot-interval"] = sg.Interval
 	doc["snapshot-keep-recent"] = int64(sg.KeepRecent)
 
-	return atomicWriteTOML(appPath, doc)
+	return patch.WriteTOML(appPath, doc)
 }
 
 func parsePatchSet(params map[string]any) (PatchSet, error) {
@@ -184,30 +183,6 @@ func toInt32(v any) (int32, bool) {
 	}
 }
 
-func parseTOMLFile(path string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return make(map[string]any), nil
-		}
-		return nil, err
-	}
-	var doc map[string]any
-	if err := toml.Unmarshal(data, &doc); err != nil {
-		return nil, err
-	}
-	return doc, nil
-}
-
-// setNestedValue sets doc[section][key] = value, creating the section if needed.
-func setNestedValue(doc map[string]any, section, key string, value any) {
-	sec, ok := doc[section].(map[string]any)
-	if !ok {
-		sec = make(map[string]any)
-		doc[section] = sec
-	}
-	sec[key] = value
-}
 
 // DefaultConfigTOML is a minimal config.toml skeleton that the config patcher
 // can merge patches over. It seeds the sections that seid expects to find.
@@ -256,24 +231,3 @@ func EnsureDefaultConfig(homeDir string) error {
 	return nil
 }
 
-// atomicWriteTOML encodes doc to TOML and writes it atomically via temp+rename.
-func atomicWriteTOML(path string, doc map[string]any) error {
-	var buf bytes.Buffer
-	enc := toml.NewEncoder(&buf)
-	enc.Indent = "  "
-	if err := enc.Encode(doc); err != nil {
-		return fmt.Errorf("encoding TOML: %w", err)
-	}
-
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, buf.Bytes(), 0o644); err != nil {
-		return fmt.Errorf("writing temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("renaming temp file: %w", err)
-	}
-
-	return nil
-}

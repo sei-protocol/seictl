@@ -3,7 +3,7 @@ package tasks
 import (
 	"context"
 
-	"github.com/sei-protocol/seictl/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
 // MarkReadyHandler returns a no-op TaskHandler. When it succeeds, the engine
