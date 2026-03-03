@@ -114,13 +114,13 @@ If you prefer to build from source or need a specific configuration:
 ```bash
 git clone https://github.com/sei-protocol/seictl.git
 cd seictl
-go build -o seictl
+go build -o seictl ./cmd/seictl
 ```
 
 ### Install via Go
 
 ```bash
-go install github.com/sei-protocol/seictl@latest
+go install github.com/sei-protocol/seictl/cmd/seictl@latest
 ```
 
 ## Usage
