@@ -36,6 +36,20 @@ func waitForStatus(t *testing.T, eng *Engine, want string) {
 	t.Fatalf("timed out waiting for status %q, got %q", want, eng.Status().Status)
 }
 
+func waitForLastTask(t *testing.T, eng *Engine) *TaskResult {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s := eng.Status()
+		if s.LastTask != nil {
+			return s.LastTask
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for lastTask")
+	return nil
+}
+
 func TestSubmitAccepts(t *testing.T) {
 	eng := newTestEngine(map[TaskType]TaskHandler{
 		TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
@@ -64,22 +78,15 @@ func TestSubmitRejectsBusy(t *testing.T) {
 			return nil
 		},
 	})
-	eng.SubmitTimeout = 50 * time.Millisecond
 	defer eng.Close()
 
-	// First submit: consumed by the worker (blocks in handler).
 	if err := eng.Submit(Task{Type: TaskConfigPatch}); err != nil {
 		t.Fatalf("first submit failed: %v", err)
 	}
-	// Give the worker time to pick up the task.
+	// Give the worker time to pick up the task so it holds taskMu.
 	time.Sleep(20 * time.Millisecond)
 
-	// Second submit: fills the channel buffer (size 1).
-	if err := eng.Submit(Task{Type: TaskConfigPatch}); err != nil {
-		t.Fatalf("second submit failed: %v", err)
-	}
-
-	// Third submit: channel full + worker busy → ErrBusy.
+	// Second submit: taskMu is held by the worker → ErrBusy.
 	err := eng.Submit(Task{Type: TaskConfigPatch})
 	if !errors.Is(err, ErrBusy) {
 		t.Fatalf("expected ErrBusy, got %v", err)
@@ -116,8 +123,10 @@ func TestHealthzMonotonicity(t *testing.T) {
 	eng.Submit(Task{Type: TaskMarkReady})
 	waitForHealthz(t, eng)
 
+	// Wait for first task to fully release the lock before submitting again.
+	waitForStatus(t, eng, "ready")
+
 	eng.Submit(Task{Type: TaskUpdatePeers})
-	// Wait for the failing task to complete through the serial worker.
 	waitForStatus(t, eng, "ready")
 
 	if !eng.Healthz() {
@@ -172,6 +181,45 @@ func TestStatusReflectsRunning(t *testing.T) {
 
 	close(blocked)
 	waitForStatus(t, eng, "not_ready")
+}
+
+func TestStatusLastTask(t *testing.T) {
+	eng := newTestEngine(map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+	defer eng.Close()
+
+	if s := eng.Status(); s.LastTask != nil {
+		t.Fatalf("expected nil lastTask initially, got %+v", s.LastTask)
+	}
+
+	eng.Submit(Task{Type: TaskConfigPatch})
+	result := waitForLastTask(t, eng)
+
+	if result.Type != string(TaskConfigPatch) {
+		t.Fatalf("expected lastTask.Type %q, got %q", TaskConfigPatch, result.Type)
+	}
+	if result.Error != "" {
+		t.Fatalf("expected no error, got %q", result.Error)
+	}
+}
+
+func TestLastTaskOnError(t *testing.T) {
+	handlerErr := errors.New("handler failed")
+	eng := newTestEngine(map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return handlerErr },
+	})
+	defer eng.Close()
+
+	eng.Submit(Task{Type: TaskConfigPatch})
+	result := waitForLastTask(t, eng)
+
+	if result.Type != string(TaskConfigPatch) {
+		t.Fatalf("expected lastTask.Type %q, got %q", TaskConfigPatch, result.Type)
+	}
+	if result.Error != handlerErr.Error() {
+		t.Fatalf("expected error %q, got %q", handlerErr.Error(), result.Error)
+	}
 }
 
 func TestClose(t *testing.T) {
@@ -242,11 +290,9 @@ func TestScheduledTaskBypassesChannel(t *testing.T) {
 	})
 	defer eng.Close()
 
-	// Block the serial worker with a non-scheduled task.
 	eng.Submit(Task{Type: TaskConfigPatch})
 	time.Sleep(20 * time.Millisecond)
 
-	// Scheduled task should still execute via SubmitScheduled.
 	eng.SubmitScheduled(Task{Type: TaskUpdatePeers})
 
 	select {

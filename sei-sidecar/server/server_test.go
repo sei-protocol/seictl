@@ -38,6 +38,20 @@ func waitForReady(eng *engine.Engine) {
 	}
 }
 
+func waitForLastTaskHTTP(srv *Server) *engine.TaskResult {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		rec := serveHTTP(srv, http.MethodGet, "/status", "")
+		var resp engine.StatusResponse
+		json.NewDecoder(rec.Body).Decode(&resp)
+		if resp.LastTask != nil {
+			return resp.LastTask
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return nil
+}
+
 func TestHealthzReturns503BeforeReady(t *testing.T) {
 	eng := newTestEngine(nil)
 	defer eng.Close()
@@ -97,6 +111,30 @@ func TestStatusResponse(t *testing.T) {
 	}
 }
 
+func TestStatusLastTask(t *testing.T) {
+	eng := newTestEngine(map[engine.TaskType]engine.TaskHandler{
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+	defer eng.Close()
+	srv := NewServer(":0", eng)
+
+	rec := serveHTTP(srv, http.MethodPost, "/task", `{"type":"config-patch"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rec.Code)
+	}
+
+	result := waitForLastTaskHTTP(srv)
+	if result == nil {
+		t.Fatal("expected lastTask in status, got nil")
+	}
+	if result.Type != string(engine.TaskConfigPatch) {
+		t.Fatalf("expected lastTask.Type %q, got %q", engine.TaskConfigPatch, result.Type)
+	}
+	if result.Error != "" {
+		t.Fatalf("expected no error, got %q", result.Error)
+	}
+}
+
 func TestPostTaskImmediate(t *testing.T) {
 	eng := newTestEngine(map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
@@ -127,24 +165,17 @@ func TestPostTaskBusy(t *testing.T) {
 			return nil
 		},
 	})
-	eng.SubmitTimeout = 50 * time.Millisecond
 	defer eng.Close()
 	srv := NewServer(":0", eng)
 
-	// First task: picked up by worker.
 	rec := serveHTTP(srv, http.MethodPost, "/task", `{"type":"config-patch"}`)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d", rec.Code)
 	}
+	// Give the worker time to pick up the task (holds taskMu).
 	time.Sleep(20 * time.Millisecond)
 
-	// Second task: fills the channel buffer.
-	rec = serveHTTP(srv, http.MethodPost, "/task", `{"type":"config-patch"}`)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202 for second submit, got %d", rec.Code)
-	}
-
-	// Third task: should get 409.
+	// Second submit: taskMu held → 409.
 	rec = serveHTTP(srv, http.MethodPost, "/task", `{"type":"config-patch"}`)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())

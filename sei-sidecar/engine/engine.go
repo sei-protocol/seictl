@@ -10,12 +10,7 @@ import (
 	"time"
 )
 
-// DefaultSubmitTimeout is how long Submit waits to enqueue a task before
-// returning ErrBusy.
-const DefaultSubmitTimeout = 5 * time.Second
-
-// ErrBusy is returned by Submit when a non-scheduled task is already queued
-// or running.
+// ErrBusy is returned by Submit when a non-scheduled task is already running.
 var ErrBusy = errors.New("a task is already running")
 
 // taskEnvelope wraps a task with its resolved handler for the worker loop.
@@ -25,24 +20,33 @@ type taskEnvelope struct {
 	params   map[string]any
 }
 
+// TaskResult records the outcome of the most recent non-scheduled task.
+type TaskResult struct {
+	Type  string `json:"type"`
+	Error string `json:"error,omitempty"`
+}
+
 // StatusResponse is the shape returned by the status endpoint.
 type StatusResponse struct {
-	Status string `json:"status"`
+	Status   string      `json:"status"`
+	LastTask *TaskResult `json:"lastTask,omitempty"`
 }
 
 // Engine is the task executor. Non-scheduled tasks are serialized through a
-// buffered channel so that at most one runs at a time. Scheduled tasks bypass
-// the channel and run in their own goroutines.
+// channel with a TryLock gate: the lock is acquired by Submit and released by
+// the worker after execution completes, ensuring exactly one task is in the
+// system at a time. Scheduled tasks bypass this and run in their own goroutines.
 type Engine struct {
-	handlers      map[TaskType]TaskHandler
-	scheduler     *Scheduler
-	ctx           context.Context
-	cancel        context.CancelFunc
-	taskCh        chan taskEnvelope
-	running       atomic.Bool
-	mu            sync.RWMutex
-	ready         bool
-	SubmitTimeout time.Duration
+	handlers  map[TaskType]TaskHandler
+	scheduler *Scheduler
+	ctx       context.Context
+	cancel    context.CancelFunc
+	taskCh    chan taskEnvelope
+	taskMu    sync.Mutex
+	running   atomic.Bool
+	mu        sync.RWMutex
+	ready     bool
+	lastTask  *TaskResult
 }
 
 // NewEngine creates a new Engine and starts its worker loop. The provided
@@ -61,36 +65,42 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler) *Engine {
 }
 
 // loop is the serial worker that processes non-scheduled tasks one at a time.
+// After each task completes it stores the result and releases the task lock.
 func (e *Engine) loop() {
 	for env := range e.taskCh {
 		e.running.Store(true)
-		e.execute(env.taskType, env.handler, env.params)
+		err := e.execute(env.taskType, env.handler, env.params)
+
+		result := &TaskResult{Type: string(env.taskType)}
+		if err != nil {
+			result.Error = err.Error()
+		}
+		e.mu.Lock()
+		e.lastTask = result
+		e.mu.Unlock()
+
 		e.running.Store(false)
+		e.taskMu.Unlock()
 	}
 }
 
-// Submit enqueues a non-scheduled task. It returns ErrBusy if the task cannot
-// be enqueued within DefaultSubmitTimeout (i.e. another task is already queued
-// or running).
+// Submit enqueues a non-scheduled task. It returns ErrBusy if another task is
+// already in flight (the lock is held from submission until the worker finishes
+// executing the task).
 func (e *Engine) Submit(task Task) error {
 	handler, ok := e.handlers[task.Type]
 	if !ok {
 		return fmt.Errorf("unknown task type: %s", task.Type)
 	}
-	timeout := e.SubmitTimeout
-	if timeout == 0 {
-		timeout = DefaultSubmitTimeout
-	}
-	select {
-	case e.taskCh <- taskEnvelope{taskType: task.Type, handler: handler, params: task.Params}:
-		return nil
-	case <-time.After(timeout):
+	if !e.taskMu.TryLock() {
 		return ErrBusy
 	}
+	e.taskCh <- taskEnvelope{taskType: task.Type, handler: handler, params: task.Params}
+	return nil
 }
 
 // SubmitScheduled runs a task directly in a goroutine, bypassing the
-// single-task channel. Use this for cron-triggered tasks that should not
+// single-task lock. Use this for cron-triggered tasks that should not
 // block or be blocked by non-scheduled work.
 func (e *Engine) SubmitScheduled(task Task) error {
 	handler, ok := e.handlers[task.Type]
@@ -101,11 +111,12 @@ func (e *Engine) SubmitScheduled(task Task) error {
 	return nil
 }
 
-// execute runs a handler synchronously and logs the outcome.
-func (e *Engine) execute(taskType TaskType, handler TaskHandler, params map[string]any) {
+// execute runs a handler synchronously and logs the outcome. Returns the
+// handler error (if any) so the caller can record it.
+func (e *Engine) execute(taskType TaskType, handler TaskHandler, params map[string]any) error {
 	if err := handler(e.ctx, params); err != nil {
 		log.Printf("[%s] error: %v", taskType, err)
-		return
+		return err
 	}
 	log.Printf("[%s] completed", taskType)
 	if taskType == TaskMarkReady {
@@ -113,6 +124,7 @@ func (e *Engine) execute(taskType TaskType, handler TaskHandler, params map[stri
 		e.ready = true
 		e.mu.Unlock()
 	}
+	return nil
 }
 
 // Healthz returns true after the engine has been marked ready.
@@ -122,17 +134,19 @@ func (e *Engine) Healthz() bool {
 	return e.ready
 }
 
-// Status returns a snapshot of the engine's current state.
+// Status returns a snapshot of the engine's current state, including the
+// result of the most recent non-scheduled task.
 func (e *Engine) Status() StatusResponse {
-	if e.running.Load() || len(e.taskCh) > 0 {
+	if e.running.Load() {
 		return StatusResponse{Status: "running"}
 	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	status := "not_ready"
 	if e.ready {
-		return StatusResponse{Status: "ready"}
+		status = "ready"
 	}
-	return StatusResponse{Status: "not_ready"}
+	return StatusResponse{Status: status, LastTask: e.lastTask}
 }
 
 // Close shuts down the worker loop and cancels the engine context.
@@ -157,7 +171,7 @@ func (e *Engine) ListSchedules() []Schedule {
 }
 
 // EvalSchedules evaluates due cron schedules and submits their tasks via
-// SubmitScheduled so they bypass the single-task channel.
+// SubmitScheduled so they bypass the single-task lock.
 func (e *Engine) EvalSchedules() {
 	now := time.Now()
 	for _, d := range e.scheduler.Tick(now) {

@@ -136,6 +136,19 @@ components:
         status:
           type: string
           enum: [ready, running, not_ready]
+        lastTask:
+          $ref: "#/components/schemas/TaskResult"
+
+    TaskResult:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          description: Task type that was executed.
+        error:
+          type: string
+          description: Error message if the task failed.
 
     Schedule:
       type: object
