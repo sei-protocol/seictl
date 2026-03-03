@@ -4,45 +4,38 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 )
 
-// ---------------------------------------------------------------------------
-// Mock S3 upload client
-// ---------------------------------------------------------------------------
-
-type mockS3UploadClient struct {
+type mockS3Uploader struct {
 	uploads map[string][]byte
 }
 
-func newMockS3UploadClient() *mockS3UploadClient {
-	return &mockS3UploadClient{uploads: make(map[string][]byte)}
+func newMockS3Uploader() *mockS3Uploader {
+	return &mockS3Uploader{uploads: make(map[string][]byte)}
 }
 
-func (m *mockS3UploadClient) PutObject(_ context.Context, input *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+func (m *mockS3Uploader) UploadObject(_ context.Context, input *transfermanager.UploadObjectInput, _ ...func(*transfermanager.Options)) (*transfermanager.UploadObjectOutput, error) {
 	var buf bytes.Buffer
 	if input.Body != nil {
-		buf.ReadFrom(input.Body)
+		io.Copy(&buf, input.Body)
 	}
 	key := *input.Bucket + "/" + *input.Key
 	m.uploads[key] = buf.Bytes()
-	return &s3.PutObjectOutput{}, nil
+	return &transfermanager.UploadObjectOutput{}, nil
 }
 
-func mockUploadFactory(client *mockS3UploadClient) S3UploadClientFactory {
-	return func(_ context.Context, _ string) (S3UploadClient, error) {
+func mockUploaderFactory(client *mockS3Uploader) S3UploaderFactory {
+	return func(_ context.Context, _ string) (S3Uploader, error) {
 		return client, nil
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 func setupSnapshotDirs(t *testing.T, homeDir string, heights []int64) {
 	t.Helper()
@@ -126,16 +119,12 @@ func TestPickUploadCandidate_NoSnapshots_ReturnsZero(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: Upload
-// ---------------------------------------------------------------------------
-
 func TestUpload_UploadsArchiveAndLatestTxt(t *testing.T) {
 	homeDir := t.TempDir()
 	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
 
-	mock := newMockS3UploadClient()
-	uploader := NewSnapshotUploader(homeDir, mockUploadFactory(mock))
+	mock := newMockS3Uploader()
+	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))
 
 	err := uploader.Upload(context.Background(), SnapshotUploadConfig{
 		Bucket: "my-bucket",
@@ -163,13 +152,12 @@ func TestUpload_SkipsWhenAlreadyUploaded(t *testing.T) {
 	homeDir := t.TempDir()
 	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
 
-	// Pre-seed the upload state with height 1000 already uploaded.
 	state := uploadState{LastUploadedHeight: 1000}
 	data, _ := json.Marshal(state)
 	os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
-	mock := newMockS3UploadClient()
-	uploader := NewSnapshotUploader(homeDir, mockUploadFactory(mock))
+	mock := newMockS3Uploader()
+	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))
 
 	err := uploader.Upload(context.Background(), SnapshotUploadConfig{
 		Bucket: "my-bucket",
@@ -189,13 +177,12 @@ func TestUpload_UploadsNewerSnapshot(t *testing.T) {
 	homeDir := t.TempDir()
 	setupSnapshotDirs(t, homeDir, []int64{1000, 2000, 3000})
 
-	// Pre-seed: height 1000 was uploaded. Now 2000 is the candidate.
 	state := uploadState{LastUploadedHeight: 1000}
 	data, _ := json.Marshal(state)
 	os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
-	mock := newMockS3UploadClient()
-	uploader := NewSnapshotUploader(homeDir, mockUploadFactory(mock))
+	mock := newMockS3Uploader()
+	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))
 
 	err := uploader.Upload(context.Background(), SnapshotUploadConfig{
 		Bucket: "my-bucket",
@@ -215,8 +202,8 @@ func TestUpload_NoOpsWhenTooFewSnapshots(t *testing.T) {
 	homeDir := t.TempDir()
 	setupSnapshotDirs(t, homeDir, []int64{1000})
 
-	mock := newMockS3UploadClient()
-	uploader := NewSnapshotUploader(homeDir, mockUploadFactory(mock))
+	mock := newMockS3Uploader()
+	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))
 
 	err := uploader.Upload(context.Background(), SnapshotUploadConfig{
 		Bucket: "my-bucket",
@@ -236,8 +223,8 @@ func TestUpload_WritesUploadState(t *testing.T) {
 	homeDir := t.TempDir()
 	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
 
-	mock := newMockS3UploadClient()
-	uploader := NewSnapshotUploader(homeDir, mockUploadFactory(mock))
+	mock := newMockS3Uploader()
+	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))
 
 	err := uploader.Upload(context.Background(), SnapshotUploadConfig{
 		Bucket: "my-bucket",
@@ -253,10 +240,6 @@ func TestUpload_WritesUploadState(t *testing.T) {
 		t.Errorf("LastUploadedHeight = %d, want 1000", state.LastUploadedHeight)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Tests: normalizePrefix
-// ---------------------------------------------------------------------------
 
 func TestNormalizePrefix(t *testing.T) {
 	tests := []struct {
@@ -276,10 +259,6 @@ func TestNormalizePrefix(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Tests: parseUploadConfig
-// ---------------------------------------------------------------------------
 
 func TestParseUploadConfig_Valid(t *testing.T) {
 	params := map[string]any{

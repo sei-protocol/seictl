@@ -16,32 +16,28 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
 const uploadStateFile = ".sei-sidecar-last-upload.json"
 
-// S3PutObjectAPI abstracts the S3 PutObject call for testing.
-type S3PutObjectAPI interface {
-	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+// S3Uploader abstracts the transfermanager upload call for testing.
+type S3Uploader interface {
+	UploadObject(ctx context.Context, input *transfermanager.UploadObjectInput, opts ...func(*transfermanager.Options)) (*transfermanager.UploadObjectOutput, error)
 }
 
-// S3UploadClient combines get and put operations needed by the upload task.
-type S3UploadClient interface {
-	S3PutObjectAPI
-}
+// S3UploaderFactory builds an S3Uploader for a given region.
+type S3UploaderFactory func(ctx context.Context, region string) (S3Uploader, error)
 
-// S3UploadClientFactory builds an S3 upload client for a given region.
-type S3UploadClientFactory func(ctx context.Context, region string) (S3UploadClient, error)
-
-// DefaultS3UploadClientFactory creates a real S3 client using IRSA credentials.
-func DefaultS3UploadClientFactory(ctx context.Context, region string) (S3UploadClient, error) {
+// DefaultS3UploaderFactory creates a transfermanager.Client backed by a real S3 client.
+func DefaultS3UploaderFactory(ctx context.Context, region string) (S3Uploader, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
 	}
-	return s3.NewFromConfig(cfg), nil
+	return transfermanager.New(s3.NewFromConfig(cfg)), nil
 }
 
 // SnapshotUploadConfig holds the parameters for the snapshot upload task.
@@ -59,18 +55,18 @@ type uploadState struct {
 // SnapshotUploader scans for locally produced Tendermint state-sync snapshots
 // and uploads new ones to S3.
 type SnapshotUploader struct {
-	homeDir               string
-	s3UploadClientFactory S3UploadClientFactory
+	homeDir          string
+	s3UploaderFactory S3UploaderFactory
 }
 
 // NewSnapshotUploader creates an uploader targeting the given home directory.
-func NewSnapshotUploader(homeDir string, factory S3UploadClientFactory) *SnapshotUploader {
+func NewSnapshotUploader(homeDir string, factory S3UploaderFactory) *SnapshotUploader {
 	if factory == nil {
-		factory = DefaultS3UploadClientFactory
+		factory = DefaultS3UploaderFactory
 	}
 	return &SnapshotUploader{
-		homeDir:               homeDir,
-		s3UploadClientFactory: factory,
+		homeDir:          homeDir,
+		s3UploaderFactory: factory,
 	}
 }
 
@@ -85,10 +81,13 @@ func (u *SnapshotUploader) Handler() engine.TaskHandler {
 	}
 }
 
-// Upload finds the latest complete snapshot, archives it, and uploads to S3.
+// Upload finds the latest complete snapshot, archives it, and streams it to S3.
 // It picks the second-to-latest snapshot height to avoid uploading an
 // in-progress snapshot. If the snapshot has already been uploaded (tracked
 // via a local state file), it no-ops.
+//
+// The archive is streamed through an io.Pipe so it never needs to be buffered
+// entirely in memory; the transfermanager handles multipart upload automatically.
 func (u *SnapshotUploader) Upload(ctx context.Context, cfg SnapshotUploadConfig) error {
 	snapshotsDir := filepath.Join(u.homeDir, "data", "snapshots")
 
@@ -97,38 +96,68 @@ func (u *SnapshotUploader) Upload(ctx context.Context, cfg SnapshotUploadConfig)
 		return err
 	}
 	if height == 0 {
-		return nil // no snapshots available yet
+		return nil
 	}
 
 	last := u.readUploadState()
 	if last.LastUploadedHeight >= height {
-		return nil // already uploaded this or a newer snapshot
+		return nil
 	}
 
-	s3Client, err := u.s3UploadClientFactory(ctx, cfg.Region)
+	uploader, err := u.s3UploaderFactory(ctx, cfg.Region)
 	if err != nil {
-		return fmt.Errorf("building S3 client: %w", err)
+		return fmt.Errorf("building S3 uploader: %w", err)
 	}
 
 	prefix := normalizePrefix(cfg.Prefix)
 
-	archiveBuf, err := archiveSnapshot(ctx, snapshotsDir, height)
-	if err != nil {
-		return fmt.Errorf("archiving snapshot at height %d: %w", height, err)
-	}
-
 	archiveKey := fmt.Sprintf("%s%d.tar.gz", prefix, height)
-	if err := putObject(ctx, s3Client, cfg.Bucket, archiveKey, archiveBuf.Bytes()); err != nil {
+	if err := u.streamUpload(ctx, uploader, cfg.Bucket, archiveKey, snapshotsDir, height); err != nil {
 		return fmt.Errorf("uploading %s: %w", archiveKey, err)
 	}
 
 	latestKey := prefix + "latest.txt"
-	if err := putObject(ctx, s3Client, cfg.Bucket, latestKey, []byte(strconv.FormatInt(height, 10))); err != nil {
+	latestBody := []byte(strconv.FormatInt(height, 10))
+	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
+		Bucket: aws.String(cfg.Bucket),
+		Key:    aws.String(latestKey),
+		Body:   bytes.NewReader(latestBody),
+	})
+	if err != nil {
 		return fmt.Errorf("uploading %s: %w", latestKey, err)
 	}
 
 	u.writeUploadState(uploadState{LastUploadedHeight: height})
 	return nil
+}
+
+// streamUpload pipes a tar.gz archive directly into the transfermanager,
+// avoiding in-memory buffering of the full archive.
+func (u *SnapshotUploader) streamUpload(ctx context.Context, uploader S3Uploader, bucket, key, snapshotsDir string, height int64) error {
+	pr, pw := io.Pipe()
+
+	archiveErr := make(chan error, 1)
+	go func() {
+		archiveErr <- writeArchive(ctx, pw, snapshotsDir, height)
+	}()
+
+	_, uploadErr := uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		Body:        pr,
+		ContentType: aws.String("application/gzip"),
+	})
+
+	if uploadErr != nil {
+		// Unblock the archiver goroutine if it's still writing.
+		pr.CloseWithError(uploadErr)
+	}
+
+	aErr := <-archiveErr
+	if uploadErr != nil {
+		return uploadErr
+	}
+	return aErr
 }
 
 // pickUploadCandidate scans the snapshots directory and returns the
@@ -163,33 +192,40 @@ func pickUploadCandidate(snapshotsDir string) (int64, error) {
 	return heights[len(heights)-2], nil
 }
 
-// archiveSnapshot creates a tar.gz archive of a snapshot at the given height.
-// The archive includes the height directory contents and metadata.db from the
-// snapshots root (if it exists).
-func archiveSnapshot(ctx context.Context, snapshotsDir string, height int64) (*bytes.Buffer, error) {
-	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
+// writeArchive streams a tar.gz archive of the snapshot at the given height
+// into wc (typically the write half of an io.Pipe). It always closes wc when
+// done, propagating any archiving error so the reader side sees it.
+func writeArchive(ctx context.Context, wc io.WriteCloser, snapshotsDir string, height int64) (retErr error) {
+	defer func() {
+		if retErr != nil {
+			wc.(*io.PipeWriter).CloseWithError(retErr)
+		} else {
+			wc.Close()
+		}
+	}()
+
+	gw := gzip.NewWriter(wc)
 	tw := tar.NewWriter(gw)
 
 	heightDir := filepath.Join(snapshotsDir, strconv.FormatInt(height, 10))
 	if err := addDirToTar(ctx, tw, heightDir, strconv.FormatInt(height, 10)); err != nil {
-		return nil, err
+		return err
 	}
 
 	metadataPath := filepath.Join(snapshotsDir, "metadata.db")
 	if info, err := os.Stat(metadataPath); err == nil {
 		if err := addFileToTar(tw, metadataPath, "metadata.db", info); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	if err := tw.Close(); err != nil {
-		return nil, fmt.Errorf("closing tar writer: %w", err)
+		return fmt.Errorf("closing tar writer: %w", err)
 	}
 	if err := gw.Close(); err != nil {
-		return nil, fmt.Errorf("closing gzip writer: %w", err)
+		return fmt.Errorf("closing gzip writer: %w", err)
 	}
-	return &buf, nil
+	return nil
 }
 
 func addDirToTar(ctx context.Context, tw *tar.Writer, dir, base string) error {
@@ -244,15 +280,6 @@ func addFileToTar(tw *tar.Writer, path, name string, info os.FileInfo) error {
 	}
 	defer f.Close()
 	_, err = io.Copy(tw, f)
-	return err
-}
-
-func putObject(ctx context.Context, client S3PutObjectAPI, bucket, key string, data []byte) error {
-	_, err := client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-		Body:   bytes.NewReader(data),
-	})
 	return err
 }
 
