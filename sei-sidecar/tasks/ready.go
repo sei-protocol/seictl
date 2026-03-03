@@ -3,7 +3,7 @@ package tasks
 import (
 	"context"
 
-	"github.com/sei-protocol/platform/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/sei-sidecar/engine"
 )
 
 // MarkReadyHandler returns a TaskHandler that signals bootstrap completion.

@@ -1,4 +1,4 @@
-module github.com/sei-protocol/platform/sei-sidecar
+module github.com/sei-protocol/seictl/sei-sidecar
 
 go 1.25.3
 

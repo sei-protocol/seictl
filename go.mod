@@ -4,11 +4,11 @@ go 1.25.4
 
 require (
 	github.com/pelletier/go-toml/v2 v2.2.4
-	github.com/sei-protocol/platform/sei-sidecar v0.0.0
+	github.com/sei-protocol/seictl/sei-sidecar v0.0.0
 	github.com/urfave/cli/v3 v3.6.1
 )
 
-replace github.com/sei-protocol/platform/sei-sidecar => ./sei-sidecar
+replace github.com/sei-protocol/seictl/sei-sidecar => ./sei-sidecar
 
 require (
 	github.com/BurntSushi/toml v1.6.0 // indirect

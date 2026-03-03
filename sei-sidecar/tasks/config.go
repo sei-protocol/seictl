@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/sei-protocol/platform/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/sei-sidecar/engine"
 )
 
 // PatchSet describes the TOML patches to apply to config.toml and app.toml.

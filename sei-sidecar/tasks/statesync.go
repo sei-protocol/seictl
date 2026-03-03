@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sei-protocol/platform/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/sei-sidecar/engine"
 )
 
 const (

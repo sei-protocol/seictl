@@ -11,7 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/sei-protocol/platform/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/sei-sidecar/engine"
 )
 
 const genesisMarkerFile = ".sei-sidecar-genesis-done"

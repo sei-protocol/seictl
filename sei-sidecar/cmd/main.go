@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sei-protocol/platform/sei-sidecar/engine"
-	"github.com/sei-protocol/platform/sei-sidecar/server"
-	"github.com/sei-protocol/platform/sei-sidecar/tasks"
+	"github.com/sei-protocol/seictl/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/sei-sidecar/server"
+	"github.com/sei-protocol/seictl/sei-sidecar/tasks"
 )
 
 func main() {

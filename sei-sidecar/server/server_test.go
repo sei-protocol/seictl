@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sei-protocol/platform/sei-sidecar/engine"
+	"github.com/sei-protocol/seictl/sei-sidecar/engine"
 )
 
 func noopBlockHeight() (int64, error) { return 0, nil }
