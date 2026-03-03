@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: sei-sidecar API
   description: HTTP API for the sei-sidecar task executor and scheduler.
-  version: 0.1.0
+  version: 0.2.0
   license:
     name: Apache-2.0
 
@@ -24,19 +24,23 @@ paths:
   /status:
     get:
       operationId: getStatus
-      summary: Engine status snapshot
+      summary: Status snapshot
       responses:
         "200":
-          description: Current engine state.
+          description: Current status.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/EngineStatus"
+                $ref: "#/components/schemas/StatusResponse"
 
   /task:
     post:
       operationId: submitTask
-      summary: Submit a task for execution
+      summary: Submit a task or create a cron schedule
+      description: |
+        If `schedule` is provided (a cron expression), a recurring schedule is
+        created and 201 is returned with the schedule object. Otherwise the
+        task is submitted for immediate execution and 202 is returned.
       requestBody:
         required: true
         content:
@@ -44,106 +48,31 @@ paths:
             schema:
               $ref: "#/components/schemas/TaskRequest"
       responses:
+        "201":
+          description: Cron schedule created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Schedule"
         "202":
-          description: Task accepted.
+          description: Task submitted for immediate execution.
           content:
             application/json:
               schema:
                 type: object
-                required: [id, status]
+                required: [status]
                 properties:
-                  id:
-                    type: string
-                    format: uuid
                   status:
                     type: string
-                    enum: [running]
+                    enum: [submitted]
         "400":
-          description: Invalid request body.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "409":
-          description: Resource conflict — task cannot be scheduled right now.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-
-  /tasks:
-    get:
-      operationId: listTasks
-      summary: List tracked tasks
-      parameters:
-        - name: state
-          in: query
-          schema:
-            $ref: "#/components/schemas/TaskState"
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            default: 50
-      responses:
-        "200":
-          description: Task history (newest first).
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/TrackedTask"
-
-  /tasks/{taskId}:
-    get:
-      operationId: getTask
-      summary: Get a single tracked task by ID
-      parameters:
-        - name: taskId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        "200":
-          description: Task details.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TrackedTask"
-        "404":
-          description: Task not found.
+          description: Invalid request.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
   /schedules:
-    post:
-      operationId: createSchedule
-      summary: Create a time-based schedule
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateScheduleRequest"
-      responses:
-        "201":
-          description: Schedule created.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Schedule"
-        "400":
-          description: Invalid schedule definition.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
     get:
       operationId: listSchedules
       summary: List all schedules
@@ -158,29 +87,6 @@ paths:
                   $ref: "#/components/schemas/Schedule"
 
   /schedules/{scheduleId}:
-    get:
-      operationId: getSchedule
-      summary: Get a single schedule
-      parameters:
-        - name: scheduleId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        "200":
-          description: Schedule details.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Schedule"
-        "404":
-          description: Schedule not found.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
     delete:
       operationId: deleteSchedule
       summary: Remove a schedule
@@ -213,81 +119,20 @@ components:
         params:
           type: object
           additionalProperties: true
+        schedule:
+          type: string
+          description: Cron expression. If set, creates a recurring schedule instead of running immediately.
 
-    TaskState:
-      type: string
-      enum: [pending, running, completed, failed]
-
-    TrackedTask:
+    StatusResponse:
       type: object
-      required: [id, type, state, createdAt]
+      required: [ready]
       properties:
-        id:
-          type: string
-          format: uuid
-        type:
-          type: string
-        params:
-          type: object
-          additionalProperties: true
-        state:
-          $ref: "#/components/schemas/TaskState"
-        error:
-          type: string
-        createdAt:
-          type: string
-          format: date-time
-        startedAt:
-          type: string
-          format: date-time
-        completedAt:
-          type: string
-          format: date-time
-
-    EngineStatus:
-      type: object
-      required: [phase]
-      properties:
-        phase:
-          type: string
-        currentTask:
-          type: string
-        lastTask:
-          type: string
-        lastTaskResult:
-          type: string
-        lastTaskError:
-          type: string
-        activeTasks:
-          type: integer
-        upgradeHeight:
-          type: integer
-          format: int64
-        upgradeImage:
-          type: string
-        pendingUpgrades:
-          type: integer
-
-    CreateScheduleRequest:
-      type: object
-      required: [taskType]
-      properties:
-        taskType:
-          type: string
-        params:
-          type: object
-          additionalProperties: true
-        cron:
-          type: string
-          description: Cron expression (mutually exclusive with runAt).
-        runAt:
-          type: string
-          format: date-time
-          description: One-shot execution time (mutually exclusive with cron).
+        ready:
+          type: boolean
 
     Schedule:
       type: object
-      required: [id, taskType, enabled, createdAt]
+      required: [id, taskType, cron, enabled, createdAt]
       properties:
         id:
           type: string
@@ -299,9 +144,6 @@ components:
           additionalProperties: true
         cron:
           type: string
-        runAt:
-          type: string
-          format: date-time
         enabled:
           type: boolean
         lastRunAt:

@@ -2,16 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/sei-protocol/seictl/sei-sidecar/engine"
@@ -42,12 +36,6 @@ var serveCmd = cli.Command{
 			return fmt.Errorf("home directory init failed: %w", err)
 		}
 
-		engine.SignalSeidFn = func(sig syscall.Signal) {
-			if err := tasks.SignalSeid(sig); err != nil {
-				log.Printf("failed to signal seid: %v", err)
-			}
-		}
-
 		handlers := map[engine.TaskType]engine.TaskHandler{
 			engine.TaskSnapshotRestore:    tasks.NewSnapshotRestorer(homeDir, nil).Handler(),
 			engine.TaskDiscoverPeers:      tasks.NewPeerDiscoverer(homeDir, nil, nil).Handler(),
@@ -59,10 +47,8 @@ var serveCmd = cli.Command{
 			engine.TaskSnapshotUpload:     tasks.NewSnapshotUploader(homeDir, nil).Handler(),
 		}
 
-		eng := engine.NewEngine(homeDir, handlers, seidRPCBlockHeight)
+		eng := engine.NewEngine(handlers)
 
-		go runDrainTicker(ctx, eng)
-		go runUpgradeTicker(ctx, eng)
 		go runSchedulerTicker(ctx, eng)
 
 		srv := server.NewServer(":"+port, eng)
@@ -71,33 +57,6 @@ var serveCmd = cli.Command{
 		}
 		return nil
 	},
-}
-
-func runDrainTicker(ctx context.Context, eng *engine.Engine) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			eng.DrainUpdates()
-			return
-		case <-ticker.C:
-			eng.DrainUpdates()
-		}
-	}
-}
-
-func runUpgradeTicker(ctx context.Context, eng *engine.Engine) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			eng.CheckUpgrades()
-		}
-	}
 }
 
 func runSchedulerTicker(ctx context.Context, eng *engine.Engine) {
@@ -114,8 +73,7 @@ func runSchedulerTicker(ctx context.Context, eng *engine.Engine) {
 }
 
 // initSeiHome creates the seid home directory structure and writes a minimal
-// default config.toml. This is the Go equivalent of `seid init` — it ensures
-// the config patcher has a valid TOML file to work with on first boot.
+// default config.toml.
 func initSeiHome(homeDir string) error {
 	configDir := filepath.Join(homeDir, "config")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
@@ -139,65 +97,22 @@ func initSeiHome(homeDir string) error {
 	return nil
 }
 
-// seidRPCBlockHeight queries seid's Tendermint RPC for the current block height.
-func seidRPCBlockHeight() (int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:26657/status", nil)
-	if err != nil {
-		return 0, fmt.Errorf("building request: %w", err)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("GET /status: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, fmt.Errorf("reading response: %w", err)
-	}
-
-	var status rpcStatusResponse
-	if err := json.Unmarshal(body, &status); err != nil {
-		return 0, fmt.Errorf("parsing /status response: %w", err)
-	}
-
-	height, err := strconv.ParseInt(status.Result.SyncInfo.LatestBlockHeight, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parsing block height %q: %w", status.Result.SyncInfo.LatestBlockHeight, err)
-	}
-
-	return height, nil
-}
-
-type rpcStatusResponse struct {
-	Result struct {
-		SyncInfo struct {
-			LatestBlockHeight string `json:"latest_block_height"`
-		} `json:"sync_info"`
-	} `json:"result"`
-}
-
 // defaultConfigTOML is a minimal config.toml that the config patcher can work with.
-// Fields are populated by the config-patch task during bootstrap.
 const defaultConfigTOML = `[base]
 mode = "full"
 
 [p2p]
-persistent_peers = ""
+persistent-peers = ""
 laddr = "tcp://0.0.0.0:26656"
 
 [statesync]
 enable = false
-trust_height = 0
-trust_hash = ""
-rpc_servers = ""
+trust-height = 0
+trust-hash = ""
+rpc-servers = ""
 
 [consensus]
-timeout_commit = "5s"
+timeout-commit = "5s"
 
 [mempool]
 size = 5000

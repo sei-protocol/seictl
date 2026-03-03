@@ -8,16 +8,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// ScheduleID uniquely identifies a schedule.
-type ScheduleID = string
-
-// Schedule defines a recurring (cron) or one-shot (runAt) task trigger.
+// Schedule defines a recurring cron-based task trigger.
 type Schedule struct {
-	ID        ScheduleID     `json:"id"`
+	ID        string         `json:"id"`
 	TaskType  TaskType       `json:"taskType"`
 	Params    map[string]any `json:"params,omitempty"`
-	Cron      string         `json:"cron,omitempty"`
-	RunAt     *time.Time     `json:"runAt,omitempty"`
+	Cron      string         `json:"cron"`
 	Enabled   bool           `json:"enabled"`
 	LastRunAt *time.Time     `json:"lastRunAt,omitempty"`
 	NextRunAt *time.Time     `json:"nextRunAt,omitempty"`
@@ -26,67 +22,56 @@ type Schedule struct {
 
 // DueTask is returned by Tick for schedules that are ready to fire.
 type DueTask struct {
-	ScheduleID ScheduleID
+	ScheduleID string
 	TaskType   TaskType
 	Params     map[string]any
 }
 
-// Scheduler manages time-based schedule definitions and evaluates due tasks.
+// Scheduler manages cron-based schedule definitions and evaluates due tasks.
 type Scheduler struct {
 	mu        sync.Mutex
-	schedules map[ScheduleID]*Schedule
+	schedules map[string]*Schedule
 }
 
 // NewScheduler creates an empty scheduler.
 func NewScheduler() *Scheduler {
 	return &Scheduler{
-		schedules: make(map[ScheduleID]*Schedule),
+		schedules: make(map[string]*Schedule),
 	}
 }
 
-// Add creates a new schedule. Exactly one of cron or runAt must be provided.
-func (s *Scheduler) Add(taskType TaskType, params map[string]any, cronExpr string, runAt *time.Time) (*Schedule, error) {
-	hasCron := cronExpr != ""
-	hasRunAt := runAt != nil
-
-	if hasCron == hasRunAt {
-		return nil, fmt.Errorf("exactly one of cron or runAt must be provided")
+// Add creates a new cron schedule.
+func (s *Scheduler) Add(taskType TaskType, params map[string]any, cronExpr string) (*Schedule, error) {
+	if cronExpr == "" {
+		return nil, fmt.Errorf("cron expression is required")
 	}
-
-	if hasCron {
-		if err := validateCron(cronExpr); err != nil {
-			return nil, err
-		}
+	if err := validateCron(cronExpr); err != nil {
+		return nil, err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now()
+	next, _ := nextCronTime(cronExpr, now) // already validated
+
 	sched := &Schedule{
 		ID:        uuid.New().String(),
 		TaskType:  taskType,
 		Params:    params,
 		Cron:      cronExpr,
 		Enabled:   true,
+		NextRunAt: &next,
 		CreatedAt: now,
 	}
 
-	if hasCron {
-		next, _ := nextCronTime(cronExpr, now) // already validated
-		sched.NextRunAt = &next
-	} else {
-		sched.RunAt = runAt
-		sched.NextRunAt = runAt
-	}
-
-	cp := *sched
 	s.schedules[sched.ID] = sched
+	cp := *sched
 	return &cp, nil
 }
 
 // Remove deletes a schedule. Returns true if found.
-func (s *Scheduler) Remove(id ScheduleID) bool {
+func (s *Scheduler) Remove(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -95,19 +80,6 @@ func (s *Scheduler) Remove(id ScheduleID) bool {
 	}
 	delete(s.schedules, id)
 	return true
-}
-
-// Get returns a copy of the schedule, or nil if not found.
-func (s *Scheduler) Get(id ScheduleID) *Schedule {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	sched, ok := s.schedules[id]
-	if !ok {
-		return nil
-	}
-	cp := *sched
-	return &cp
 }
 
 // List returns copies of all schedules.
@@ -124,8 +96,7 @@ func (s *Scheduler) List() []Schedule {
 }
 
 // Tick evaluates which schedules are due at the given time. Returns the due
-// tasks without mutating schedule state — call ConfirmRun after successful
-// submission.
+// tasks without mutating state — call ConfirmRun after successful submission.
 func (s *Scheduler) Tick(now time.Time) []DueTask {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -147,9 +118,8 @@ func (s *Scheduler) Tick(now time.Time) []DueTask {
 	return due
 }
 
-// ConfirmRun updates the schedule after a successful task submission. For cron
-// schedules it advances NextRunAt; for one-shot schedules it disables them.
-func (s *Scheduler) ConfirmRun(id ScheduleID, now time.Time) {
+// ConfirmRun advances the schedule's NextRunAt after a successful submission.
+func (s *Scheduler) ConfirmRun(id string, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -159,15 +129,7 @@ func (s *Scheduler) ConfirmRun(id ScheduleID, now time.Time) {
 	}
 
 	sched.LastRunAt = &now
-
-	if sched.Cron != "" {
-		next, err := nextCronTime(sched.Cron, now)
-		if err == nil {
-			sched.NextRunAt = &next
-		}
-	} else {
-		// One-shot: disable after firing.
-		sched.Enabled = false
-		sched.NextRunAt = nil
+	if next, err := nextCronTime(sched.Cron, now); err == nil {
+		sched.NextRunAt = &next
 	}
 }
