@@ -9,6 +9,7 @@ import (
 
 	"github.com/sei-protocol/seictl/internal/patch"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/tasks/defaults"
 )
 
 // PatchSet describes the TOML patches to apply to config.toml and app.toml.
@@ -184,30 +185,9 @@ func toInt32(v any) (int32, bool) {
 }
 
 
-// DefaultConfigTOML is a minimal config.toml skeleton that the config patcher
-// can merge patches over. It seeds the sections that seid expects to find.
-const DefaultConfigTOML = `[base]
-mode = "full"
-
-[p2p]
-persistent-peers = ""
-laddr = "tcp://0.0.0.0:26656"
-
-[statesync]
-enable = false
-trust-height = 0
-trust-hash = ""
-rpc-servers = ""
-
-[consensus]
-timeout-commit = "5s"
-
-[mempool]
-size = 5000
-`
-
 // EnsureDefaultConfig creates the seid home directory structure and writes a
-// minimal default config.toml if one does not already exist.
+// minimal default config.toml if one does not already exist. The default is
+// embedded from defaults/config.toml.
 func EnsureDefaultConfig(homeDir string) error {
 	configDir := filepath.Join(homeDir, "config")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
@@ -224,7 +204,12 @@ func EnsureDefaultConfig(homeDir string) error {
 		return nil
 	}
 
-	if err := os.WriteFile(configPath, []byte(DefaultConfigTOML), 0o644); err != nil {
+	defaultConfig, err := defaults.FS.ReadFile("config.toml")
+	if err != nil {
+		return fmt.Errorf("reading embedded default config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, defaultConfig, 0o644); err != nil {
 		return fmt.Errorf("writing default config.toml: %w", err)
 	}
 
