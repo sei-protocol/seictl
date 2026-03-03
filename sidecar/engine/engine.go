@@ -66,21 +66,27 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler) *Engine {
 
 // loop is the serial worker that processes non-scheduled tasks one at a time.
 // After each task completes it stores the result and releases the task lock.
+// Exits when the engine context is cancelled.
 func (e *Engine) loop() {
-	for env := range e.taskCh {
-		e.running.Store(true)
-		err := e.execute(env.taskType, env.handler, env.params)
+	for {
+		select {
+		case <-e.ctx.Done():
+			return
+		case env := <-e.taskCh:
+			e.running.Store(true)
+			err := e.execute(env.taskType, env.handler, env.params)
 
-		result := &TaskResult{Type: string(env.taskType)}
-		if err != nil {
-			result.Error = err.Error()
+			result := &TaskResult{Type: string(env.taskType)}
+			if err != nil {
+				result.Error = err.Error()
+			}
+			e.mu.Lock()
+			e.lastTask = result
+			e.mu.Unlock()
+
+			e.running.Store(false)
+			e.taskMu.Unlock()
 		}
-		e.mu.Lock()
-		e.lastTask = result
-		e.mu.Unlock()
-
-		e.running.Store(false)
-		e.taskMu.Unlock()
 	}
 }
 
@@ -149,10 +155,10 @@ func (e *Engine) Status() StatusResponse {
 	return StatusResponse{Status: status, LastTask: e.lastTask}
 }
 
-// Close shuts down the worker loop and cancels the engine context.
+// Close cancels the engine context, which stops the worker loop and
+// any in-flight task handlers that respect cancellation.
 func (e *Engine) Close() {
 	e.cancel()
-	close(e.taskCh)
 }
 
 // AddSchedule creates a cron schedule for a task type.

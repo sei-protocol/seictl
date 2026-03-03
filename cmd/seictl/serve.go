@@ -49,7 +49,7 @@ var serveCmd = cli.Command{
 
 		go runSchedulerTicker(ctx, eng)
 
-		srv := server.NewServer(":"+port, eng)
+		srv := server.NewServer("127.0.0.1:"+port, eng)
 		if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("server error: %w", err)
 		}
