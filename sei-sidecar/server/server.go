@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
+	"time"
 
 	"github.com/sei-protocol/seictl/sei-sidecar/engine"
 )
@@ -78,7 +78,6 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If a schedule is provided, create a cron schedule instead of running now.
 	if req.Schedule != "" {
 		sched, err := s.engine.AddSchedule(engine.TaskType(req.Type), req.Params, req.Schedule)
 		if err != nil {
@@ -93,6 +92,10 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 		Type:   engine.TaskType(req.Type),
 		Params: req.Params,
 	}); err != nil {
+		if errors.Is(err, engine.ErrBusy) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -108,7 +111,7 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
-	scheduleID := strings.TrimPrefix(r.URL.Path, "/schedules/")
+	scheduleID := r.PathValue("scheduleId")
 	if scheduleID == "" {
 		writeError(w, http.StatusBadRequest, "missing schedule ID")
 		return
@@ -130,7 +133,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		srv.Shutdown(context.Background()) //nolint:errcheck // best-effort shutdown
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		srv.Shutdown(shutdownCtx) //nolint:errcheck // best-effort shutdown
 	}()
 
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {

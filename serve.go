@@ -47,7 +47,12 @@ var serveCmd = cli.Command{
 			engine.TaskSnapshotUpload:     tasks.NewSnapshotUploader(homeDir, nil).Handler(),
 		}
 
-		eng := engine.NewEngine(handlers)
+		eng := engine.NewEngine(ctx, handlers)
+		eng.OnTaskComplete = func(tt engine.TaskType) {
+			if tt == engine.TaskMarkReady {
+				eng.SetReady()
+			}
+		}
 
 		go runSchedulerTicker(ctx, eng)
 
@@ -55,6 +60,7 @@ var serveCmd = cli.Command{
 		if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("server error: %w", err)
 		}
+		eng.Close()
 		return nil
 	},
 }

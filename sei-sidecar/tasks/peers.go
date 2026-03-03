@@ -358,6 +358,8 @@ type tendermintStatusResponse struct {
 	} `json:"sync_info"`
 }
 
+var nodeIDHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
 func defaultQueryNodeID(ctx context.Context, ip string) (string, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -367,7 +369,7 @@ func defaultQueryNodeID(ctx context.Context, ip string) (string, error) {
 		return "", fmt.Errorf("building request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := nodeIDHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("GET /status: %w", err)
 	}
