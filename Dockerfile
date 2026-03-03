@@ -3,7 +3,6 @@ FROM docker.io/golang:1.25 as BUILD
 WORKDIR /go/src/seictl
 
 COPY go.mod go.sum ./
-COPY sei-sidecar/go.mod sei-sidecar/go.sum ./sei-sidecar/
 RUN go mod download
 
 COPY . .
