@@ -78,7 +78,7 @@ func TestSnapshotRestoreExtractsArchive(t *testing.T) {
 
 	client := &mockS3Client{
 		responses: map[string][]byte{
-			"snapshots/latest.txt":                              []byte("100000000"),
+			"snapshots/latest.txt": []byte("100000000"),
 			"snapshots/snapshot_100000000_testchain_us-east-1.tar.gz": archive,
 		},
 	}
@@ -186,7 +186,7 @@ func TestSnapshotRestoreRejectsPathTraversal(t *testing.T) {
 
 	client := &mockS3Client{
 		responses: map[string][]byte{
-			"snapshots/latest.txt":                              []byte("100000000"),
+			"snapshots/latest.txt": []byte("100000000"),
 			"snapshots/snapshot_100000000_testchain_us-east-1.tar.gz": archive,
 		},
 	}

@@ -46,7 +46,7 @@ type SnapshotConfig struct {
 
 // SnapshotRestorer downloads and extracts a snapshot archive from S3.
 type SnapshotRestorer struct {
-	homeDir        string
+	homeDir         string
 	s3ClientFactory S3ClientFactory
 }
 
@@ -56,7 +56,7 @@ func NewSnapshotRestorer(homeDir string, factory S3ClientFactory) *SnapshotResto
 		factory = DefaultS3ClientFactory
 	}
 	return &SnapshotRestorer{
-		homeDir:        homeDir,
+		homeDir:         homeDir,
 		s3ClientFactory: factory,
 	}
 }

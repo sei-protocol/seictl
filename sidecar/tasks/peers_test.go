@@ -14,9 +14,9 @@ import (
 )
 
 type mockEC2Client struct {
-	output       *ec2.DescribeInstancesOutput
-	err          error
-	lastInput    *ec2.DescribeInstancesInput
+	output    *ec2.DescribeInstancesOutput
+	err       error
+	lastInput *ec2.DescribeInstancesInput
 }
 
 func (m *mockEC2Client) DescribeInstances(_ context.Context, input *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {

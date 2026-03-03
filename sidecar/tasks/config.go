@@ -184,7 +184,6 @@ func toInt32(v any) (int32, bool) {
 	}
 }
 
-
 // EnsureDefaultConfig creates the seid home directory structure and writes a
 // minimal default config.toml if one does not already exist. The default is
 // embedded from defaults/config.toml.
@@ -215,4 +214,3 @@ func EnsureDefaultConfig(homeDir string) error {
 
 	return nil
 }
-

@@ -59,7 +59,7 @@ type uploadState struct {
 // SnapshotUploader scans for locally produced Tendermint state-sync snapshots
 // and uploads new ones to S3.
 type SnapshotUploader struct {
-	homeDir             string
+	homeDir               string
 	s3UploadClientFactory S3UploadClientFactory
 }
 
@@ -69,7 +69,7 @@ func NewSnapshotUploader(homeDir string, factory S3UploadClientFactory) *Snapsho
 		factory = DefaultS3UploadClientFactory
 	}
 	return &SnapshotUploader{
-		homeDir:             homeDir,
+		homeDir:               homeDir,
 		s3UploadClientFactory: factory,
 	}
 }
