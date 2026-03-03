@@ -14,7 +14,6 @@ type Schedule struct {
 	TaskType  TaskType       `json:"taskType"`
 	Params    map[string]any `json:"params,omitempty"`
 	Cron      string         `json:"cron"`
-	Enabled   bool           `json:"enabled"`
 	LastRunAt *time.Time     `json:"lastRunAt,omitempty"`
 	NextRunAt *time.Time     `json:"nextRunAt,omitempty"`
 	CreatedAt time.Time      `json:"createdAt"`
@@ -60,7 +59,6 @@ func (s *Scheduler) Add(taskType TaskType, params map[string]any, cronExpr strin
 		TaskType:  taskType,
 		Params:    params,
 		Cron:      cronExpr,
-		Enabled:   true,
 		NextRunAt: &next,
 		CreatedAt: now,
 	}
@@ -103,7 +101,7 @@ func (s *Scheduler) Tick(now time.Time) []DueTask {
 
 	var due []DueTask
 	for _, sched := range s.schedules {
-		if !sched.Enabled || sched.NextRunAt == nil {
+		if sched.NextRunAt == nil {
 			continue
 		}
 		if now.Before(*sched.NextRunAt) {

@@ -15,9 +15,6 @@ func TestSchedulerAddCron(t *testing.T) {
 	if sched.ID == "" {
 		t.Fatal("expected non-empty ID")
 	}
-	if !sched.Enabled {
-		t.Fatal("expected enabled")
-	}
 	if sched.NextRunAt == nil {
 		t.Fatal("expected NextRunAt to be set")
 	}
@@ -114,9 +111,6 @@ func TestSchedulerConfirmRunAdvancesCron(t *testing.T) {
 	}
 	if found.NextRunAt == nil || !found.NextRunAt.After(now) {
 		t.Fatal("expected NextRunAt to advance past now")
-	}
-	if !found.Enabled {
-		t.Fatal("cron schedule should remain enabled")
 	}
 }
 

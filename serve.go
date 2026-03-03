@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/sei-protocol/seictl/sei-sidecar/engine"
@@ -32,7 +30,7 @@ var serveCmd = cli.Command{
 		}
 		port := cmd.String("port")
 
-		if err := initSeiHome(homeDir); err != nil {
+		if err := tasks.EnsureDefaultConfig(homeDir); err != nil {
 			return fmt.Errorf("home directory init failed: %w", err)
 		}
 
@@ -48,11 +46,6 @@ var serveCmd = cli.Command{
 		}
 
 		eng := engine.NewEngine(ctx, handlers)
-		eng.OnTaskComplete = func(tt engine.TaskType) {
-			if tt == engine.TaskMarkReady {
-				eng.SetReady()
-			}
-		}
 
 		go runSchedulerTicker(ctx, eng)
 
@@ -77,49 +70,3 @@ func runSchedulerTicker(ctx context.Context, eng *engine.Engine) {
 		}
 	}
 }
-
-// initSeiHome creates the seid home directory structure and writes a minimal
-// default config.toml.
-func initSeiHome(homeDir string) error {
-	configDir := filepath.Join(homeDir, "config")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		return fmt.Errorf("creating config directory: %w", err)
-	}
-
-	dataDir := filepath.Join(homeDir, "data")
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return fmt.Errorf("creating data directory: %w", err)
-	}
-
-	configPath := filepath.Join(configDir, "config.toml")
-	if _, err := os.Stat(configPath); err == nil {
-		return nil // config already exists, skip
-	}
-
-	if err := os.WriteFile(configPath, []byte(defaultConfigTOML), 0o644); err != nil {
-		return fmt.Errorf("writing default config.toml: %w", err)
-	}
-
-	return nil
-}
-
-// defaultConfigTOML is a minimal config.toml that the config patcher can work with.
-const defaultConfigTOML = `[base]
-mode = "full"
-
-[p2p]
-persistent-peers = ""
-laddr = "tcp://0.0.0.0:26656"
-
-[statesync]
-enable = false
-trust-height = 0
-trust-hash = ""
-rpc-servers = ""
-
-[consensus]
-timeout-commit = "5s"
-
-[mempool]
-size = 5000
-`

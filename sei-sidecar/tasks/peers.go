@@ -47,10 +47,32 @@ type NodeIDQuerier func(ctx context.Context, ip string) (string, error)
 // EC2TagsSource discovers peers by querying EC2 for running instances
 // matching the configured tags.
 type EC2TagsSource struct {
-	Region       string
-	Tags         map[string]string
-	EC2Factory   EC2ClientFactory
-	QueryNodeID  NodeIDQuerier
+	Region      string
+	Tags        map[string]string
+	EC2Factory  EC2ClientFactory
+	QueryNodeID NodeIDQuerier
+}
+
+// StaticSource returns a fixed list of peer addresses.
+type StaticSource struct {
+	Addresses []string
+}
+
+// PeerDiscoverer resolves peers from multiple sources and writes them to a file.
+type PeerDiscoverer struct {
+	homeDir          string
+	ec2ClientFactory EC2ClientFactory
+	queryNodeID      NodeIDQuerier
+}
+
+// tendermintStatusResponse is the minimal shape of the /status JSON response.
+type tendermintStatusResponse struct {
+	NodeInfo struct {
+		ID string `json:"id"`
+	} `json:"node_info"`
+	SyncInfo struct {
+		LatestBlockHeight string `json:"latest_block_height"`
+	} `json:"sync_info"`
 }
 
 // Discover queries EC2 for running instances matching the configured tags
@@ -108,11 +130,6 @@ func (s *EC2TagsSource) Discover(ctx context.Context) ([]string, error) {
 	return peers, nil
 }
 
-// StaticSource returns a fixed list of peer addresses.
-type StaticSource struct {
-	Addresses []string
-}
-
 // Discover returns the statically configured peer addresses.
 func (s *StaticSource) Discover(_ context.Context) ([]string, error) {
 	if len(s.Addresses) == 0 {
@@ -121,13 +138,6 @@ func (s *StaticSource) Discover(_ context.Context) ([]string, error) {
 	result := make([]string, len(s.Addresses))
 	copy(result, s.Addresses)
 	return result, nil
-}
-
-// PeerDiscoverer resolves peers from multiple sources and writes them to a file.
-type PeerDiscoverer struct {
-	homeDir          string
-	ec2ClientFactory EC2ClientFactory
-	queryNodeID      NodeIDQuerier
 }
 
 // NewPeerDiscoverer creates a discoverer targeting the given home directory.
@@ -346,16 +356,6 @@ func instanceIP(instance ec2types.Instance) string {
 		return *instance.PrivateIpAddress
 	}
 	return ""
-}
-
-// tendermintStatusResponse is the minimal shape of the /status JSON response.
-type tendermintStatusResponse struct {
-	NodeInfo struct {
-		ID string `json:"id"`
-	} `json:"node_info"`
-	SyncInfo struct {
-		LatestBlockHeight string `json:"latest_block_height"`
-	} `json:"sync_info"`
 }
 
 var nodeIDHTTPClient = &http.Client{Timeout: 5 * time.Second}

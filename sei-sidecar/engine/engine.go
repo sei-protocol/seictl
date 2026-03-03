@@ -34,16 +34,15 @@ type StatusResponse struct {
 // buffered channel so that at most one runs at a time. Scheduled tasks bypass
 // the channel and run in their own goroutines.
 type Engine struct {
-	handlers       map[TaskType]TaskHandler
-	scheduler      *Scheduler
-	ctx            context.Context
-	cancel         context.CancelFunc
-	taskCh         chan taskEnvelope
-	running        atomic.Bool
-	mu             sync.RWMutex
-	ready          bool
-	SubmitTimeout  time.Duration
-	OnTaskComplete func(TaskType)
+	handlers      map[TaskType]TaskHandler
+	scheduler     *Scheduler
+	ctx           context.Context
+	cancel        context.CancelFunc
+	taskCh        chan taskEnvelope
+	running       atomic.Bool
+	mu            sync.RWMutex
+	ready         bool
+	SubmitTimeout time.Duration
 }
 
 // NewEngine creates a new Engine and starts its worker loop. The provided
@@ -109,17 +108,11 @@ func (e *Engine) execute(taskType TaskType, handler TaskHandler, params map[stri
 		return
 	}
 	log.Printf("[%s] completed", taskType)
-	if e.OnTaskComplete != nil {
-		e.OnTaskComplete(taskType)
+	if taskType == TaskMarkReady {
+		e.mu.Lock()
+		e.ready = true
+		e.mu.Unlock()
 	}
-}
-
-// SetReady marks the engine as ready. Intended to be called from an
-// OnTaskComplete callback.
-func (e *Engine) SetReady() {
-	e.mu.Lock()
-	e.ready = true
-	e.mu.Unlock()
 }
 
 // Healthz returns true after the engine has been marked ready.

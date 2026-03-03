@@ -139,7 +139,7 @@ components:
 
     Schedule:
       type: object
-      required: [id, taskType, cron, enabled, createdAt]
+      required: [id, taskType, cron, createdAt]
       properties:
         id:
           type: string
@@ -151,8 +151,6 @@ components:
           additionalProperties: true
         cron:
           type: string
-        enabled:
-          type: boolean
         lastRunAt:
           type: string
           format: date-time

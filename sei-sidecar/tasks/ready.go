@@ -6,9 +6,8 @@ import (
 	"github.com/sei-protocol/seictl/sei-sidecar/engine"
 )
 
-// MarkReadyHandler returns a TaskHandler that signals bootstrap completion.
-// The actual ready flag is set by Engine.DrainUpdates when it sees a successful
-// TaskMarkReady result — this handler just needs to succeed.
+// MarkReadyHandler returns a no-op TaskHandler. When it succeeds, the engine
+// marks itself as ready.
 func MarkReadyHandler() engine.TaskHandler {
 	return func(_ context.Context, _ map[string]any) error {
 		return nil

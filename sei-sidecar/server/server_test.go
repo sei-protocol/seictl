@@ -13,13 +13,7 @@ import (
 )
 
 func newTestEngine(handlers map[engine.TaskType]engine.TaskHandler) *engine.Engine {
-	eng := engine.NewEngine(context.Background(), handlers)
-	eng.OnTaskComplete = func(tt engine.TaskType) {
-		if tt == engine.TaskMarkReady {
-			eng.SetReady()
-		}
-	}
-	return eng
+	return engine.NewEngine(context.Background(), handlers)
 }
 
 func serveHTTP(srv *Server, method, path string, body string) *httptest.ResponseRecorder {
@@ -178,9 +172,6 @@ func TestPostTaskSchedule(t *testing.T) {
 	}
 	if sched.ID == "" {
 		t.Fatal("expected non-empty schedule ID")
-	}
-	if !sched.Enabled {
-		t.Fatal("expected enabled")
 	}
 }
 

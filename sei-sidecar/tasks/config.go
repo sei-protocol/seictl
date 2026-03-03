@@ -187,6 +187,9 @@ func toInt32(v any) (int32, bool) {
 func parseTOMLFile(path string) (map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]any), nil
+		}
 		return nil, err
 	}
 	var doc map[string]any
@@ -204,6 +207,53 @@ func setNestedValue(doc map[string]any, section, key string, value any) {
 		doc[section] = sec
 	}
 	sec[key] = value
+}
+
+// DefaultConfigTOML is a minimal config.toml skeleton that the config patcher
+// can merge patches over. It seeds the sections that seid expects to find.
+const DefaultConfigTOML = `[base]
+mode = "full"
+
+[p2p]
+persistent-peers = ""
+laddr = "tcp://0.0.0.0:26656"
+
+[statesync]
+enable = false
+trust-height = 0
+trust-hash = ""
+rpc-servers = ""
+
+[consensus]
+timeout-commit = "5s"
+
+[mempool]
+size = 5000
+`
+
+// EnsureDefaultConfig creates the seid home directory structure and writes a
+// minimal default config.toml if one does not already exist.
+func EnsureDefaultConfig(homeDir string) error {
+	configDir := filepath.Join(homeDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+
+	dataDir := filepath.Join(homeDir, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return fmt.Errorf("creating data directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.toml")
+	if _, err := os.Stat(configPath); err == nil {
+		return nil
+	}
+
+	if err := os.WriteFile(configPath, []byte(DefaultConfigTOML), 0o644); err != nil {
+		return fmt.Errorf("writing default config.toml: %w", err)
+	}
+
+	return nil
 }
 
 // atomicWriteTOML encodes doc to TOML and writes it atomically via temp+rename.

@@ -8,18 +8,8 @@ import (
 	"time"
 )
 
-func markReadyCallback(eng *Engine) func(TaskType) {
-	return func(tt TaskType) {
-		if tt == TaskMarkReady {
-			eng.SetReady()
-		}
-	}
-}
-
 func newTestEngine(handlers map[TaskType]TaskHandler) *Engine {
-	eng := NewEngine(context.Background(), handlers)
-	eng.OnTaskComplete = markReadyCallback(eng)
-	return eng
+	return NewEngine(context.Background(), handlers)
 }
 
 func waitForHealthz(t *testing.T, eng *Engine) {
