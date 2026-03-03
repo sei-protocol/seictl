@@ -1,14 +1,6 @@
-module github.com/sei-protocol/seictl
+module github.com/sei-protocol/platform/sei-sidecar
 
-go 1.25.4
-
-require (
-	github.com/pelletier/go-toml/v2 v2.2.4
-	github.com/sei-protocol/platform/sei-sidecar v0.0.0
-	github.com/urfave/cli/v3 v3.6.1
-)
-
-replace github.com/sei-protocol/platform/sei-sidecar => ./sei-sidecar
+go 1.25.3
 
 require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
@@ -32,8 +24,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.15 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.7 // indirect
 	github.com/aws/smithy-go v1.24.1 // indirect
-	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 )
