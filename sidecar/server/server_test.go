@@ -12,8 +12,11 @@ import (
 	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
-func newTestEngine(handlers map[engine.TaskType]engine.TaskHandler) *engine.Engine {
-	return engine.NewEngine(context.Background(), handlers)
+func newTestEngine(t *testing.T, handlers map[engine.TaskType]engine.TaskHandler) *engine.Engine {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return engine.NewEngine(ctx, handlers)
 }
 
 func serveHTTP(srv *Server, method, path string, body string) *httptest.ResponseRecorder {
@@ -38,14 +41,11 @@ func waitForReady(eng *engine.Engine) {
 	}
 }
 
-func waitForLastTaskHTTP(srv *Server) *engine.TaskResult {
+func waitForTaskResult(eng *engine.Engine, id string) *engine.TaskResult {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		rec := serveHTTP(srv, http.MethodGet, "/status", "")
-		var resp engine.StatusResponse
-		json.NewDecoder(rec.Body).Decode(&resp)
-		if resp.LastTask != nil {
-			return resp.LastTask
+		if r := eng.GetResult(id); r != nil && r.CompletedAt != nil {
+			return r
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -53,10 +53,9 @@ func waitForLastTaskHTTP(srv *Server) *engine.TaskResult {
 }
 
 func TestHealthzReturns503BeforeReady(t *testing.T) {
-	eng := newTestEngine(nil)
-	defer eng.Close()
+	eng := newTestEngine(t, nil)
 	srv := NewServer(":0", eng)
-	rec := serveHTTP(srv, http.MethodGet, "/healthz", "")
+	rec := serveHTTP(srv, http.MethodGet, "/v0/healthz", "")
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", rec.Code)
@@ -64,29 +63,27 @@ func TestHealthzReturns503BeforeReady(t *testing.T) {
 }
 
 func TestHealthzReturns200AfterMarkReady(t *testing.T) {
-	eng := newTestEngine(map[engine.TaskType]engine.TaskHandler{
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	defer eng.Close()
 	srv := NewServer(":0", eng)
 
 	eng.Submit(engine.Task{Type: engine.TaskMarkReady})
 	waitForReady(eng)
 
-	rec := serveHTTP(srv, http.MethodGet, "/healthz", "")
+	rec := serveHTTP(srv, http.MethodGet, "/v0/healthz", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 }
 
 func TestStatusResponse(t *testing.T) {
-	eng := newTestEngine(map[engine.TaskType]engine.TaskHandler{
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	defer eng.Close()
 	srv := NewServer(":0", eng)
 
-	rec := serveHTTP(srv, http.MethodGet, "/status", "")
+	rec := serveHTTP(srv, http.MethodGet, "/v0/status", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
@@ -96,54 +93,29 @@ func TestStatusResponse(t *testing.T) {
 		t.Fatalf("failed to decode: %v", err)
 	}
 	if resp.Status != "Initializing" {
-		t.Fatalf("expected not_ready initially, got %q", resp.Status)
+		t.Fatalf("expected Initializing initially, got %q", resp.Status)
 	}
 
 	eng.Submit(engine.Task{Type: engine.TaskMarkReady})
 	waitForReady(eng)
 
-	rec = serveHTTP(srv, http.MethodGet, "/status", "")
+	rec = serveHTTP(srv, http.MethodGet, "/v0/status", "")
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode: %v", err)
 	}
 	if resp.Status != "Ready" {
-		t.Fatalf("expected ready after mark-ready, got %q", resp.Status)
+		t.Fatalf("expected Ready after mark-ready, got %q", resp.Status)
 	}
 }
 
-func TestStatusLastTask(t *testing.T) {
-	eng := newTestEngine(map[engine.TaskType]engine.TaskHandler{
+func TestPostTaskReturnsID(t *testing.T) {
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	defer eng.Close()
-	srv := NewServer(":0", eng)
-
-	rec := serveHTTP(srv, http.MethodPost, "/task", `{"type":"config-patch"}`)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d", rec.Code)
-	}
-
-	result := waitForLastTaskHTTP(srv)
-	if result == nil {
-		t.Fatal("expected lastTask in status, got nil")
-	}
-	if result.Type != string(engine.TaskConfigPatch) {
-		t.Fatalf("expected lastTask.Type %q, got %q", engine.TaskConfigPatch, result.Type)
-	}
-	if result.Error != "" {
-		t.Fatalf("expected no error, got %q", result.Error)
-	}
-}
-
-func TestPostTaskImmediate(t *testing.T) {
-	eng := newTestEngine(map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
-	})
-	defer eng.Close()
 	srv := NewServer(":0", eng)
 
 	body := `{"type":"config-patch","params":{"peers":["a@1.2.3.4:26656"]}}`
-	rec := serveHTTP(srv, http.MethodPost, "/task", body)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d", rec.Code)
 	}
@@ -152,31 +124,30 @@ func TestPostTaskImmediate(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode: %v", err)
 	}
-	if resp["status"] != "submitted" {
-		t.Fatalf("expected status 'submitted', got %q", resp["status"])
+	if resp["id"] == "" {
+		t.Fatal("expected non-empty id")
 	}
 }
 
 func TestPostTaskBusy(t *testing.T) {
 	blocked := make(chan struct{})
-	eng := engine.NewEngine(context.Background(), map[engine.TaskType]engine.TaskHandler{
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := engine.NewEngine(ctx, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
 			<-blocked
 			return nil
 		},
 	})
-	defer eng.Close()
 	srv := NewServer(":0", eng)
 
-	rec := serveHTTP(srv, http.MethodPost, "/task", `{"type":"config-patch"}`)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d", rec.Code)
 	}
-	// Give the worker time to pick up the task (holds taskMu).
 	time.Sleep(20 * time.Millisecond)
 
-	// Second submit: taskMu held → 409.
-	rec = serveHTTP(srv, http.MethodPost, "/task", `{"type":"config-patch"}`)
+	rec = serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -184,125 +155,174 @@ func TestPostTaskBusy(t *testing.T) {
 	close(blocked)
 }
 
-func TestPostTaskSchedule(t *testing.T) {
-	eng := newTestEngine(map[engine.TaskType]engine.TaskHandler{
+func TestPostTaskScheduled(t *testing.T) {
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	defer eng.Close()
 	srv := NewServer(":0", eng)
 
-	body := `{"type":"update-peers","schedule":"*/5 * * * *"}`
-	rec := serveHTTP(srv, http.MethodPost, "/task", body)
+	body := `{"type":"update-peers","schedule":{"cron":"*/5 * * * *"}}`
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var sched engine.Schedule
-	if err := json.NewDecoder(rec.Body).Decode(&sched); err != nil {
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode: %v", err)
 	}
-	if sched.ID == "" {
-		t.Fatal("expected non-empty schedule ID")
+	if resp["id"] == "" {
+		t.Fatal("expected non-empty id")
 	}
 }
 
 func TestPostTaskInvalidJSON(t *testing.T) {
-	eng := newTestEngine(nil)
-	defer eng.Close()
+	eng := newTestEngine(t, nil)
 	srv := NewServer(":0", eng)
-	rec := serveHTTP(srv, http.MethodPost, "/task", `{not json}`)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{not json}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
 
 func TestPostTaskMissingType(t *testing.T) {
-	eng := newTestEngine(nil)
-	defer eng.Close()
+	eng := newTestEngine(t, nil)
 	srv := NewServer(":0", eng)
-	rec := serveHTTP(srv, http.MethodPost, "/task", `{"params":{}}`)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"params":{}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
 
 func TestPostTaskUnknownType(t *testing.T) {
-	eng := newTestEngine(nil)
-	defer eng.Close()
+	eng := newTestEngine(t, nil)
 	srv := NewServer(":0", eng)
-	rec := serveHTTP(srv, http.MethodPost, "/task", `{"type":"nonexistent"}`)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"nonexistent"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
 
 func TestPostTaskInvalidSchedule(t *testing.T) {
-	eng := newTestEngine(nil)
-	defer eng.Close()
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
+		engine.TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
+	})
 	srv := NewServer(":0", eng)
-	rec := serveHTTP(srv, http.MethodPost, "/task", `{"type":"update-peers","schedule":"not a cron"}`)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"update-peers","schedule":{"cron":"not a cron"}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
 
-func TestListSchedulesEmpty(t *testing.T) {
-	eng := newTestEngine(nil)
-	defer eng.Close()
+func TestListTasksEmpty(t *testing.T) {
+	eng := newTestEngine(t, nil)
 	srv := NewServer(":0", eng)
-	rec := serveHTTP(srv, http.MethodGet, "/schedules", "")
+	rec := serveHTTP(srv, http.MethodGet, "/v0/tasks", "")
 
-	var schedules []engine.Schedule
-	if err := json.NewDecoder(rec.Body).Decode(&schedules); err != nil {
+	var results []engine.TaskResult
+	if err := json.NewDecoder(rec.Body).Decode(&results); err != nil {
 		t.Fatalf("failed to decode: %v", err)
 	}
-	if len(schedules) != 0 {
-		t.Fatalf("expected empty array, got %d", len(schedules))
+	if len(results) != 0 {
+		t.Fatalf("expected empty array, got %d", len(results))
 	}
 }
 
-func TestListSchedulesAfterCreate(t *testing.T) {
-	eng := newTestEngine(nil)
-	defer eng.Close()
+func TestListTasksAfterSubmit(t *testing.T) {
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
 	srv := NewServer(":0", eng)
 
-	eng.AddSchedule(engine.TaskUpdatePeers, nil, "*/5 * * * *")
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
+	var resp map[string]string
+	json.NewDecoder(rec.Body).Decode(&resp)
+	waitForTaskResult(eng, resp["id"])
 
-	rec := serveHTTP(srv, http.MethodGet, "/schedules", "")
-	var schedules []engine.Schedule
-	if err := json.NewDecoder(rec.Body).Decode(&schedules); err != nil {
+	rec = serveHTTP(srv, http.MethodGet, "/v0/tasks", "")
+	var results []engine.TaskResult
+	if err := json.NewDecoder(rec.Body).Decode(&results); err != nil {
 		t.Fatalf("failed to decode: %v", err)
 	}
-	if len(schedules) != 1 {
-		t.Fatalf("expected 1 schedule, got %d", len(schedules))
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 }
 
-func TestDeleteSchedule(t *testing.T) {
-	eng := newTestEngine(nil)
-	defer eng.Close()
+func TestGetTask(t *testing.T) {
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
 	srv := NewServer(":0", eng)
 
-	sched := eng.AddSchedule(engine.TaskUpdatePeers, nil, "*/5 * * * *")
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
+	var resp map[string]string
+	json.NewDecoder(rec.Body).Decode(&resp)
+	id := resp["id"]
+	waitForTaskResult(eng, id)
 
-	rec := serveHTTP(srv, http.MethodDelete, "/schedules/"+sched.ID, "")
+	rec = serveHTTP(srv, http.MethodGet, "/v0/tasks/"+id, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var result engine.TaskResult
+	json.NewDecoder(rec.Body).Decode(&result)
+	if result.ID != id {
+		t.Fatalf("expected ID %q, got %q", id, result.ID)
+	}
+}
+
+func TestGetTaskNotFound(t *testing.T) {
+	eng := newTestEngine(t, nil)
+	srv := NewServer(":0", eng)
+	rec := serveHTTP(srv, http.MethodGet, "/v0/tasks/nonexistent", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestDeleteTask(t *testing.T) {
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+	srv := NewServer(":0", eng)
+
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
+	var resp map[string]string
+	json.NewDecoder(rec.Body).Decode(&resp)
+	id := resp["id"]
+	waitForTaskResult(eng, id)
+
+	rec = serveHTTP(srv, http.MethodDelete, "/v0/tasks/"+id, "")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", rec.Code)
 	}
 
-	rec = serveHTTP(srv, http.MethodDelete, "/schedules/"+sched.ID, "")
+	rec = serveHTTP(srv, http.MethodDelete, "/v0/tasks/"+id, "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 after delete, got %d", rec.Code)
 	}
 }
 
-func TestDeleteScheduleNotFound(t *testing.T) {
-	eng := newTestEngine(nil)
-	defer eng.Close()
+func TestDeleteScheduledTask(t *testing.T) {
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
+		engine.TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
+	})
 	srv := NewServer(":0", eng)
-	rec := serveHTTP(srv, http.MethodDelete, "/schedules/nonexistent", "")
 
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"update-peers","schedule":{"cron":"*/5 * * * *"}}`)
+	var resp map[string]string
+	json.NewDecoder(rec.Body).Decode(&resp)
+	id := resp["id"]
+
+	rec = serveHTTP(srv, http.MethodDelete, "/v0/tasks/"+id, "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+
+	rec = serveHTTP(srv, http.MethodGet, "/v0/tasks/"+id, "")
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", rec.Code)
+		t.Fatalf("expected 404 after delete, got %d", rec.Code)
 	}
 }

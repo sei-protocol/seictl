@@ -17,12 +17,12 @@ type Server struct {
 	mux    *http.ServeMux
 }
 
-// TaskRequest is the JSON body for POST /task. If Schedule is set, a cron
-// schedule is created instead of running the task immediately.
+// TaskRequest is the JSON body for POST /v0/tasks. If Schedule is set the
+// task becomes a recurring cron-triggered task; otherwise it runs immediately.
 type TaskRequest struct {
-	Type     string         `json:"type"`
-	Params   map[string]any `json:"params,omitempty"`
-	Schedule string         `json:"schedule,omitempty"`
+	Type     string           `json:"type"`
+	Params   map[string]any   `json:"params,omitempty"`
+	Schedule *engine.Schedule `json:"schedule,omitempty"`
 }
 
 // ErrorResponse is a standard JSON error envelope.
@@ -37,11 +37,12 @@ func NewServer(addr string, eng *engine.Engine) *Server {
 		engine: eng,
 		mux:    http.NewServeMux(),
 	}
-	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
-	s.mux.HandleFunc("GET /status", s.handleStatus)
-	s.mux.HandleFunc("POST /task", s.handlePostTask)
-	s.mux.HandleFunc("GET /schedules", s.handleListSchedules)
-	s.mux.HandleFunc("DELETE /schedules/{scheduleId}", s.handleDeleteSchedule)
+	s.mux.HandleFunc("GET /v0/healthz", s.handleHealthz)
+	s.mux.HandleFunc("GET /v0/status", s.handleStatus)
+	s.mux.HandleFunc("POST /v0/tasks", s.handlePostTask)
+	s.mux.HandleFunc("GET /v0/tasks", s.handleListTasks)
+	s.mux.HandleFunc("GET /v0/tasks/{id}", s.handleGetTask)
+	s.mux.HandleFunc("DELETE /v0/tasks/{id}", s.handleDeleteTask)
 	return s
 }
 
@@ -78,20 +79,26 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Schedule != "" {
-		if err := engine.ValidateCron(req.Schedule); err != nil {
+	task := engine.Task{Type: engine.TaskType(req.Type), Params: req.Params}
+
+	if req.Schedule != nil {
+		if req.Schedule.Cron != "" {
+			if err := engine.ValidateCron(req.Schedule.Cron); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		id, err := s.engine.SubmitScheduled(task, *req.Schedule)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		sched := s.engine.AddSchedule(engine.TaskType(req.Type), req.Params, req.Schedule)
-		writeJSON(w, http.StatusCreated, sched)
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 		return
 	}
 
-	if err := s.engine.Submit(engine.Task{
-		Type:   engine.TaskType(req.Type),
-		Params: req.Params,
-	}); err != nil {
+	id, err := s.engine.Submit(task)
+	if err != nil {
 		if errors.Is(err, engine.ErrBusy) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
@@ -99,26 +106,39 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "submitted"})
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": id})
 }
 
-func (s *Server) handleListSchedules(w http.ResponseWriter, _ *http.Request) {
-	schedules := s.engine.ListSchedules()
-	if schedules == nil {
-		schedules = []engine.Schedule{}
+func (s *Server) handleListTasks(w http.ResponseWriter, _ *http.Request) {
+	results := s.engine.RecentResults()
+	if results == nil {
+		results = []engine.TaskResult{}
 	}
-	writeJSON(w, http.StatusOK, schedules)
+	writeJSON(w, http.StatusOK, results)
 }
 
-func (s *Server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
-	scheduleID := r.PathValue("scheduleId")
-	if scheduleID == "" {
-		writeError(w, http.StatusBadRequest, "missing schedule ID")
+func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing task ID")
 		return
 	}
+	result := s.engine.GetResult(id)
+	if result == nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
 
-	if !s.engine.RemoveSchedule(scheduleID) {
-		writeError(w, http.StatusNotFound, "schedule not found")
+func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing task ID")
+		return
+	}
+	if !s.engine.RemoveResult(id) {
+		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

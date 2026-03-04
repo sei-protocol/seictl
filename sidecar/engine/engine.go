@@ -8,65 +8,51 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-// ErrBusy is returned by Submit when a non-scheduled task is already running.
+const maxResults = 5
+
+// ErrBusy is returned by Submit when a task is already running.
 var ErrBusy = errors.New("a task is already running")
 
 // taskEnvelope wraps a task with its resolved handler for the worker loop.
 type taskEnvelope struct {
-	taskType TaskType
-	handler  TaskHandler
-	params   map[string]any
+	id      string
+	task    Task
+	handler TaskHandler
 }
 
-// TaskResult records the outcome of the most recent non-scheduled task.
-type TaskResult struct {
-	Type  string `json:"type"`
-	Error string `json:"error,omitempty"`
-}
-
-// StatusResponse is the shape returned by the status endpoint.
-type StatusResponse struct {
-	Status   string      `json:"status"`
-	LastTask *TaskResult `json:"lastTask,omitempty"`
-}
-
-// Engine is the task executor. Non-scheduled tasks are serialized through a
-// channel with a TryLock gate: the lock is acquired by Submit and released by
-// the worker after execution completes, ensuring exactly one task is in the
-// system at a time. Scheduled tasks bypass this and run in their own goroutines.
+// Engine is the task executor. One-shot tasks are serialized through a channel
+// with a TryLock gate. Scheduled tasks run in their own goroutines when their
+// cron fires. Both share the unified TaskResult model.
 type Engine struct {
 	handlers  map[TaskType]TaskHandler
-	scheduler *Scheduler
 	ctx       context.Context
-	cancel    context.CancelFunc
 	taskCh    chan taskEnvelope
 	taskMu    sync.Mutex
 	running   atomic.Bool
 	mu        sync.RWMutex
 	ready     bool
-	lastTask  *TaskResult
+	results   []*TaskResult
+	scheduled map[string]*TaskResult
 }
 
-// NewEngine creates a new Engine and starts its worker loop. The provided
-// context controls the lifetime of the worker and is passed to task handlers.
+// NewEngine creates a new Engine and starts its worker loop. The engine
+// runs until ctx is cancelled.
 func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler) *Engine {
-	ctx, cancel := context.WithCancel(ctx)
 	e := &Engine{
 		handlers:  handlers,
-		scheduler: NewScheduler(),
 		ctx:       ctx,
-		cancel:    cancel,
 		taskCh:    make(chan taskEnvelope, 1),
+		scheduled: make(map[string]*TaskResult),
 	}
 	go e.loop()
 	return e
 }
 
-// loop is the serial worker that processes non-scheduled tasks one at a time.
-// After each task completes it stores the result and releases the task lock.
-// Exits when the engine context is cancelled.
+// loop is the serial worker that processes one-shot tasks one at a time.
 func (e *Engine) loop() {
 	for {
 		select {
@@ -74,14 +60,25 @@ func (e *Engine) loop() {
 			return
 		case env := <-e.taskCh:
 			e.running.Store(true)
-			err := e.execute(env.taskType, env.handler, env.params)
+			err := e.execute(env.task.Type, env.handler, env.task.Params)
 
-			result := &TaskResult{Type: string(env.taskType)}
+			now := time.Now()
+			result := &TaskResult{
+				ID:          env.id,
+				Type:        string(env.task.Type),
+				Params:      env.task.Params,
+				SubmittedAt: now,
+				CompletedAt: &now,
+			}
 			if err != nil {
 				result.Error = err.Error()
 			}
+
 			e.mu.Lock()
-			e.lastTask = result
+			e.results = append(e.results, result)
+			if len(e.results) > maxResults {
+				e.results = e.results[len(e.results)-maxResults:]
+			}
 			e.mu.Unlock()
 
 			e.running.Store(false)
@@ -90,35 +87,99 @@ func (e *Engine) loop() {
 	}
 }
 
-// Submit enqueues a non-scheduled task. It returns ErrBusy if another task is
-// already in flight (the lock is held from submission until the worker finishes
-// executing the task).
-func (e *Engine) Submit(task Task) error {
+// Submit enqueues a one-shot task and returns the assigned UUID.
+func (e *Engine) Submit(task Task) (string, error) {
 	handler, ok := e.handlers[task.Type]
 	if !ok {
-		return fmt.Errorf("unknown task type: %s", task.Type)
+		return "", fmt.Errorf("unknown task type: %s", task.Type)
 	}
 	if !e.taskMu.TryLock() {
-		return ErrBusy
+		return "", ErrBusy
 	}
-	e.taskCh <- taskEnvelope{taskType: task.Type, handler: handler, params: task.Params}
-	return nil
+	id := uuid.New().String()
+	e.taskCh <- taskEnvelope{id: id, task: task, handler: handler}
+	return id, nil
 }
 
-// SubmitScheduled runs a task directly in a goroutine, bypassing the
-// single-task lock. Use this for cron-triggered tasks that should not
-// block or be blocked by non-scheduled work.
-func (e *Engine) SubmitScheduled(task Task) error {
-	handler, ok := e.handlers[task.Type]
-	if !ok {
-		return fmt.Errorf("unknown task type: %s", task.Type)
+// SubmitScheduled creates a scheduled task. Returns the task ID. Currently
+// only cron schedules are supported; block-height scheduling is reserved for
+// future use. The schedule is evaluated by EvalSchedules.
+func (e *Engine) SubmitScheduled(task Task, sched Schedule) (string, error) {
+	if _, ok := e.handlers[task.Type]; !ok {
+		return "", fmt.Errorf("unknown task type: %s", task.Type)
 	}
-	go e.execute(task.Type, handler, task.Params)
-	return nil
+	if sched.Cron == "" {
+		return "", fmt.Errorf("schedule must specify a cron expression")
+	}
+
+	now := time.Now()
+	next, _ := nextCronTime(sched.Cron, now)
+	id := uuid.New().String()
+
+	tr := &TaskResult{
+		ID:          id,
+		Type:        string(task.Type),
+		Params:      task.Params,
+		Schedule:    &sched,
+		SubmittedAt: now,
+		NextRunAt:   &next,
+	}
+
+	e.mu.Lock()
+	e.scheduled[id] = tr
+	e.mu.Unlock()
+
+	return id, nil
 }
 
-// execute runs a handler synchronously and logs the outcome. Returns the
-// handler error (if any) so the caller can record it.
+// EvalSchedules checks all scheduled tasks and fires any that are due.
+// Scheduled tasks run in their own goroutines, bypassing the one-shot lock.
+func (e *Engine) EvalSchedules() {
+	now := time.Now()
+
+	e.mu.RLock()
+	var due []*TaskResult
+	for _, tr := range e.scheduled {
+		if tr.NextRunAt != nil && !now.Before(*tr.NextRunAt) {
+			due = append(due, tr)
+		}
+	}
+	e.mu.RUnlock()
+
+	for _, tr := range due {
+		handler, ok := e.handlers[TaskType(tr.Type)]
+		if !ok {
+			log.Printf("[%s] scheduled task %s has no registered handler, removing", tr.Type, tr.ID)
+			e.mu.Lock()
+			delete(e.scheduled, tr.ID)
+			e.mu.Unlock()
+			continue
+		}
+		go func(tr *TaskResult, h TaskHandler) {
+			err := e.execute(TaskType(tr.Type), h, tr.Params)
+
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			s, ok := e.scheduled[tr.ID]
+			if !ok {
+				return
+			}
+			t := now
+			s.CompletedAt = &t
+			s.Error = ""
+			if err != nil {
+				s.Error = err.Error()
+			}
+			if s.Schedule != nil && s.Schedule.Cron != "" {
+				if next, cronErr := nextCronTime(s.Schedule.Cron, now); cronErr == nil {
+					s.NextRunAt = &next
+				}
+			}
+		}(tr, handler)
+	}
+}
+
+// execute runs a handler synchronously and logs the outcome.
 func (e *Engine) execute(taskType TaskType, handler TaskHandler, params map[string]any) error {
 	if err := handler(e.ctx, params); err != nil {
 		log.Printf("[%s] error: %v", taskType, err)
@@ -140,8 +201,7 @@ func (e *Engine) Healthz() bool {
 	return e.ready
 }
 
-// Status returns a snapshot of the engine's current state, including the
-// result of the most recent non-scheduled task.
+// Status returns the engine's current state.
 func (e *Engine) Status() StatusResponse {
 	if e.running.Load() {
 		return StatusResponse{Status: "Running"}
@@ -152,40 +212,62 @@ func (e *Engine) Status() StatusResponse {
 	if e.ready {
 		status = "Ready"
 	}
-	return StatusResponse{Status: status, LastTask: e.lastTask}
+	return StatusResponse{Status: status}
 }
 
-// Close cancels the engine context, which stops the worker loop and
-// any in-flight task handlers that respect cancellation.
-func (e *Engine) Close() {
-	e.cancel()
-}
+// RecentResults returns the most recent task results (newest first),
+// combining completed one-shot results and active scheduled tasks.
+func (e *Engine) RecentResults() []TaskResult {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 
-// AddSchedule creates a cron schedule for a task type.
-// The caller must validate cronExpr before calling.
-func (e *Engine) AddSchedule(taskType TaskType, params map[string]any, cronExpr string) *Schedule {
-	return e.scheduler.Add(taskType, params, cronExpr)
-}
-
-// RemoveSchedule deletes a schedule by ID. Returns true if found.
-func (e *Engine) RemoveSchedule(id string) bool {
-	return e.scheduler.Remove(id)
-}
-
-// ListSchedules returns all schedules.
-func (e *Engine) ListSchedules() []Schedule {
-	return e.scheduler.List()
-}
-
-// EvalSchedules evaluates due cron schedules and submits their tasks via
-// SubmitScheduled so they bypass the single-task lock.
-func (e *Engine) EvalSchedules() {
-	now := time.Now()
-	for _, d := range e.scheduler.Tick(now) {
-		if err := e.SubmitScheduled(Task{Type: d.TaskType, Params: d.Params}); err != nil {
-			log.Printf("[scheduler] failed to submit %s: %v", d.TaskType, err)
-			continue
-		}
-		e.scheduler.ConfirmRun(d.ScheduleID, now)
+	all := make([]TaskResult, 0, len(e.results)+len(e.scheduled))
+	for i := len(e.results) - 1; i >= 0; i-- {
+		all = append(all, *e.results[i])
 	}
+	for _, s := range e.scheduled {
+		all = append(all, *s)
+	}
+
+	if len(all) > maxResults {
+		all = all[:maxResults]
+	}
+	return all
+}
+
+// GetResult returns a task by ID (one-shot result or scheduled), or nil.
+func (e *Engine) GetResult(id string) *TaskResult {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if s, ok := e.scheduled[id]; ok {
+		cp := *s
+		return &cp
+	}
+	for _, r := range e.results {
+		if r.ID == id {
+			cp := *r
+			return &cp
+		}
+	}
+	return nil
+}
+
+// RemoveResult removes a task by ID. For scheduled tasks this stops the
+// schedule. Returns true if found.
+func (e *Engine) RemoveResult(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if _, ok := e.scheduled[id]; ok {
+		delete(e.scheduled, id)
+		return true
+	}
+	for i, r := range e.results {
+		if r.ID == id {
+			e.results = append(e.results[:i], e.results[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
