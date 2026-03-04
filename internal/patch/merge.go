@@ -1,6 +1,10 @@
-package main
+// Package patch provides merge-patch utilities for TOML and JSON documents.
+package patch
 
-func mergePatch(original, patch any) any {
+// Merge performs a recursive merge-patch of patch into original.
+// nil values in the patch delete the corresponding key from original.
+// Non-map patches replace the original entirely.
+func Merge(original, patch any) any {
 	patchMap, patchIsMap := patch.(map[string]any)
 	if !patchIsMap {
 		return patch
@@ -17,7 +21,7 @@ func mergePatch(original, patch any) any {
 		if patchAt == nil {
 			delete(result, key)
 		} else if originalAt, exists := result[key]; exists {
-			result[key] = mergePatch(originalAt, patchAt)
+			result[key] = Merge(originalAt, patchAt)
 		} else {
 			result[key] = patchAt
 		}

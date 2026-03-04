@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/sei-protocol/seictl/internal/patch"
 	"github.com/urfave/cli/v3"
 )
 
@@ -47,49 +48,11 @@ func output(originalPath string, content bytes.Buffer) error {
 		if err != nil {
 			return fmt.Errorf("failed to get config file stat %s: %w", originalPath, err)
 		}
-		return writeFileAtomically(originalPath, content.Bytes(), stat.Mode().Perm())
+		return patch.WriteFileAtomic(originalPath, content.Bytes(), stat.Mode().Perm())
 	case destinations.outputter.output != "":
-		return writeFileAtomically(destinations.outputter.output, content.Bytes(), 0600)
+		return patch.WriteFileAtomic(destinations.outputter.output, content.Bytes(), 0600)
 	default:
 		_, err := io.Copy(os.Stdout, &content)
 		return err
 	}
-}
-
-// writeFileAtomically atomically writes the content at the given path by writing it in
-// a temporary file first, then renaming it to the destination.
-func writeFileAtomically(destination string, content []byte, perm os.FileMode) error {
-	dir := filepath.Dir(destination)
-
-	tmpFile, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmpFile.Name()
-	defer func() {
-		if tmpFile != nil {
-			_ = tmpFile.Close()
-			_ = os.Remove(tmpName)
-		}
-	}()
-
-	if _, err := tmpFile.Write(content); err != nil {
-		return err
-	}
-	if err := tmpFile.Sync(); err != nil {
-		return err
-	}
-	if err := tmpFile.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, perm); err != nil {
-		return err
-	}
-
-	// TODO: Make this windows friendly
-	//
-	// On windows rename fails if file already exists; live with it for now since
-	// this utility is not used on windows.
-
-	return os.Rename(tmpName, destination)
 }

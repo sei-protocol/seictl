@@ -1,11 +1,11 @@
-package main
+package patch
 
 import (
 	"reflect"
 	"testing"
 )
 
-func TestMergePatchDirect(t *testing.T) {
+func TestMerge(t *testing.T) {
 	tests := []struct {
 		name     string
 		original any
@@ -46,9 +46,9 @@ func TestMergePatchDirect(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := mergePatch(tt.original, tt.patch)
+			result := Merge(tt.original, tt.patch)
 			if !reflect.DeepEqual(result, tt.expected) {
-				t.Errorf("mergePatch() = %v, want %v", result, tt.expected)
+				t.Errorf("Merge() = %v, want %v", result, tt.expected)
 			}
 		})
 	}
