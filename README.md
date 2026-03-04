@@ -120,13 +120,13 @@ make build
 Or directly with `go`:
 
 ```bash
-go build -o build/seictl ./cmd/seictl
+go build -o build/seictl .
 ```
 
 ### Install via Go
 
 ```bash
-go install github.com/sei-protocol/seictl/cmd/seictl@latest
+go install github.com/sei-protocol/seictl@latest
 ```
 
 Or from a local clone:

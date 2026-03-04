@@ -283,7 +283,7 @@ func TestDeleteSchedule(t *testing.T) {
 	defer eng.Close()
 	srv := NewServer(":0", eng)
 
-	sched, _ := eng.AddSchedule(engine.TaskUpdatePeers, nil, "*/5 * * * *")
+	sched := eng.AddSchedule(engine.TaskUpdatePeers, nil, "*/5 * * * *")
 
 	rec := serveHTTP(srv, http.MethodDelete, "/schedules/"+sched.ID, "")
 	if rec.Code != http.StatusNoContent {

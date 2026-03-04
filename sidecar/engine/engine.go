@@ -162,7 +162,8 @@ func (e *Engine) Close() {
 }
 
 // AddSchedule creates a cron schedule for a task type.
-func (e *Engine) AddSchedule(taskType TaskType, params map[string]any, cronExpr string) (*Schedule, error) {
+// The caller must validate cronExpr before calling.
+func (e *Engine) AddSchedule(taskType TaskType, params map[string]any, cronExpr string) *Schedule {
 	return e.scheduler.Add(taskType, params, cronExpr)
 }
 

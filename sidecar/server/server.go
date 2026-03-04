@@ -79,11 +79,11 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Schedule != "" {
-		sched, err := s.engine.AddSchedule(engine.TaskType(req.Type), req.Params, req.Schedule)
-		if err != nil {
+		if err := engine.ValidateCron(req.Schedule); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		sched := s.engine.AddSchedule(engine.TaskType(req.Type), req.Params, req.Schedule)
 		writeJSON(w, http.StatusCreated, sched)
 		return
 	}
@@ -127,15 +127,19 @@ func (s *Server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
 // ListenAndServe starts the HTTP server and blocks until ctx is cancelled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	srv := &http.Server{
-		Addr:    s.addr,
-		Handler: s.mux,
+		Addr:              s.addr,
+		Handler:           s.mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		srv.Shutdown(shutdownCtx) //nolint:errcheck // best-effort shutdown
+		_ = srv.Shutdown(shutdownCtx)
 	}()
 
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {

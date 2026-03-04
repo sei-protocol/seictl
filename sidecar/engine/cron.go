@@ -20,8 +20,8 @@ func nextCronTime(expr string, after time.Time) (time.Time, error) {
 	return sched.Next(after), nil
 }
 
-// validateCron checks whether a cron expression is syntactically valid.
-func validateCron(expr string) error {
+// ValidateCron checks whether a cron expression is syntactically valid.
+func ValidateCron(expr string) error {
 	_, err := cronParser.Parse(expr)
 	if err != nil {
 		return fmt.Errorf("invalid cron expression %q: %w", expr, err)

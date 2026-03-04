@@ -7,7 +7,7 @@ before:
 
 builds:
   - id: seictl
-    main: ./cmd/seictl
+    main: .
     binary: seictl
     env:
       - CGO_ENABLED=0

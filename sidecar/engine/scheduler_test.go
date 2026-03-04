@@ -6,12 +6,27 @@ import (
 	"time"
 )
 
-func TestSchedulerAddCron(t *testing.T) {
-	s := NewScheduler()
-	sched, err := s.Add(TaskUpdatePeers, nil, "*/5 * * * *")
-	if err != nil {
+func TestValidateCronRejectsEmpty(t *testing.T) {
+	if err := ValidateCron(""); err == nil {
+		t.Fatal("expected error when cron is empty")
+	}
+}
+
+func TestValidateCronRejectsInvalid(t *testing.T) {
+	if err := ValidateCron("not a cron"); err == nil {
+		t.Fatal("expected error for invalid cron")
+	}
+}
+
+func TestValidateCronAcceptsValid(t *testing.T) {
+	if err := ValidateCron("*/5 * * * *"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestSchedulerAdd(t *testing.T) {
+	s := NewScheduler()
+	sched := s.Add(TaskUpdatePeers, nil, "*/5 * * * *")
 	if sched.ID == "" {
 		t.Fatal("expected non-empty ID")
 	}
@@ -23,25 +38,9 @@ func TestSchedulerAddCron(t *testing.T) {
 	}
 }
 
-func TestSchedulerAddRejectsEmpty(t *testing.T) {
-	s := NewScheduler()
-	_, err := s.Add(TaskUpdatePeers, nil, "")
-	if err == nil {
-		t.Fatal("expected error when cron is empty")
-	}
-}
-
-func TestSchedulerAddRejectsInvalidCron(t *testing.T) {
-	s := NewScheduler()
-	_, err := s.Add(TaskUpdatePeers, nil, "not a cron")
-	if err == nil {
-		t.Fatal("expected error for invalid cron")
-	}
-}
-
 func TestSchedulerRemove(t *testing.T) {
 	s := NewScheduler()
-	sched, _ := s.Add(TaskUpdatePeers, nil, "*/5 * * * *")
+	sched := s.Add(TaskUpdatePeers, nil, "*/5 * * * *")
 	if !s.Remove(sched.ID) {
 		t.Fatal("expected remove to return true")
 	}
@@ -63,7 +62,7 @@ func TestSchedulerList(t *testing.T) {
 
 func TestSchedulerTickReturnsDueTasks(t *testing.T) {
 	s := NewScheduler()
-	sched, _ := s.Add(TaskUpdatePeers, map[string]any{"k": "v"}, "* * * * *")
+	sched := s.Add(TaskUpdatePeers, map[string]any{"k": "v"}, "* * * * *")
 
 	due := s.Tick(sched.NextRunAt.Add(1 * time.Second))
 	if len(due) != 1 {
@@ -89,7 +88,7 @@ func TestSchedulerTickSkipsFuture(t *testing.T) {
 
 func TestSchedulerConfirmRunAdvancesCron(t *testing.T) {
 	s := NewScheduler()
-	sched, _ := s.Add(TaskUpdatePeers, nil, "*/5 * * * *")
+	sched := s.Add(TaskUpdatePeers, nil, "*/5 * * * *")
 
 	originalNext := *sched.NextRunAt
 	now := originalNext.Add(1 * time.Second)
@@ -122,10 +121,7 @@ func TestSchedulerConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sched, err := s.Add(TaskUpdatePeers, nil, "* * * * *")
-			if err != nil {
-				return
-			}
+			sched := s.Add(TaskUpdatePeers, nil, "* * * * *")
 			s.List()
 			s.Tick(time.Now().Add(1 * time.Hour))
 			s.ConfirmRun(sched.ID, time.Now())

@@ -1,17 +1,16 @@
 BIN       := seictl
-CMD       := ./cmd/seictl
 BUILD_DIR := ./build
 
 .PHONY: build install run test lint fmt clean
 
 build:
-	go build -o $(BUILD_DIR)/$(BIN) $(CMD)
+	go build -o $(BUILD_DIR)/$(BIN) .
 
 install:
-	go install $(CMD)
+	go install .
 
 run:
-	go run $(CMD) $(ARGS)
+	go run . $(ARGS)
 
 test:
 	go test ./...

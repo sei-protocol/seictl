@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -39,20 +38,13 @@ func NewScheduler() *Scheduler {
 	}
 }
 
-// Add creates a new cron schedule.
-func (s *Scheduler) Add(taskType TaskType, params map[string]any, cronExpr string) (*Schedule, error) {
-	if cronExpr == "" {
-		return nil, fmt.Errorf("cron expression is required")
-	}
-	if err := validateCron(cronExpr); err != nil {
-		return nil, err
-	}
-
+// Add creates a new cron schedule. The caller must validate cronExpr before calling.
+func (s *Scheduler) Add(taskType TaskType, params map[string]any, cronExpr string) *Schedule {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now()
-	next, _ := nextCronTime(cronExpr, now) // already validated
+	next, _ := nextCronTime(cronExpr, now)
 
 	sched := &Schedule{
 		ID:        uuid.New().String(),
@@ -65,7 +57,7 @@ func (s *Scheduler) Add(taskType TaskType, params map[string]any, cronExpr strin
 
 	s.schedules[sched.ID] = sched
 	cp := *sched
-	return &cp, nil
+	return &cp
 }
 
 // Remove deletes a schedule. Returns true if found.

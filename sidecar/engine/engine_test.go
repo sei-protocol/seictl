@@ -255,10 +255,7 @@ func TestEvalSchedulesSubmitsDueTasks(t *testing.T) {
 	})
 	defer eng.Close()
 
-	sched, err := eng.AddSchedule(TaskUpdatePeers, nil, "* * * * *")
-	if err != nil {
-		t.Fatalf("add schedule failed: %v", err)
-	}
+	sched := eng.AddSchedule(TaskUpdatePeers, nil, "* * * * *")
 
 	eng.scheduler.mu.Lock()
 	past := time.Now().Add(-1 * time.Minute)
