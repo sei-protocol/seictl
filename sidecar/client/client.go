@@ -1,0 +1,200 @@
+package client
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+const DefaultPort int32 = 7777
+
+// ErrBusy is returned when the sidecar rejects a task because another
+// non-scheduled task is already running (HTTP 409).
+var ErrBusy = errors.New("sidecar: task already running")
+
+// ErrNotFound is returned when the requested task does not exist (HTTP 404).
+var ErrNotFound = errors.New("sidecar: task not found")
+
+// SidecarClient wraps the generated ClientWithResponses with a simpler,
+// error-oriented API.
+type SidecarClient struct {
+	inner *ClientWithResponses
+}
+
+// Option configures optional SidecarClient parameters.
+type Option func(*sidecarOpts)
+
+type sidecarOpts struct {
+	httpClient HttpRequestDoer
+	timeout    time.Duration
+}
+
+// WithHTTPDoer overrides the underlying HTTP transport.
+func WithHTTPDoer(doer HttpRequestDoer) Option {
+	return func(o *sidecarOpts) { o.httpClient = doer }
+}
+
+// WithTimeout sets the HTTP client timeout. Defaults to 10s.
+func WithTimeout(d time.Duration) Option {
+	return func(o *sidecarOpts) { o.timeout = d }
+}
+
+// NewSidecarClient creates a client from an explicit base URL.
+func NewSidecarClient(baseURL string, opts ...Option) (*SidecarClient, error) {
+	o := sidecarOpts{timeout: 10 * time.Second}
+	for _, fn := range opts {
+		fn(&o)
+	}
+
+	var clientOpts []ClientOption
+	if o.httpClient != nil {
+		clientOpts = append(clientOpts, WithHTTPClient(o.httpClient))
+	} else {
+		clientOpts = append(clientOpts, WithHTTPClient(&http.Client{Timeout: o.timeout}))
+	}
+
+	inner, err := NewClientWithResponses(baseURL, clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return &SidecarClient{inner: inner}, nil
+}
+
+// NewSidecarClientFromPodDNS builds a client targeting the sidecar via
+// Kubernetes headless-service DNS:
+//
+//	http://{name}-0.{name}.{namespace}.svc.cluster.local:{port}
+func NewSidecarClientFromPodDNS(name, namespace string, port int32, opts ...Option) (*SidecarClient, error) {
+	if port == 0 {
+		port = DefaultPort
+	}
+	baseURL := fmt.Sprintf("http://%s-0.%s.%s.svc.cluster.local:%d", name, name, namespace, port)
+	return NewSidecarClient(baseURL, opts...)
+}
+
+// Status queries the sidecar's current lifecycle state.
+func (c *SidecarClient) Status(ctx context.Context) (*StatusResponse, error) {
+	resp, err := c.inner.GetStatusWithResponse(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("querying sidecar status: %w", err)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("sidecar status returned %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
+	}
+	if resp.JSON200 == nil {
+		return nil, fmt.Errorf("sidecar status returned 200 but empty body")
+	}
+	return resp.JSON200, nil
+}
+
+// SubmitTask validates and sends a typed task to the sidecar. Returns the
+// assigned task UUID on success, ErrBusy on 409, and a descriptive error
+// otherwise.
+func (c *SidecarClient) SubmitTask(ctx context.Context, task TaskBuilder) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitRawTask(ctx, task.ToTaskRequest())
+}
+
+// SubmitRawTask sends a pre-built TaskRequest without validation. Use
+// SubmitTask for the typed, validated path.
+func (c *SidecarClient) SubmitRawTask(ctx context.Context, task TaskRequest) (uuid.UUID, error) {
+	resp, err := c.inner.SubmitTaskWithResponse(ctx, task)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("submitting task to sidecar: %w", err)
+	}
+	switch resp.StatusCode() {
+	case http.StatusAccepted:
+		if resp.JSON202 != nil {
+			return resp.JSON202.Id, nil
+		}
+		return uuid.Nil, nil
+	case http.StatusCreated:
+		if resp.JSON201 != nil {
+			return resp.JSON201.Id, nil
+		}
+		return uuid.Nil, nil
+	case http.StatusConflict:
+		return uuid.Nil, ErrBusy
+	case http.StatusBadRequest:
+		if resp.JSON400 != nil {
+			return uuid.Nil, fmt.Errorf("sidecar rejected task: %s", resp.JSON400.Error)
+		}
+		return uuid.Nil, fmt.Errorf("sidecar rejected task: %s", bytes.TrimSpace(resp.Body))
+	default:
+		return uuid.Nil, fmt.Errorf("sidecar task submission returned %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
+	}
+}
+
+// ListTasks returns recent task results and active scheduled tasks.
+func (c *SidecarClient) ListTasks(ctx context.Context) ([]TaskResult, error) {
+	resp, err := c.inner.ListTasksWithResponse(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing sidecar tasks: %w", err)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("sidecar list tasks returned %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
+	}
+	if resp.JSON200 == nil {
+		return nil, nil
+	}
+	return *resp.JSON200, nil
+}
+
+// GetTask retrieves a single task result by ID.
+func (c *SidecarClient) GetTask(ctx context.Context, id uuid.UUID) (*TaskResult, error) {
+	resp, err := c.inner.GetTaskWithResponse(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("getting sidecar task %s: %w", id, err)
+	}
+	switch resp.StatusCode() {
+	case http.StatusOK:
+		return resp.JSON200, nil
+	case http.StatusNotFound:
+		return nil, ErrNotFound
+	default:
+		return nil, fmt.Errorf("sidecar get task returned %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
+	}
+}
+
+// DeleteTask removes a task result or cancels a scheduled task.
+func (c *SidecarClient) DeleteTask(ctx context.Context, id uuid.UUID) error {
+	resp, err := c.inner.DeleteTaskWithResponse(ctx, id)
+	if err != nil {
+		return fmt.Errorf("deleting sidecar task %s: %w", id, err)
+	}
+	switch resp.StatusCode() {
+	case http.StatusNoContent:
+		return nil
+	case http.StatusNotFound:
+		return ErrNotFound
+	default:
+		return fmt.Errorf("sidecar delete task returned %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
+	}
+}
+
+// Healthz checks whether the sidecar is healthy.
+// Returns (true, nil) for 200, (false, nil) for 503, and (false, error)
+// for network failures or unexpected status codes.
+func (c *SidecarClient) Healthz(ctx context.Context) (bool, error) {
+	resp, err := c.inner.HealthzWithResponse(ctx)
+	if err != nil {
+		return false, fmt.Errorf("querying sidecar healthz: %w", err)
+	}
+	switch resp.StatusCode() {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusServiceUnavailable:
+		return false, nil
+	default:
+		body, _ := io.ReadAll(bytes.NewReader(resp.Body))
+		return false, fmt.Errorf("sidecar healthz returned %d: %s", resp.StatusCode(), bytes.TrimSpace(body))
+	}
+}
