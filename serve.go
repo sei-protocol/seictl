@@ -53,7 +53,6 @@ var serveCmd = cli.Command{
 		if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("server error: %w", err)
 		}
-		eng.Close()
 		return nil
 	},
 }

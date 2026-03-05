@@ -8,8 +8,11 @@ import (
 	"time"
 )
 
-func newTestEngine(handlers map[TaskType]TaskHandler) *Engine {
-	return NewEngine(context.Background(), handlers)
+func newTestEngine(t *testing.T, handlers map[TaskType]TaskHandler) *Engine {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return NewEngine(ctx, handlers)
 }
 
 func waitForHealthz(t *testing.T, eng *Engine) {
@@ -36,58 +39,59 @@ func waitForStatus(t *testing.T, eng *Engine, want string) {
 	t.Fatalf("timed out waiting for status %q, got %q", want, eng.Status().Status)
 }
 
-func waitForLastTask(t *testing.T, eng *Engine) *TaskResult {
+func waitForResult(t *testing.T, eng *Engine, id string) *TaskResult {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		s := eng.Status()
-		if s.LastTask != nil {
-			return s.LastTask
+		if r := eng.GetResult(id); r != nil && r.CompletedAt != nil {
+			return r
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("timed out waiting for lastTask")
+	t.Fatalf("timed out waiting for result %s", id)
 	return nil
 }
 
 func TestSubmitAccepts(t *testing.T) {
-	eng := newTestEngine(map[TaskType]TaskHandler{
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
 		TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	defer eng.Close()
 
-	if err := eng.Submit(Task{Type: TaskMarkReady}); err != nil {
+	id, err := eng.Submit(Task{Type: TaskMarkReady})
+	if err != nil {
 		t.Fatalf("expected nil, got %v", err)
+	}
+	if id == "" {
+		t.Fatal("expected non-empty ID")
 	}
 }
 
 func TestSubmitRejectsUnknownType(t *testing.T) {
-	eng := newTestEngine(map[TaskType]TaskHandler{})
-	defer eng.Close()
+	eng := newTestEngine(t, map[TaskType]TaskHandler{})
 
-	if err := eng.Submit(Task{Type: "nonexistent"}); err == nil {
+	_, err := eng.Submit(Task{Type: "nonexistent"})
+	if err == nil {
 		t.Fatal("expected error for unknown task type")
 	}
 }
 
 func TestSubmitRejectsBusy(t *testing.T) {
 	blocked := make(chan struct{})
-	eng := NewEngine(context.Background(), map[TaskType]TaskHandler{
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
 			<-blocked
 			return nil
 		},
 	})
-	defer eng.Close()
 
-	if err := eng.Submit(Task{Type: TaskConfigPatch}); err != nil {
+	if _, err := eng.Submit(Task{Type: TaskConfigPatch}); err != nil {
 		t.Fatalf("first submit failed: %v", err)
 	}
-	// Give the worker time to pick up the task so it holds taskMu.
 	time.Sleep(20 * time.Millisecond)
 
-	// Second submit: taskMu is held by the worker → ErrBusy.
-	err := eng.Submit(Task{Type: TaskConfigPatch})
+	_, err := eng.Submit(Task{Type: TaskConfigPatch})
 	if !errors.Is(err, ErrBusy) {
 		t.Fatalf("expected ErrBusy, got %v", err)
 	}
@@ -96,10 +100,9 @@ func TestSubmitRejectsBusy(t *testing.T) {
 }
 
 func TestMarkReadySetsHealthz(t *testing.T) {
-	eng := newTestEngine(map[TaskType]TaskHandler{
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
 		TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	defer eng.Close()
 
 	if eng.Healthz() {
 		t.Fatal("healthz should be false before mark-ready")
@@ -114,17 +117,14 @@ func TestMarkReadySetsHealthz(t *testing.T) {
 }
 
 func TestHealthzMonotonicity(t *testing.T) {
-	eng := newTestEngine(map[TaskType]TaskHandler{
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
 		TaskMarkReady:   func(_ context.Context, _ map[string]any) error { return nil },
 		TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return context.DeadlineExceeded },
 	})
-	defer eng.Close()
 
-	eng.Submit(Task{Type: TaskMarkReady})
+	id, _ := eng.Submit(Task{Type: TaskMarkReady})
 	waitForHealthz(t, eng)
-
-	// Wait for first task to fully release the lock before submitting again.
-	waitForStatus(t, eng, "Ready")
+	waitForResult(t, eng, id)
 
 	eng.Submit(Task{Type: TaskUpdatePeers})
 	waitForStatus(t, eng, "Ready")
@@ -135,36 +135,34 @@ func TestHealthzMonotonicity(t *testing.T) {
 }
 
 func TestStatusReflectsReady(t *testing.T) {
-	eng := newTestEngine(map[TaskType]TaskHandler{
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
 		TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	defer eng.Close()
 
-	status := eng.Status()
-	if status.Status != "Initializing" {
-		t.Fatalf("expected not_ready initially, got %q", status.Status)
+	if eng.Status().Status != "Initializing" {
+		t.Fatalf("expected Initializing initially, got %q", eng.Status().Status)
 	}
 
 	eng.Submit(Task{Type: TaskMarkReady})
 	waitForStatus(t, eng, "Ready")
 
-	status = eng.Status()
-	if status.Status != "Ready" {
-		t.Fatalf("expected ready after mark-ready, got %q", status.Status)
+	if eng.Status().Status != "Ready" {
+		t.Fatalf("expected Ready after mark-ready, got %q", eng.Status().Status)
 	}
 }
 
 func TestStatusReflectsRunning(t *testing.T) {
 	started := make(chan struct{})
 	blocked := make(chan struct{})
-	eng := NewEngine(context.Background(), map[TaskType]TaskHandler{
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
 			close(started)
 			<-blocked
 			return nil
 		},
 	})
-	defer eng.Close()
 
 	eng.Submit(Task{Type: TaskConfigPatch})
 
@@ -174,93 +172,154 @@ func TestStatusReflectsRunning(t *testing.T) {
 		t.Fatal("timed out waiting for task to start")
 	}
 
-	status := eng.Status()
-	if status.Status != "Running" {
-		t.Fatalf("expected running while task executes, got %q", status.Status)
+	if eng.Status().Status != "Running" {
+		t.Fatalf("expected Running while task executes, got %q", eng.Status().Status)
 	}
 
 	close(blocked)
 	waitForStatus(t, eng, "Initializing")
 }
 
-func TestStatusLastTask(t *testing.T) {
-	eng := newTestEngine(map[TaskType]TaskHandler{
+func TestGetResultReturnsCompleted(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	defer eng.Close()
 
-	if s := eng.Status(); s.LastTask != nil {
-		t.Fatalf("expected nil lastTask initially, got %+v", s.LastTask)
+	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
+	result := waitForResult(t, eng, id)
+
+	if result.ID != id {
+		t.Fatalf("expected ID %q, got %q", id, result.ID)
 	}
-
-	eng.Submit(Task{Type: TaskConfigPatch})
-	result := waitForLastTask(t, eng)
-
 	if result.Type != string(TaskConfigPatch) {
-		t.Fatalf("expected lastTask.Type %q, got %q", TaskConfigPatch, result.Type)
+		t.Fatalf("expected type %q, got %q", TaskConfigPatch, result.Type)
 	}
 	if result.Error != "" {
 		t.Fatalf("expected no error, got %q", result.Error)
 	}
 }
 
-func TestLastTaskOnError(t *testing.T) {
+func TestGetResultReturnsFailure(t *testing.T) {
 	handlerErr := errors.New("handler failed")
-	eng := newTestEngine(map[TaskType]TaskHandler{
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return handlerErr },
 	})
-	defer eng.Close()
 
-	eng.Submit(Task{Type: TaskConfigPatch})
-	result := waitForLastTask(t, eng)
+	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
+	result := waitForResult(t, eng, id)
 
-	if result.Type != string(TaskConfigPatch) {
-		t.Fatalf("expected lastTask.Type %q, got %q", TaskConfigPatch, result.Type)
-	}
 	if result.Error != handlerErr.Error() {
 		t.Fatalf("expected error %q, got %q", handlerErr.Error(), result.Error)
 	}
 }
 
-func TestClose(t *testing.T) {
-	var mu sync.Mutex
-	executed := 0
-	eng := NewEngine(context.Background(), map[TaskType]TaskHandler{
+func TestRecentResultsBounded(t *testing.T) {
+	calls := 0
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
-			mu.Lock()
-			executed++
-			mu.Unlock()
+			calls++
 			return nil
 		},
 	})
 
-	eng.Submit(Task{Type: TaskConfigPatch})
-	time.Sleep(50 * time.Millisecond)
-	eng.Close()
-
-	mu.Lock()
-	if executed != 1 {
-		t.Fatalf("expected 1 execution, got %d", executed)
+	for i := 0; i < 7; i++ {
+		id, _ := eng.Submit(Task{Type: TaskConfigPatch})
+		waitForResult(t, eng, id)
 	}
-	mu.Unlock()
+
+	results := eng.RecentResults()
+	if len(results) > maxResults {
+		t.Fatalf("expected at most %d results, got %d", maxResults, len(results))
+	}
 }
 
-func TestEvalSchedulesSubmitsDueTasks(t *testing.T) {
+func TestRemoveResult(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
+	waitForResult(t, eng, id)
+
+	if !eng.RemoveResult(id) {
+		t.Fatal("expected remove to return true")
+	}
+	if eng.RemoveResult(id) {
+		t.Fatal("second remove should return false")
+	}
+	if eng.GetResult(id) != nil {
+		t.Fatal("expected nil after removal")
+	}
+}
+
+func TestSubmitScheduled(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	id, err := eng.SubmitScheduled(Task{Type: TaskUpdatePeers}, Schedule{Cron: "*/5 * * * *"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id == "" {
+		t.Fatal("expected non-empty ID")
+	}
+
+	result := eng.GetResult(id)
+	if result == nil {
+		t.Fatal("expected result for scheduled task")
+	}
+	if result.Schedule == nil || result.Schedule.Cron != "*/5 * * * *" {
+		t.Fatalf("expected cron expression in schedule, got %+v", result.Schedule)
+	}
+	if result.NextRunAt == nil {
+		t.Fatal("expected NextRunAt to be set")
+	}
+}
+
+func TestSubmitScheduledEmptyCron(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	_, err := eng.SubmitScheduled(Task{Type: TaskUpdatePeers}, Schedule{})
+	if err == nil {
+		t.Fatal("expected error for empty schedule")
+	}
+}
+
+func TestRemoveScheduledTask(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	id, _ := eng.SubmitScheduled(Task{Type: TaskUpdatePeers}, Schedule{Cron: "*/5 * * * *"})
+
+	if !eng.RemoveResult(id) {
+		t.Fatal("expected remove to return true")
+	}
+	if eng.GetResult(id) != nil {
+		t.Fatal("expected nil after removal")
+	}
+}
+
+func TestEvalSchedulesFiresDueTasks(t *testing.T) {
 	executed := make(chan struct{}, 1)
-	eng := NewEngine(context.Background(), map[TaskType]TaskHandler{
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskUpdatePeers: func(_ context.Context, _ map[string]any) error {
 			executed <- struct{}{}
 			return nil
 		},
 	})
-	defer eng.Close()
 
-	sched := eng.AddSchedule(TaskUpdatePeers, nil, "* * * * *")
+	id, _ := eng.SubmitScheduled(Task{Type: TaskUpdatePeers}, Schedule{Cron: "* * * * *"})
 
-	eng.scheduler.mu.Lock()
+	eng.mu.Lock()
 	past := time.Now().Add(-1 * time.Minute)
-	eng.scheduler.schedules[sched.ID].NextRunAt = &past
-	eng.scheduler.mu.Unlock()
+	eng.scheduled[id].NextRunAt = &past
+	eng.mu.Unlock()
 
 	eng.EvalSchedules()
 
@@ -271,32 +330,26 @@ func TestEvalSchedulesSubmitsDueTasks(t *testing.T) {
 	}
 }
 
-func TestScheduledTaskBypassesChannel(t *testing.T) {
-	blocked := make(chan struct{})
-	scheduled := make(chan struct{}, 1)
-
-	eng := NewEngine(context.Background(), map[TaskType]TaskHandler{
+func TestContextCancellationStopsEngine(t *testing.T) {
+	var mu sync.Mutex
+	executed := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
-			<-blocked
-			return nil
-		},
-		TaskUpdatePeers: func(_ context.Context, _ map[string]any) error {
-			scheduled <- struct{}{}
+			mu.Lock()
+			executed++
+			mu.Unlock()
 			return nil
 		},
 	})
-	defer eng.Close()
 
 	eng.Submit(Task{Type: TaskConfigPatch})
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	cancel()
 
-	eng.SubmitScheduled(Task{Type: TaskUpdatePeers})
-
-	select {
-	case <-scheduled:
-	case <-time.After(2 * time.Second):
-		t.Fatal("scheduled task should bypass the blocked channel")
+	mu.Lock()
+	if executed != 1 {
+		t.Fatalf("expected 1 execution, got %d", executed)
 	}
-
-	close(blocked)
+	mu.Unlock()
 }
