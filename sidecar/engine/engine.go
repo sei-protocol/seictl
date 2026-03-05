@@ -12,16 +12,17 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxResults = 5
+const maxResults = 10
 
 // ErrBusy is returned by Submit when a task is already running.
 var ErrBusy = errors.New("a task is already running")
 
 // taskEnvelope wraps a task with its resolved handler for the worker loop.
 type taskEnvelope struct {
-	id      string
-	task    Task
-	handler TaskHandler
+	id          string
+	task        Task
+	handler     TaskHandler
+	submittedAt time.Time
 }
 
 // Engine is the task executor. One-shot tasks are serialized through a channel
@@ -54,7 +55,7 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler) *Engine {
 
 // loop is the serial worker that processes one-shot tasks one at a time.
 func (e *Engine) loop() {
-	for {
+	for e.ctx.Err() == nil {
 		select {
 		case <-e.ctx.Done():
 			return
@@ -67,7 +68,7 @@ func (e *Engine) loop() {
 				ID:          env.id,
 				Type:        string(env.task.Type),
 				Params:      env.task.Params,
-				SubmittedAt: now,
+				SubmittedAt: env.submittedAt,
 				CompletedAt: &now,
 			}
 			if err != nil {
@@ -97,7 +98,7 @@ func (e *Engine) Submit(task Task) (string, error) {
 		return "", ErrBusy
 	}
 	id := uuid.New().String()
-	e.taskCh <- taskEnvelope{id: id, task: task, handler: handler}
+	e.taskCh <- taskEnvelope{id: id, task: task, handler: handler, submittedAt: time.Now()}
 	return id, nil
 }
 
@@ -155,6 +156,17 @@ func (e *Engine) EvalSchedules() {
 			e.mu.Unlock()
 			continue
 		}
+
+		// Advance NextRunAt before launching so a concurrent EvalSchedules
+		// call won't fire the same task again while it's still running.
+		e.mu.Lock()
+		if tr.Schedule != nil && tr.Schedule.Cron != "" {
+			if next, cronErr := nextCronTime(tr.Schedule.Cron, now); cronErr == nil {
+				tr.NextRunAt = &next
+			}
+		}
+		e.mu.Unlock()
+
 		go func(tr *TaskResult, h TaskHandler) {
 			err := e.execute(TaskType(tr.Type), h, tr.Params)
 
@@ -164,16 +176,11 @@ func (e *Engine) EvalSchedules() {
 			if !ok {
 				return
 			}
-			t := now
+			t := time.Now()
 			s.CompletedAt = &t
 			s.Error = ""
 			if err != nil {
 				s.Error = err.Error()
-			}
-			if s.Schedule != nil && s.Schedule.Cron != "" {
-				if next, cronErr := nextCronTime(s.Schedule.Cron, now); cronErr == nil {
-					s.NextRunAt = &next
-				}
 			}
 		}(tr, handler)
 	}
