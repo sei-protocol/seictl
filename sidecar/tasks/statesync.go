@@ -6,16 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/sei-protocol/seictl/internal/patch"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
 const (
-	stateSyncFile       = ".sei-sidecar-statesync.json"
 	stateSyncMarkerFile = ".sei-sidecar-statesync-done"
 	trustHeightOffset   = 2000
 	rpcTimeout          = 10 * time.Second
@@ -23,9 +22,9 @@ const (
 
 // StateSyncConfig holds the trust point and RPC servers for Tendermint state sync.
 type StateSyncConfig struct {
-	TrustHeight int64  `json:"trustHeight"`
-	TrustHash   string `json:"trustHash"`
-	RpcServers  string `json:"rpcServers"`
+	TrustHeight int64
+	TrustHash   string
+	RpcServers  string
 }
 
 // HTTPDoer abstracts HTTP requests for testability.
@@ -54,19 +53,19 @@ func (s *StateSyncConfigurer) Handler() engine.TaskHandler {
 	}
 }
 
-// Configure reads the peers file, queries a peer for a trust point, and writes
-// the state sync config file.
+// Configure reads persistent-peers from config.toml, queries a peer for a
+// trust point, and writes the state sync settings back to config.toml.
 func (s *StateSyncConfigurer) Configure(ctx context.Context) error {
 	if markerExists(s.homeDir, stateSyncMarkerFile) {
 		return nil
 	}
 
-	peers, err := ReadPeersFile(s.homeDir)
+	peers, err := readPeersFromConfig(s.homeDir)
 	if err != nil {
-		return fmt.Errorf("configure-state-sync: reading peers file: %w", err)
+		return fmt.Errorf("configure-state-sync: %w", err)
 	}
 	if len(peers) == 0 {
-		return fmt.Errorf("configure-state-sync: no peers available")
+		return fmt.Errorf("configure-state-sync: no peers in config.toml")
 	}
 
 	rpcHosts := extractRPCHosts(peers, 2)
@@ -89,6 +88,8 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context) error {
 		return fmt.Errorf("configure-state-sync: querying block hash at height %d: %w", trustHeight, err)
 	}
 
+	// Tendermint requires at least two comma-separated RPC servers for state sync.
+	// When only one peer is available, duplicate it to satisfy the requirement.
 	for len(rpcHosts) < 2 {
 		rpcHosts = append(rpcHosts, rpcHosts[0])
 	}
@@ -103,14 +104,8 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context) error {
 		RpcServers:  strings.Join(rpcServers, ","),
 	}
 
-	data, err := json.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("configure-state-sync: marshaling config: %w", err)
-	}
-
-	path := filepath.Join(s.homeDir, stateSyncFile)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("configure-state-sync: writing %s: %w", path, err)
+	if err := writeStateSyncToConfig(s.homeDir, cfg); err != nil {
+		return fmt.Errorf("configure-state-sync: writing config.toml: %w", err)
 	}
 
 	return writeMarker(s.homeDir, stateSyncMarkerFile)
@@ -138,12 +133,6 @@ func extractRPCHosts(peers []string, maxHosts int) []string {
 		}
 	}
 	return hosts
-}
-
-type tendermintBlockResponse struct {
-	BlockID struct {
-		Hash string `json:"hash"`
-	} `json:"block_id"`
 }
 
 func (s *StateSyncConfigurer) queryLatestHeight(ctx context.Context, host string) (int64, error) {
@@ -202,15 +191,44 @@ func (s *StateSyncConfigurer) doGet(ctx context.Context, url string) ([]byte, er
 	return body, nil
 }
 
-// ReadStateSyncFile reads the state sync config written by configure-state-sync.
-func ReadStateSyncFile(homeDir string) (*StateSyncConfig, error) {
-	data, err := os.ReadFile(filepath.Join(homeDir, stateSyncFile))
+func writeStateSyncToConfig(homeDir string, cfg StateSyncConfig) error {
+	configPath := filepath.Join(homeDir, "config", "config.toml")
+	ssPatch := map[string]any{
+		"statesync": map[string]any{
+			"enable":       true,
+			"trust-height": cfg.TrustHeight,
+			"trust-hash":   cfg.TrustHash,
+			"rpc-servers":  cfg.RpcServers,
+		},
+	}
+	return mergeAndWrite(configPath, ssPatch)
+}
+
+// readPeersFromConfig reads the persistent-peers value from config.toml and
+// splits it into individual peer strings.
+func readPeersFromConfig(homeDir string) ([]string, error) {
+	configPath := filepath.Join(homeDir, "config", "config.toml")
+	doc, err := patch.ReadTOML(configPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading config.toml: %w", err)
 	}
-	var cfg StateSyncConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing state sync file: %w", err)
+
+	p2p, ok := doc["p2p"].(map[string]any)
+	if !ok {
+		return nil, nil
 	}
-	return &cfg, nil
+
+	raw, _ := p2p["persistent-peers"].(string)
+	if raw == "" {
+		return nil, nil
+	}
+
+	var peers []string
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			peers = append(peers, p)
+		}
+	}
+	return peers, nil
 }

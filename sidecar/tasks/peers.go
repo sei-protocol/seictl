@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -17,7 +17,7 @@ import (
 	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
-const peersFile = ".sei-sidecar-peers.json"
+const p2pPort = "26656"
 
 // PeerSource discovers peers from a specific source type.
 type PeerSource interface {
@@ -63,16 +63,6 @@ type PeerDiscoverer struct {
 	homeDir          string
 	ec2ClientFactory EC2ClientFactory
 	queryNodeID      NodeIDQuerier
-}
-
-// tendermintStatusResponse is the minimal shape of the /status JSON response.
-type tendermintStatusResponse struct {
-	NodeInfo struct {
-		ID string `json:"id"`
-	} `json:"node_info"`
-	SyncInfo struct {
-		LatestBlockHeight string `json:"latest_block_height"`
-	} `json:"sync_info"`
 }
 
 // Discover queries EC2 for running instances matching the configured tags
@@ -158,25 +148,19 @@ func NewPeerDiscoverer(homeDir string, ec2Factory EC2ClientFactory, nodeIDQuerie
 // Handler returns an engine.TaskHandler that parses peer source params and
 // dispatches to the appropriate PeerSource implementations.
 //
-// Supports two param formats:
-//   - New: {"sources": [{"type": "ec2Tags", "region": "...", "tags": {...}}, ...]}
-//   - Legacy: {"region": "...", "chainId": "..."} (backward compat)
+// Expected params format:
+//
+//	{"sources": [{"type": "ec2Tags", "region": "...", "tags": {...}}, ...]}
 func (d *PeerDiscoverer) Handler() engine.TaskHandler {
 	return func(ctx context.Context, params map[string]any) error {
-		var sources []PeerSource
+		rawSources, ok := params["sources"]
+		if !ok {
+			return fmt.Errorf("discover-peers: missing required param 'sources'")
+		}
 
-		if rawSources, ok := params["sources"]; ok {
-			parsed, err := d.parseSources(rawSources)
-			if err != nil {
-				return fmt.Errorf("discover-peers: %w", err)
-			}
-			sources = parsed
-		} else {
-			legacy, err := d.parseLegacyParams(params)
-			if err != nil {
-				return err
-			}
-			sources = []PeerSource{legacy}
+		sources, err := d.parseSources(rawSources)
+		if err != nil {
+			return fmt.Errorf("discover-peers: %w", err)
 		}
 
 		peers, err := discoverFromSources(ctx, sources)
@@ -184,7 +168,7 @@ func (d *PeerDiscoverer) Handler() engine.TaskHandler {
 			return err
 		}
 
-		return writePeersFile(d.homeDir, peers)
+		return writePeersToConfig(d.homeDir, peers)
 	}
 }
 
@@ -296,44 +280,6 @@ func parseStaticSource(m map[string]any) (*StaticSource, error) {
 	return &StaticSource{Addresses: addrs}, nil
 }
 
-// parseLegacyParams handles the old {region, chainId} param format for backward compat.
-func (d *PeerDiscoverer) parseLegacyParams(params map[string]any) (*EC2TagsSource, error) {
-	region, _ := params["region"].(string)
-	chainID, _ := params["chainId"].(string)
-
-	if region == "" {
-		return nil, fmt.Errorf("discover-peers: missing required param 'region'")
-	}
-	if chainID == "" {
-		return nil, fmt.Errorf("discover-peers: missing required param 'chainId'")
-	}
-
-	return &EC2TagsSource{
-		Region: region,
-		Tags: map[string]string{
-			"ChainIdentifier": chainID,
-			"Component":       "snapshotter",
-		},
-		EC2Factory:  d.ec2ClientFactory,
-		QueryNodeID: d.queryNodeID,
-	}, nil
-}
-
-// Discover queries EC2 for running instances tagged with the given chain ID.
-// Deprecated: Use EC2TagsSource directly or the sources-based Handler.
-func (d *PeerDiscoverer) Discover(ctx context.Context, region, chainID string) ([]string, error) {
-	src := &EC2TagsSource{
-		Region: region,
-		Tags: map[string]string{
-			"ChainIdentifier": chainID,
-			"Component":       "snapshotter",
-		},
-		EC2Factory:  d.ec2ClientFactory,
-		QueryNodeID: d.queryNodeID,
-	}
-	return src.Discover(ctx)
-}
-
 func buildPeerAddress(ctx context.Context, querier NodeIDQuerier, instance ec2types.Instance) (string, error) {
 	ip := instanceIP(instance)
 	if ip == "" {
@@ -345,9 +291,11 @@ func buildPeerAddress(ctx context.Context, querier NodeIDQuerier, instance ec2ty
 		return "", err
 	}
 
-	return fmt.Sprintf("%s@%s:26656", nodeID, ip), nil
+	return fmt.Sprintf("%s@%s:%s", nodeID, ip, p2pPort), nil
 }
 
+// instanceIP returns the public IP if available, falling back to private.
+// Public IPs are needed because peers may span VPCs or run outside AWS.
 func instanceIP(instance ec2types.Instance) string {
 	if instance.PublicIpAddress != nil && *instance.PublicIpAddress != "" {
 		return *instance.PublicIpAddress
@@ -392,29 +340,14 @@ func defaultQueryNodeID(ctx context.Context, ip string) (string, error) {
 	return status.NodeInfo.ID, nil
 }
 
-func writePeersFile(homeDir string, peers []string) error {
-	data, err := json.Marshal(peers)
-	if err != nil {
-		return fmt.Errorf("marshaling peers: %w", err)
+func writePeersToConfig(homeDir string, peers []string) error {
+	configPath := filepath.Join(homeDir, "config", "config.toml")
+	peersPatch := map[string]any{
+		"p2p": map[string]any{
+			"persistent-peers": strings.Join(peers, ","),
+		},
 	}
-	path := filepath.Join(homeDir, peersFile)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("writing peers file: %w", err)
-	}
-	return nil
-}
-
-// ReadPeersFile reads the peer list written by discover-peers.
-func ReadPeersFile(homeDir string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Join(homeDir, peersFile))
-	if err != nil {
-		return nil, err
-	}
-	var peers []string
-	if err := json.Unmarshal(data, &peers); err != nil {
-		return nil, fmt.Errorf("parsing peers file: %w", err)
-	}
-	return peers, nil
+	return mergeAndWrite(configPath, peersPatch)
 }
 
 // toStringMap converts an any to map[string]string.

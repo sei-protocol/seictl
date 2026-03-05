@@ -24,7 +24,6 @@ type S3GetObjectAPI interface {
 }
 
 // S3ClientFactory builds an S3 client for a given region.
-// Replaceable for testing.
 type S3ClientFactory func(ctx context.Context, region string) (S3GetObjectAPI, error)
 
 // DefaultS3ClientFactory creates a real S3 client using IRSA credentials.
@@ -99,7 +98,11 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 	}
 	defer output.Body.Close()
 
-	if err := extractTarStream(ctx, output.Body, r.homeDir); err != nil {
+	snapshotDir := filepath.Join(r.homeDir, "data", "snapshots")
+	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
+		return fmt.Errorf("creating snapshot directory: %w", err)
+	}
+	if err := extractTarStream(ctx, output.Body, snapshotDir); err != nil {
 		return fmt.Errorf("extracting snapshot: %w", err)
 	}
 

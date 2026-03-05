@@ -2,7 +2,6 @@ package tasks
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,13 +30,21 @@ func jsonResponse(body string) *http.Response {
 	}
 }
 
+func setupPeersInConfig(t *testing.T, homeDir string, peers []string) {
+	t.Helper()
+	configDir := filepath.Join(homeDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+	content := fmt.Sprintf("[p2p]\npersistent-peers = %q\n", strings.Join(peers, ","))
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("writing config.toml: %v", err)
+	}
+}
+
 func TestStateSyncConfigurer_Success(t *testing.T) {
 	homeDir := t.TempDir()
-
-	peers := []string{"nodeId1@1.2.3.4:26656", "nodeId2@5.6.7.8:26656"}
-	if err := writePeersFile(homeDir, peers); err != nil {
-		t.Fatalf("writing peers file: %v", err)
-	}
+	setupPeersInConfig(t, homeDir, []string{"nodeId1@1.2.3.4:26656", "nodeId2@5.6.7.8:26656"})
 
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
@@ -55,23 +62,23 @@ func TestStateSyncConfigurer_Success(t *testing.T) {
 		t.Fatalf("Configure failed: %v", err)
 	}
 
-	cfg, err := ReadStateSyncFile(homeDir)
-	if err != nil {
-		t.Fatalf("reading state sync file: %v", err)
-	}
-
-	if cfg.TrustHeight != 8000 {
-		t.Errorf("expected trustHeight 8000, got %d", cfg.TrustHeight)
-	}
-	if cfg.TrustHash != "ABCDEF123456" {
-		t.Errorf("expected trustHash ABCDEF123456, got %q", cfg.TrustHash)
-	}
-	if cfg.RpcServers != "1.2.3.4:26657,5.6.7.8:26657" {
-		t.Errorf("expected rpcServers '1.2.3.4:26657,5.6.7.8:26657', got %q", cfg.RpcServers)
-	}
-
 	if !markerExists(homeDir, stateSyncMarkerFile) {
 		t.Fatal("marker file should exist after successful configure")
+	}
+
+	configDoc := readTOML(t, filepath.Join(homeDir, "config", "config.toml"))
+	ss := configDoc["statesync"].(map[string]any)
+	if ss["enable"] != true {
+		t.Error("expected statesync.enable = true in config.toml")
+	}
+	if ss["trust-height"] != int64(8000) {
+		t.Errorf("expected statesync.trust-height = 8000, got %v", ss["trust-height"])
+	}
+	if ss["trust-hash"] != "ABCDEF123456" {
+		t.Errorf("expected trust-hash = ABCDEF123456, got %v", ss["trust-hash"])
+	}
+	if ss["rpc-servers"] != "1.2.3.4:26657,5.6.7.8:26657" {
+		t.Errorf("expected rpc-servers, got %v", ss["rpc-servers"])
 	}
 }
 
@@ -82,41 +89,26 @@ func TestStateSyncConfigurer_MarkerSkips(t *testing.T) {
 		t.Fatalf("writing marker: %v", err)
 	}
 
-	mock := &mockHTTPDoer{
-		responses: map[string]*http.Response{},
-	}
-
-	configurer := NewStateSyncConfigurer(homeDir, mock)
+	configurer := NewStateSyncConfigurer(homeDir, &mockHTTPDoer{})
 	if err := configurer.Configure(context.Background()); err != nil {
 		t.Fatalf("expected nil error when marker exists, got: %v", err)
 	}
-
-	// State sync file should NOT exist since we skipped.
-	if _, err := os.Stat(filepath.Join(homeDir, stateSyncFile)); !os.IsNotExist(err) {
-		t.Fatal("state sync file should not exist when marker already present")
-	}
 }
 
-func TestStateSyncConfigurer_NoPeersFile(t *testing.T) {
+func TestStateSyncConfigurer_NoPeers(t *testing.T) {
 	homeDir := t.TempDir()
+	setupPeersInConfig(t, homeDir, nil)
 
 	configurer := NewStateSyncConfigurer(homeDir, &mockHTTPDoer{})
 	err := configurer.Configure(context.Background())
 	if err == nil {
-		t.Fatal("expected error when peers file is missing")
-	}
-	if !strings.Contains(err.Error(), "reading peers file") {
-		t.Fatalf("unexpected error message: %v", err)
+		t.Fatal("expected error when no peers in config")
 	}
 }
 
 func TestStateSyncConfigurer_LowHeight(t *testing.T) {
 	homeDir := t.TempDir()
-
-	peers := []string{"nodeId1@10.0.0.1:26656"}
-	if err := writePeersFile(homeDir, peers); err != nil {
-		t.Fatalf("writing peers file: %v", err)
-	}
+	setupPeersInConfig(t, homeDir, []string{"nodeId1@10.0.0.1:26656"})
 
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
@@ -134,16 +126,17 @@ func TestStateSyncConfigurer_LowHeight(t *testing.T) {
 		t.Fatalf("Configure failed: %v", err)
 	}
 
-	cfg, err := ReadStateSyncFile(homeDir)
-	if err != nil {
-		t.Fatalf("reading state sync file: %v", err)
+	configDoc := readTOML(t, filepath.Join(homeDir, "config", "config.toml"))
+	ss := configDoc["statesync"].(map[string]any)
+	if ss["trust-height"] != int64(1) {
+		t.Errorf("expected trustHeight clamped to 1, got %v", ss["trust-height"])
 	}
-
-	if cfg.TrustHeight != 1 {
-		t.Errorf("expected trustHeight clamped to 1, got %d", cfg.TrustHeight)
+	if ss["trust-hash"] != "GENESIS_HASH" {
+		t.Errorf("expected trustHash GENESIS_HASH, got %v", ss["trust-hash"])
 	}
-	if cfg.TrustHash != "GENESIS_HASH" {
-		t.Errorf("expected trustHash GENESIS_HASH, got %q", cfg.TrustHash)
+	// Single peer should be duplicated to satisfy Tendermint requirement.
+	if ss["rpc-servers"] != "10.0.0.1:26657,10.0.0.1:26657" {
+		t.Errorf("expected duplicated rpc-servers, got %v", ss["rpc-servers"])
 	}
 }
 
@@ -209,11 +202,7 @@ func TestExtractRPCHosts(t *testing.T) {
 
 func TestStateSyncConfigurer_Handler(t *testing.T) {
 	homeDir := t.TempDir()
-
-	peers := []string{"nodeId1@1.2.3.4:26656"}
-	if err := writePeersFile(homeDir, peers); err != nil {
-		t.Fatalf("writing peers file: %v", err)
-	}
+	setupPeersInConfig(t, homeDir, []string{"nodeId1@1.2.3.4:26656"})
 
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
@@ -233,15 +222,49 @@ func TestStateSyncConfigurer_Handler(t *testing.T) {
 		t.Fatalf("Handler failed: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(homeDir, stateSyncFile))
+	configDoc := readTOML(t, filepath.Join(homeDir, "config", "config.toml"))
+	ss := configDoc["statesync"].(map[string]any)
+	if ss["trust-height"] != int64(3000) {
+		t.Errorf("expected trustHeight 3000, got %v", ss["trust-height"])
+	}
+}
+
+func TestReadPeersFromConfig(t *testing.T) {
+	homeDir := t.TempDir()
+	setupPeersInConfig(t, homeDir, []string{"abc@1.2.3.4:26656", "def@5.6.7.8:26656"})
+
+	peers, err := readPeersFromConfig(homeDir)
 	if err != nil {
-		t.Fatalf("reading state sync file: %v", err)
+		t.Fatalf("readPeersFromConfig failed: %v", err)
 	}
-	var cfg StateSyncConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("parsing state sync file: %v", err)
+	if len(peers) != 2 {
+		t.Fatalf("expected 2 peers, got %d", len(peers))
 	}
-	if cfg.TrustHeight != 3000 {
-		t.Errorf("expected trustHeight 3000, got %d", cfg.TrustHeight)
+	if peers[0] != "abc@1.2.3.4:26656" {
+		t.Errorf("peer[0] = %q, want abc@1.2.3.4:26656", peers[0])
+	}
+}
+
+func TestReadPeersFromConfig_Empty(t *testing.T) {
+	homeDir := t.TempDir()
+	setupPeersInConfig(t, homeDir, nil)
+
+	peers, err := readPeersFromConfig(homeDir)
+	if err != nil {
+		t.Fatalf("readPeersFromConfig failed: %v", err)
+	}
+	if len(peers) != 0 {
+		t.Fatalf("expected 0 peers, got %d", len(peers))
+	}
+}
+
+func TestReadPeersFromConfig_NoConfigFile(t *testing.T) {
+	homeDir := t.TempDir()
+	peers, err := readPeersFromConfig(homeDir)
+	if err != nil {
+		t.Fatalf("readPeersFromConfig failed: %v", err)
+	}
+	if len(peers) != 0 {
+		t.Fatalf("expected 0 peers for missing config, got %d", len(peers))
 	}
 }

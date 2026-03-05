@@ -119,14 +119,14 @@ func TestMarkReadySetsHealthz(t *testing.T) {
 func TestHealthzMonotonicity(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
 		TaskMarkReady:   func(_ context.Context, _ map[string]any) error { return nil },
-		TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return context.DeadlineExceeded },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return context.DeadlineExceeded },
 	})
 
 	id, _ := eng.Submit(Task{Type: TaskMarkReady})
 	waitForHealthz(t, eng)
 	waitForResult(t, eng, id)
 
-	eng.Submit(Task{Type: TaskUpdatePeers})
+	eng.Submit(Task{Type: TaskConfigPatch})
 	waitForStatus(t, eng, "Ready")
 
 	if !eng.Healthz() {
@@ -254,10 +254,10 @@ func TestRemoveResult(t *testing.T) {
 
 func TestSubmitScheduled(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 
-	id, err := eng.SubmitScheduled(Task{Type: TaskUpdatePeers}, Schedule{Cron: "*/5 * * * *"})
+	id, err := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, Schedule{Cron: "*/5 * * * *"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -279,10 +279,10 @@ func TestSubmitScheduled(t *testing.T) {
 
 func TestSubmitScheduledEmptyCron(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 
-	_, err := eng.SubmitScheduled(Task{Type: TaskUpdatePeers}, Schedule{})
+	_, err := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, Schedule{})
 	if err == nil {
 		t.Fatal("expected error for empty schedule")
 	}
@@ -290,10 +290,10 @@ func TestSubmitScheduledEmptyCron(t *testing.T) {
 
 func TestRemoveScheduledTask(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 
-	id, _ := eng.SubmitScheduled(Task{Type: TaskUpdatePeers}, Schedule{Cron: "*/5 * * * *"})
+	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, Schedule{Cron: "*/5 * * * *"})
 
 	if !eng.RemoveResult(id) {
 		t.Fatal("expected remove to return true")
@@ -308,13 +308,13 @@ func TestEvalSchedulesFiresDueTasks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
-		TaskUpdatePeers: func(_ context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
 			executed <- struct{}{}
 			return nil
 		},
 	})
 
-	id, _ := eng.SubmitScheduled(Task{Type: TaskUpdatePeers}, Schedule{Cron: "* * * * *"})
+	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, Schedule{Cron: "* * * * *"})
 
 	eng.mu.Lock()
 	past := time.Now().Add(-1 * time.Minute)

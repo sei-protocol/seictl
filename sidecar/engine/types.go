@@ -13,7 +13,6 @@ const (
 	TaskDiscoverPeers      TaskType = "discover-peers"
 	TaskConfigPatch        TaskType = "config-patch"
 	TaskMarkReady          TaskType = "mark-ready"
-	TaskUpdatePeers        TaskType = "update-peers"
 	TaskConfigureGenesis   TaskType = "configure-genesis"
 	TaskConfigureStateSync TaskType = "configure-state-sync"
 	TaskSnapshotUpload     TaskType = "snapshot-upload"

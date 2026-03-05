@@ -93,21 +93,17 @@ func genDiscoverPeersTask() gopter.Gen {
 
 func genConfigPatchTask() gopter.Gen {
 	return gopter.CombineGens(
-		gen.SliceOfN(3, genNonEmptyString()),
-		gen.AlphaString(),
-		gen.Int64Range(1, 10000),
-		gen.Int32Range(1, 100),
+		genNonEmptyString(),
+		genNonEmptyString(),
 	).Map(func(v []interface{}) ConfigPatchTask {
-		peers := v[0].([]string)
-		nodeMode := v[1].(string)
-		interval := v[2].(int64)
-		keepRecent := v[3].(int32)
 		return ConfigPatchTask{
-			Peers:    peers,
-			NodeMode: nodeMode,
-			SnapshotGeneration: &SnapshotGenerationPatch{
-				Interval:   interval,
-				KeepRecent: keepRecent,
+			Files: map[string]map[string]any{
+				"config.toml": {
+					"p2p": map[string]any{"persistent-peers": v[0].(string)},
+				},
+				"app.toml": {
+					"pruning": v[1].(string),
+				},
 			},
 		}
 	})
@@ -240,32 +236,18 @@ func TestConfigPatchRoundTrip(t *testing.T) {
 			if req.Type != TaskTypeConfigPatch {
 				return false
 			}
-			rebuilt := ConfigPatchTaskFromParams(*req.Params)
-			if len(rebuilt.Peers) != len(task.Peers) {
+			if req.Params == nil {
 				return false
 			}
-			for i, p := range task.Peers {
-				if rebuilt.Peers[i] != p {
-					return false
-				}
-			}
-			if rebuilt.NodeMode != task.NodeMode {
+			files, ok := (*req.Params)["files"]
+			if !ok {
 				return false
 			}
-			if task.SnapshotGeneration != nil {
-				if rebuilt.SnapshotGeneration == nil {
-					return false
-				}
-				if rebuilt.SnapshotGeneration.Interval != task.SnapshotGeneration.Interval {
-					return false
-				}
-				if rebuilt.SnapshotGeneration.KeepRecent != task.SnapshotGeneration.KeepRecent {
-					return false
-				}
-			} else if rebuilt.SnapshotGeneration != nil {
+			filesMap, ok := files.(map[string]interface{})
+			if !ok {
 				return false
 			}
-			return true
+			return len(filesMap) == len(task.Files)
 		},
 		genConfigPatchTask(),
 	))
@@ -391,10 +373,10 @@ func TestDiscoverPeersValidation(t *testing.T) {
 	}
 }
 
-func TestConfigPatchValidationRejectsEmpty(t *testing.T) {
+func TestConfigPatchValidationAcceptsEmpty(t *testing.T) {
 	task := ConfigPatchTask{}
-	if err := task.Validate(); err == nil {
-		t.Error("expected validation error for fully empty ConfigPatchTask, got nil")
+	if err := task.Validate(); err != nil {
+		t.Errorf("expected nil error for empty ConfigPatchTask, got %v", err)
 	}
 }
 

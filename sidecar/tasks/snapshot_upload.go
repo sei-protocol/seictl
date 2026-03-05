@@ -127,8 +127,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context, cfg SnapshotUploadConfig)
 		return fmt.Errorf("uploading %s: %w", latestKey, err)
 	}
 
-	u.writeUploadState(uploadState{LastUploadedHeight: height})
-	return nil
+	return u.writeUploadState(uploadState{LastUploadedHeight: height})
 }
 
 // streamUpload pipes a tar.gz archive directly into the transfermanager,
@@ -320,7 +319,13 @@ func (u *SnapshotUploader) readUploadState() uploadState {
 	return state
 }
 
-func (u *SnapshotUploader) writeUploadState(state uploadState) {
-	data, _ := json.Marshal(state)
-	_ = os.WriteFile(filepath.Join(u.homeDir, uploadStateFile), data, 0o644)
+func (u *SnapshotUploader) writeUploadState(state uploadState) error {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("marshaling upload state: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(u.homeDir, uploadStateFile), data, 0o644); err != nil {
+		return fmt.Errorf("writing upload state: %w", err)
+	}
+	return nil
 }

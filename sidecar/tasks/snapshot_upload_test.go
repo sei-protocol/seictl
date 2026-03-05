@@ -65,57 +65,31 @@ func setupSnapshotDirs(t *testing.T, homeDir string, heights []int64) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: pickUploadCandidate
-// ---------------------------------------------------------------------------
-
-func TestPickUploadCandidate_TwoSnapshots_ReturnsSecondToLatest(t *testing.T) {
-	homeDir := t.TempDir()
-	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
-
-	h, err := pickUploadCandidate(filepath.Join(homeDir, "data", "snapshots"))
-	if err != nil {
-		t.Fatalf("pickUploadCandidate() error = %v", err)
+func TestPickUploadCandidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		heights []int64
+		want    int64
+	}{
+		{"two snapshots returns second to latest", []int64{1000, 2000}, 1000},
+		{"three snapshots returns second to latest", []int64{1000, 3000, 2000}, 2000},
+		{"single snapshot returns zero", []int64{1000}, 0},
+		{"no snapshots returns zero", nil, 0},
 	}
-	if h != 1000 {
-		t.Errorf("height = %d, want 1000", h)
-	}
-}
-
-func TestPickUploadCandidate_ThreeSnapshots_ReturnsSecondToLatest(t *testing.T) {
-	homeDir := t.TempDir()
-	setupSnapshotDirs(t, homeDir, []int64{1000, 3000, 2000})
-
-	h, err := pickUploadCandidate(filepath.Join(homeDir, "data", "snapshots"))
-	if err != nil {
-		t.Fatalf("pickUploadCandidate() error = %v", err)
-	}
-	if h != 2000 {
-		t.Errorf("height = %d, want 2000", h)
-	}
-}
-
-func TestPickUploadCandidate_SingleSnapshot_ReturnsZero(t *testing.T) {
-	homeDir := t.TempDir()
-	setupSnapshotDirs(t, homeDir, []int64{1000})
-
-	h, err := pickUploadCandidate(filepath.Join(homeDir, "data", "snapshots"))
-	if err != nil {
-		t.Fatalf("pickUploadCandidate() error = %v", err)
-	}
-	if h != 0 {
-		t.Errorf("height = %d, want 0", h)
-	}
-}
-
-func TestPickUploadCandidate_NoSnapshots_ReturnsZero(t *testing.T) {
-	homeDir := t.TempDir()
-	h, err := pickUploadCandidate(filepath.Join(homeDir, "data", "snapshots"))
-	if err != nil {
-		t.Fatalf("pickUploadCandidate() error = %v", err)
-	}
-	if h != 0 {
-		t.Errorf("height = %d, want 0", h)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			if tc.heights != nil {
+				setupSnapshotDirs(t, homeDir, tc.heights)
+			}
+			h, err := pickUploadCandidate(filepath.Join(homeDir, "data", "snapshots"))
+			if err != nil {
+				t.Fatalf("pickUploadCandidate() error = %v", err)
+			}
+			if h != tc.want {
+				t.Errorf("height = %d, want %d", h, tc.want)
+			}
+		})
 	}
 }
 
@@ -260,50 +234,57 @@ func TestNormalizePrefix(t *testing.T) {
 	}
 }
 
-func TestParseUploadConfig_Valid(t *testing.T) {
-	params := map[string]any{
-		"bucket": "my-bucket",
-		"prefix": "state-sync",
-		"region": "eu-central-1",
+func TestParseUploadConfig(t *testing.T) {
+	cases := []struct {
+		name       string
+		params     map[string]any
+		wantErr    bool
+		wantBucket string
+		wantPrefix string
+		wantRegion string
+	}{
+		{
+			name:       "valid with all fields",
+			params:     map[string]any{"bucket": "my-bucket", "prefix": "state-sync", "region": "eu-central-1"},
+			wantBucket: "my-bucket", wantPrefix: "state-sync", wantRegion: "eu-central-1",
+		},
+		{
+			name:    "missing bucket",
+			params:  map[string]any{"region": "us-east-1"},
+			wantErr: true,
+		},
+		{
+			name:    "missing region",
+			params:  map[string]any{"bucket": "my-bucket"},
+			wantErr: true,
+		},
+		{
+			name:       "prefix is optional",
+			params:     map[string]any{"bucket": "my-bucket", "region": "us-east-1"},
+			wantBucket: "my-bucket", wantRegion: "us-east-1",
+		},
 	}
-	cfg, err := parseUploadConfig(params)
-	if err != nil {
-		t.Fatalf("parseUploadConfig() error = %v", err)
-	}
-	if cfg.Bucket != "my-bucket" {
-		t.Errorf("Bucket = %q, want %q", cfg.Bucket, "my-bucket")
-	}
-	if cfg.Prefix != "state-sync" {
-		t.Errorf("Prefix = %q, want %q", cfg.Prefix, "state-sync")
-	}
-	if cfg.Region != "eu-central-1" {
-		t.Errorf("Region = %q, want %q", cfg.Region, "eu-central-1")
-	}
-}
-
-func TestParseUploadConfig_MissingBucket(t *testing.T) {
-	_, err := parseUploadConfig(map[string]any{"region": "us-east-1"})
-	if err == nil {
-		t.Fatal("expected error for missing bucket")
-	}
-}
-
-func TestParseUploadConfig_MissingRegion(t *testing.T) {
-	_, err := parseUploadConfig(map[string]any{"bucket": "my-bucket"})
-	if err == nil {
-		t.Fatal("expected error for missing region")
-	}
-}
-
-func TestParseUploadConfig_PrefixOptional(t *testing.T) {
-	cfg, err := parseUploadConfig(map[string]any{
-		"bucket": "my-bucket",
-		"region": "us-east-1",
-	})
-	if err != nil {
-		t.Fatalf("parseUploadConfig() error = %v", err)
-	}
-	if cfg.Prefix != "" {
-		t.Errorf("Prefix = %q, want empty", cfg.Prefix)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := parseUploadConfig(tc.params)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseUploadConfig() error = %v", err)
+			}
+			if cfg.Bucket != tc.wantBucket {
+				t.Errorf("Bucket = %q, want %q", cfg.Bucket, tc.wantBucket)
+			}
+			if cfg.Prefix != tc.wantPrefix {
+				t.Errorf("Prefix = %q, want %q", cfg.Prefix, tc.wantPrefix)
+			}
+			if cfg.Region != tc.wantRegion {
+				t.Errorf("Region = %q, want %q", cfg.Region, tc.wantRegion)
+			}
+		})
 	}
 }

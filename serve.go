@@ -41,7 +41,6 @@ var serveCmd = cli.Command{
 			engine.TaskMarkReady:          tasks.MarkReadyHandler(),
 			engine.TaskConfigureGenesis:   tasks.NewGenesisFetcher(homeDir, nil).Handler(),
 			engine.TaskConfigureStateSync: tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
-			engine.TaskUpdatePeers:        tasks.UpdatePeersHandler(homeDir),
 			engine.TaskSnapshotUpload:     tasks.NewSnapshotUploader(homeDir, nil).Handler(),
 		}
 
