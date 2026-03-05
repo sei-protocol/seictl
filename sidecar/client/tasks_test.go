@@ -9,8 +9,6 @@ import (
 	"github.com/leanovate/gopter/prop"
 )
 
-// -- generators --
-
 func genNonEmptyString() gopter.Gen {
 	return gen.AlphaString().SuchThat(func(v string) bool { return len(v) > 0 })
 }
@@ -114,8 +112,6 @@ func genConfigPatchTask() gopter.Gen {
 		}
 	})
 }
-
-// -- round-trip properties --
 
 func TestSnapshotRestoreRoundTrip(t *testing.T) {
 	properties := gopter.NewProperties(gopter.DefaultTestParameters())
@@ -276,8 +272,6 @@ func TestConfigPatchRoundTrip(t *testing.T) {
 	properties.TestingRun(t)
 }
 
-// -- parameterless tasks --
-
 func TestConfigureStateSyncRoundTrip(t *testing.T) {
 	task := ConfigureStateSyncTask{}
 	if err := task.Validate(); err != nil {
@@ -305,8 +299,6 @@ func TestMarkReadyRoundTrip(t *testing.T) {
 		t.Errorf("Params = %v, want nil", req.Params)
 	}
 }
-
-// -- validation properties --
 
 func TestSnapshotRestoreValidationRejectsMissingFields(t *testing.T) {
 	cases := []struct {
@@ -405,8 +397,6 @@ func TestConfigPatchValidationRejectsEmpty(t *testing.T) {
 		t.Error("expected validation error for fully empty ConfigPatchTask, got nil")
 	}
 }
-
-// -- JSON model round-trip properties --
 
 func TestStatusResponseJSONRoundTrip(t *testing.T) {
 	properties := gopter.NewProperties(gopter.DefaultTestParameters())

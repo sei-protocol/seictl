@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -21,8 +22,6 @@ func newTestClient(t *testing.T, handler http.Handler) *SidecarClient {
 	}
 	return c
 }
-
-// -- Status --
 
 func TestStatus_OK(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -52,8 +51,6 @@ func TestStatus_ServerError(t *testing.T) {
 		t.Fatal("expected error for 500 response")
 	}
 }
-
-// -- SubmitTask --
 
 func TestSubmitTask_Accepted(t *testing.T) {
 	taskID := uuid.New()
@@ -150,7 +147,7 @@ func TestSubmitTask_BadRequest(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for 400 response")
 	}
-	if !contains(err.Error(), "unknown task type") {
+	if !strings.Contains(err.Error(), "unknown task type") {
 		t.Errorf("error = %v, expected to contain 'unknown task type'", err)
 	}
 }
@@ -164,12 +161,10 @@ func TestSubmitTask_ValidationFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
-	if !contains(err.Error(), "validation failed") {
+	if !strings.Contains(err.Error(), "validation failed") {
 		t.Errorf("error = %v, expected to contain 'validation failed'", err)
 	}
 }
-
-// -- ListTasks --
 
 func TestListTasks_OK(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -193,8 +188,6 @@ func TestListTasks_OK(t *testing.T) {
 		t.Errorf("Type = %q, want mark-ready", results[0].Type)
 	}
 }
-
-// -- GetTask --
 
 func TestGetTask_OK(t *testing.T) {
 	taskID := uuid.New()
@@ -228,8 +221,6 @@ func TestGetTask_NotFound(t *testing.T) {
 	}
 }
 
-// -- DeleteTask --
-
 func TestDeleteTask_OK(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
@@ -255,8 +246,6 @@ func TestDeleteTask_NotFound(t *testing.T) {
 		t.Errorf("error = %v, want ErrNotFound", err)
 	}
 }
-
-// -- Healthz --
 
 func TestHealthz_OK(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -300,8 +289,6 @@ func TestHealthz_UnexpectedStatus(t *testing.T) {
 	}
 }
 
-// -- NewSidecarClientFromPodDNS --
-
 func TestNewSidecarClientFromPodDNS_URLFormat(t *testing.T) {
 	c, err := NewSidecarClientFromPodDNS("sei-node", "default", 7777)
 	if err != nil {
@@ -324,17 +311,4 @@ func TestNewSidecarClientFromPodDNS_DefaultPort(t *testing.T) {
 	if inner.Server != want {
 		t.Errorf("Server = %q, want %q", inner.Server, want)
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchSubstring(s, substr)
-}
-
-func searchSubstring(s, substr string) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

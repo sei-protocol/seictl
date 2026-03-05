@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -112,15 +111,15 @@ func (c *SidecarClient) SubmitRawTask(ctx context.Context, task TaskRequest) (uu
 	}
 	switch resp.StatusCode() {
 	case http.StatusAccepted:
-		if resp.JSON202 != nil {
-			return resp.JSON202.Id, nil
+		if resp.JSON202 == nil {
+			return uuid.Nil, fmt.Errorf("sidecar returned 202 but no task ID in response body")
 		}
-		return uuid.Nil, nil
+		return resp.JSON202.Id, nil
 	case http.StatusCreated:
-		if resp.JSON201 != nil {
-			return resp.JSON201.Id, nil
+		if resp.JSON201 == nil {
+			return uuid.Nil, fmt.Errorf("sidecar returned 201 but no task ID in response body")
 		}
-		return uuid.Nil, nil
+		return resp.JSON201.Id, nil
 	case http.StatusConflict:
 		return uuid.Nil, ErrBusy
 	case http.StatusBadRequest:
@@ -156,6 +155,9 @@ func (c *SidecarClient) GetTask(ctx context.Context, id uuid.UUID) (*TaskResult,
 	}
 	switch resp.StatusCode() {
 	case http.StatusOK:
+		if resp.JSON200 == nil {
+			return nil, fmt.Errorf("sidecar returned 200 for task %s but empty body", id)
+		}
 		return resp.JSON200, nil
 	case http.StatusNotFound:
 		return nil, ErrNotFound
@@ -194,7 +196,6 @@ func (c *SidecarClient) Healthz(ctx context.Context) (bool, error) {
 	case http.StatusServiceUnavailable:
 		return false, nil
 	default:
-		body, _ := io.ReadAll(bytes.NewReader(resp.Body))
-		return false, fmt.Errorf("sidecar healthz returned %d: %s", resp.StatusCode(), bytes.TrimSpace(body))
+		return false, fmt.Errorf("sidecar healthz returned %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
 	}
 }

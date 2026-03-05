@@ -14,8 +14,6 @@ type TaskBuilder interface {
 	ToTaskRequest() TaskRequest
 }
 
-// ----- task type constants (match seictl/sidecar/engine/types.go) -----
-
 const (
 	TaskTypeSnapshotRestore    = "snapshot-restore"
 	TaskTypeDiscoverPeers      = "discover-peers"
@@ -26,8 +24,6 @@ const (
 	TaskTypeConfigureStateSync = "configure-state-sync"
 	TaskTypeSnapshotUpload     = "snapshot-upload"
 )
-
-// ---- SnapshotRestoreTask ----
 
 // SnapshotRestoreTask downloads and extracts a snapshot archive from S3.
 type SnapshotRestoreTask struct {
@@ -77,8 +73,6 @@ func SnapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestor
 	}
 }
 
-// ---- SnapshotUploadTask ----
-
 // SnapshotUploadTask archives and streams a local snapshot to S3.
 type SnapshotUploadTask struct {
 	Bucket string
@@ -119,8 +113,6 @@ func SnapshotUploadTaskFromParams(params map[string]interface{}) SnapshotUploadT
 		Region: s("region"),
 	}
 }
-
-// ---- ConfigureGenesisTask ----
 
 // ConfigureGenesisTask downloads genesis.json from an S3 URI.
 type ConfigureGenesisTask struct {
@@ -167,8 +159,6 @@ func ConfigureGenesisTaskFromParams(params map[string]interface{}) ConfigureGene
 		Region: s("region"),
 	}
 }
-
-// ---- DiscoverPeersTask ----
 
 // PeerSourceType identifies the peer discovery mechanism.
 type PeerSourceType string
@@ -289,8 +279,6 @@ func DiscoverPeersTaskFromParams(params map[string]interface{}) (DiscoverPeersTa
 	return DiscoverPeersTask{Sources: sources}, nil
 }
 
-// ---- ConfigPatchTask ----
-
 // SnapshotGenerationPatch holds app.toml values for Tendermint state-sync
 // snapshot production.
 type SnapshotGenerationPatch struct {
@@ -398,8 +386,6 @@ func toInt32(v interface{}) (int32, bool) {
 	}
 }
 
-// ---- ConfigureStateSyncTask ----
-
 // ConfigureStateSyncTask discovers a trust point and configures state sync.
 // No parameters are required; configuration is derived from the peers file.
 type ConfigureStateSyncTask struct{}
@@ -410,8 +396,6 @@ func (t ConfigureStateSyncTask) Validate() error  { return nil }
 func (t ConfigureStateSyncTask) ToTaskRequest() TaskRequest {
 	return TaskRequest{Type: t.TaskType()}
 }
-
-// ---- MarkReadyTask ----
 
 // MarkReadyTask signals that bootstrap is complete.
 type MarkReadyTask struct{}
