@@ -1,7 +1,7 @@
 BIN       := seictl
 BUILD_DIR := ./build
 
-.PHONY: build install run test lint fmt clean
+.PHONY: build install run test lint fmt generate clean
 
 build:
 	go build -o $(BUILD_DIR)/$(BIN) .
@@ -20,6 +20,9 @@ lint:
 
 fmt:
 	gofmt -s -w .
+
+generate:
+	go generate ./...
 
 clean:
 	rm -rf $(BUILD_DIR)

@@ -1,0 +1,211 @@
+openapi: 3.1.0
+info:
+  title: sei-sidecar API
+  description: HTTP API for the sei-sidecar task executor.
+  version: 0.3.0
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: http://localhost:7777
+
+paths:
+  /v0/healthz:
+    get:
+      operationId: healthz
+      summary: Liveness probe
+      description: Returns 200 after mark-ready has completed; 503 otherwise.
+      responses:
+        "200":
+          description: Sidecar is ready.
+        "503":
+          description: Sidecar is not yet ready.
+
+  /v0/status:
+    get:
+      operationId: getStatus
+      summary: Status snapshot
+      responses:
+        "200":
+          description: Current status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
+  /v0/tasks:
+    post:
+      operationId: submitTask
+      summary: Submit a task
+      description: |
+        If `schedule` is provided, a recurring scheduled task is created and
+        201 is returned. Otherwise the task is submitted for immediate execution
+        and 202 is returned. Returns 409 if a one-shot task is already running.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskRequest"
+      responses:
+        "201":
+          description: Scheduled task created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskSubmitResponse"
+        "202":
+          description: Task submitted for immediate execution.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskSubmitResponse"
+        "400":
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: A task is already running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      operationId: listTasks
+      summary: List recent task results
+      description: Returns the most recent completed task results and active scheduled tasks.
+      responses:
+        "200":
+          description: Task results.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TaskResult"
+
+  /v0/tasks/{id}:
+    get:
+      operationId: getTask
+      summary: Get a task result
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Task result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskResult"
+        "404":
+          description: Task not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteTask
+      summary: Remove a task
+      description: Removes a completed task result or stops and removes a scheduled task.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Task deleted.
+        "404":
+          description: Task not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    TaskRequest:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          description: Task type identifier.
+        params:
+          type: object
+          additionalProperties: true
+        schedule:
+          $ref: "#/components/schemas/Schedule"
+
+    Schedule:
+      type: object
+      description: Defines when a task should recur. Currently only cron is supported; blockHeight is reserved for future use.
+      properties:
+        cron:
+          type: string
+          description: Cron expression for recurring execution.
+        blockHeight:
+          type: integer
+          format: int64
+          description: Reserved for future block-height-based scheduling.
+
+    StatusResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [Initializing, Running, Ready]
+
+    TaskSubmitResponse:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The assigned task UUID.
+
+    TaskResult:
+      type: object
+      required: [id, type, submittedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          description: Task type that was executed.
+        params:
+          type: object
+          additionalProperties: true
+        schedule:
+          $ref: "#/components/schemas/Schedule"
+        error:
+          type: string
+          description: Error message if the task failed.
+        submittedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        nextRunAt:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
