@@ -93,12 +93,16 @@ func TestSnapshotRestoreExtractsArchive(t *testing.T) {
 		t.Fatalf("Restore failed: %v", err)
 	}
 
-	content, err := os.ReadFile(filepath.Join(homeDir, "data", "chain.db"))
+	content, err := os.ReadFile(filepath.Join(homeDir, "data", "snapshots", "data", "chain.db"))
 	if err != nil {
 		t.Fatalf("reading extracted file: %v", err)
 	}
 	if string(content) != "chaindata" {
 		t.Fatalf("expected 'chaindata', got %q", string(content))
+	}
+
+	if _, err := os.Stat(filepath.Join(homeDir, "data", "snapshots")); os.IsNotExist(err) {
+		t.Fatal("data/snapshots directory should exist")
 	}
 
 	if !markerExists(homeDir, snapshotMarkerFile) {

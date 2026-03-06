@@ -19,7 +19,6 @@ const (
 	TaskTypeDiscoverPeers      = "discover-peers"
 	TaskTypeConfigPatch        = "config-patch"
 	TaskTypeMarkReady          = "mark-ready"
-	TaskTypeUpdatePeers        = "update-peers"
 	TaskTypeConfigureGenesis   = "configure-genesis"
 	TaskTypeConfigureStateSync = "configure-state-sync"
 	TaskTypeSnapshotUpload     = "snapshot-upload"
@@ -279,111 +278,26 @@ func DiscoverPeersTaskFromParams(params map[string]interface{}) (DiscoverPeersTa
 	return DiscoverPeersTask{Sources: sources}, nil
 }
 
-// SnapshotGenerationPatch holds app.toml values for Tendermint state-sync
-// snapshot production.
-type SnapshotGenerationPatch struct {
-	Interval   int64
-	KeepRecent int32
-}
-
-// ConfigPatchTask applies TOML patches to seid configuration files.
+// ConfigPatchTask applies generic TOML merge-patches to seid config files.
+// Files maps a filename (e.g. "config.toml", "app.toml") to a nested patch
+// that will be recursively merged into the existing file.
 type ConfigPatchTask struct {
-	Peers              []string
-	NodeMode           string
-	SnapshotGeneration *SnapshotGenerationPatch
+	Files map[string]map[string]any
 }
 
 func (t ConfigPatchTask) TaskType() string { return TaskTypeConfigPatch }
 
 func (t ConfigPatchTask) Validate() error {
-	if len(t.Peers) == 0 && t.NodeMode == "" && t.SnapshotGeneration == nil {
-		return fmt.Errorf("config-patch: at least one of Peers, NodeMode, or SnapshotGeneration is required")
-	}
 	return nil
 }
 
 func (t ConfigPatchTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{}
-	if len(t.Peers) > 0 {
-		peers := make([]interface{}, len(t.Peers))
-		for i, v := range t.Peers {
-			peers[i] = v
-		}
-		p["peers"] = peers
+	files := make(map[string]interface{}, len(t.Files))
+	for k, v := range t.Files {
+		files[k] = v
 	}
-	if t.NodeMode != "" {
-		p["nodeMode"] = t.NodeMode
-	}
-	if t.SnapshotGeneration != nil {
-		sg := map[string]interface{}{}
-		if t.SnapshotGeneration.Interval != 0 {
-			sg["interval"] = t.SnapshotGeneration.Interval
-		}
-		if t.SnapshotGeneration.KeepRecent != 0 {
-			sg["keepRecent"] = t.SnapshotGeneration.KeepRecent
-		}
-		p["snapshotGeneration"] = sg
-	}
+	p := map[string]interface{}{"files": files}
 	return TaskRequest{Type: t.TaskType(), Params: &p}
-}
-
-// ConfigPatchTaskFromParams reconstructs a ConfigPatchTask from
-// a generic params map.
-func ConfigPatchTaskFromParams(params map[string]interface{}) ConfigPatchTask {
-	t := ConfigPatchTask{}
-	if raw, ok := params["peers"]; ok {
-		if arr, ok := raw.([]interface{}); ok {
-			for _, item := range arr {
-				if s, ok := item.(string); ok {
-					t.Peers = append(t.Peers, s)
-				}
-			}
-		}
-	}
-	if v, ok := params["nodeMode"].(string); ok {
-		t.NodeMode = v
-	}
-	if raw, ok := params["snapshotGeneration"].(map[string]interface{}); ok {
-		sg := &SnapshotGenerationPatch{}
-		if v, ok := toInt64(raw["interval"]); ok {
-			sg.Interval = v
-		}
-		if v, ok := toInt32(raw["keepRecent"]); ok {
-			sg.KeepRecent = v
-		}
-		t.SnapshotGeneration = sg
-	}
-	return t
-}
-
-func toInt64(v interface{}) (int64, bool) {
-	switch n := v.(type) {
-	case int64:
-		return n, true
-	case int:
-		return int64(n), true
-	case float64:
-		return int64(n), true
-	case int32:
-		return int64(n), true
-	default:
-		return 0, false
-	}
-}
-
-func toInt32(v interface{}) (int32, bool) {
-	switch n := v.(type) {
-	case int32:
-		return n, true
-	case int:
-		return int32(n), true
-	case int64:
-		return int32(n), true
-	case float64:
-		return int32(n), true
-	default:
-		return 0, false
-	}
 }
 
 // ConfigureStateSyncTask discovers a trust point and configures state sync.

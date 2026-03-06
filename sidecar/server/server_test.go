@@ -157,11 +157,11 @@ func TestPostTaskBusy(t *testing.T) {
 
 func TestPostTaskScheduled(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 	srv := NewServer(":0", eng)
 
-	body := `{"type":"update-peers","schedule":{"cron":"*/5 * * * *"}}`
+	body := `{"type":"config-patch","schedule":{"cron":"*/5 * * * *"}}`
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
@@ -205,10 +205,10 @@ func TestPostTaskUnknownType(t *testing.T) {
 
 func TestPostTaskInvalidSchedule(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 	srv := NewServer(":0", eng)
-	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"update-peers","schedule":{"cron":"not a cron"}}`)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","schedule":{"cron":"not a cron"}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
@@ -307,11 +307,11 @@ func TestDeleteTask(t *testing.T) {
 
 func TestDeleteScheduledTask(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskUpdatePeers: func(_ context.Context, _ map[string]any) error { return nil },
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 	srv := NewServer(":0", eng)
 
-	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"update-peers","schedule":{"cron":"*/5 * * * *"}}`)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","schedule":{"cron":"*/5 * * * *"}}`)
 	var resp map[string]string
 	json.NewDecoder(rec.Body).Decode(&resp)
 	id := resp["id"]
