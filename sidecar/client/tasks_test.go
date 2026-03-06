@@ -373,6 +373,67 @@ func TestDiscoverPeersValidation(t *testing.T) {
 	}
 }
 
+func TestConfigPatchToTaskRequest_NestedValuesPreserved(t *testing.T) {
+	task := ConfigPatchTask{
+		Files: map[string]map[string]any{
+			"config.toml": {
+				"statesync": map[string]any{
+					"use-local-snapshot": true,
+					"backfill-blocks":    int64(0),
+				},
+				"p2p": map[string]any{
+					"persistent-peers": "abc@1.2.3.4:26656",
+				},
+			},
+			"app.toml": {
+				"pruning":           "nothing",
+				"snapshot-interval": int64(2000),
+			},
+		},
+	}
+
+	req := task.ToTaskRequest()
+
+	// Simulate the JSON round-trip that happens on the wire.
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded TaskRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	files, ok := (*decoded.Params)["files"].(map[string]any)
+	if !ok {
+		t.Fatal("expected files to be a map after JSON round-trip")
+	}
+
+	configToml, ok := files["config.toml"].(map[string]any)
+	if !ok {
+		t.Fatal("expected config.toml entry to be a map")
+	}
+	statesync, ok := configToml["statesync"].(map[string]any)
+	if !ok {
+		t.Fatal("expected statesync section to be a map")
+	}
+	if statesync["use-local-snapshot"] != true {
+		t.Errorf("use-local-snapshot = %v, want true", statesync["use-local-snapshot"])
+	}
+
+	appToml, ok := files["app.toml"].(map[string]any)
+	if !ok {
+		t.Fatal("expected app.toml entry to be a map")
+	}
+	if appToml["pruning"] != "nothing" {
+		t.Errorf("pruning = %v, want nothing", appToml["pruning"])
+	}
+	// JSON unmarshals numbers as float64.
+	if appToml["snapshot-interval"] != float64(2000) {
+		t.Errorf("snapshot-interval = %v, want 2000", appToml["snapshot-interval"])
+	}
+}
+
 func TestConfigPatchValidationAcceptsEmpty(t *testing.T) {
 	task := ConfigPatchTask{}
 	if err := task.Validate(); err != nil {
