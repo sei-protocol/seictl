@@ -19,7 +19,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seilog"
 )
+
+var uploadLog = seilog.NewLogger("seictl", "task", "snapshot-upload")
 
 const uploadStateFile = ".sei-sidecar-last-upload.json"
 
@@ -96,13 +99,17 @@ func (u *SnapshotUploader) Upload(ctx context.Context, cfg SnapshotUploadConfig)
 		return err
 	}
 	if height == 0 {
+		uploadLog.Debug("fewer than 2 snapshots on disk, nothing to upload")
 		return nil
 	}
 
 	last := u.readUploadState()
 	if last.LastUploadedHeight >= height {
+		uploadLog.Debug("height already uploaded", "height", height, "last-uploaded", last.LastUploadedHeight)
 		return nil
 	}
+
+	uploadLog.Info("uploading snapshot", "height", height, "bucket", cfg.Bucket, "region", cfg.Region)
 
 	uploader, err := u.s3UploaderFactory(ctx, cfg.Region)
 	if err != nil {
@@ -112,6 +119,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context, cfg SnapshotUploadConfig)
 	prefix := normalizePrefix(cfg.Prefix)
 
 	archiveKey := fmt.Sprintf("%s%d.tar.gz", prefix, height)
+	uploadLog.Info("streaming archive to S3", "key", archiveKey)
 	if err := u.streamUpload(ctx, uploader, cfg.Bucket, archiveKey, snapshotsDir, height); err != nil {
 		return fmt.Errorf("uploading %s: %w", archiveKey, err)
 	}
@@ -126,6 +134,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context, cfg SnapshotUploadConfig)
 	if err != nil {
 		return fmt.Errorf("uploading %s: %w", latestKey, err)
 	}
+	uploadLog.Info("updated latest.txt", "key", latestKey, "height", height)
 
 	return u.writeUploadState(uploadState{LastUploadedHeight: height})
 }

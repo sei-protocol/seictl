@@ -14,7 +14,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seilog"
 )
+
+var restoreLog = seilog.NewLogger("seictl", "task", "snapshot-restore")
 
 const snapshotMarkerFile = ".sei-sidecar-snapshot-done"
 
@@ -76,6 +79,7 @@ func (r *SnapshotRestorer) Handler() engine.TaskHandler {
 // It reads latest.txt from the prefix to resolve the current snapshot object key.
 func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) error {
 	if markerExists(r.homeDir, snapshotMarkerFile) {
+		restoreLog.Debug("already completed, skipping")
 		return nil
 	}
 
@@ -89,6 +93,7 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 		return err
 	}
 
+	restoreLog.Info("downloading snapshot", "bucket", cfg.Bucket, "key", snapshotKey)
 	output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(cfg.Bucket),
 		Key:    aws.String(snapshotKey),
@@ -102,10 +107,13 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		return fmt.Errorf("creating snapshot directory: %w", err)
 	}
+
+	restoreLog.Info("extracting archive", "dest", snapshotDir)
 	if err := extractTarStream(ctx, output.Body, snapshotDir); err != nil {
 		return fmt.Errorf("extracting snapshot: %w", err)
 	}
 
+	restoreLog.Info("restore complete")
 	return writeMarker(r.homeDir, snapshotMarkerFile)
 }
 

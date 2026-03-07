@@ -3,6 +3,9 @@ package client
 import (
 	"fmt"
 	"net/url"
+	"time"
+
+	"github.com/robfig/cron/v3"
 )
 
 // TaskBuilder is implemented by every typed task struct. It converts a
@@ -77,6 +80,7 @@ type SnapshotUploadTask struct {
 	Bucket string
 	Prefix string
 	Region string
+	Cron   string
 }
 
 func (t SnapshotUploadTask) TaskType() string { return TaskTypeSnapshotUpload }
@@ -87,6 +91,27 @@ func (t SnapshotUploadTask) Validate() error {
 	}
 	if t.Region == "" {
 		return fmt.Errorf("snapshot-upload: missing required field Region")
+	}
+	if t.Cron != "" {
+		if err := validateMinCronInterval(t.Cron, 24*time.Hour); err != nil {
+			return fmt.Errorf("snapshot-upload: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateMinCronInterval parses a standard 5-field cron expression and
+// checks that the gap between the first two scheduled firings is at least min.
+func validateMinCronInterval(expr string, min time.Duration) error {
+	sched, err := cron.ParseStandard(expr)
+	if err != nil {
+		return fmt.Errorf("invalid cron expression %q: %w", expr, err)
+	}
+	t0 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	first := sched.Next(t0)
+	second := sched.Next(first)
+	if gap := second.Sub(first); gap < min {
+		return fmt.Errorf("cron %q fires every %v, minimum allowed interval is %v", expr, gap, min)
 	}
 	return nil
 }
@@ -99,7 +124,11 @@ func (t SnapshotUploadTask) ToTaskRequest() TaskRequest {
 	if t.Prefix != "" {
 		p["prefix"] = t.Prefix
 	}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	if t.Cron != "" {
+		req.Schedule = &Schedule{Cron: &t.Cron}
+	}
+	return req
 }
 
 // SnapshotUploadTaskFromParams reconstructs a SnapshotUploadTask from

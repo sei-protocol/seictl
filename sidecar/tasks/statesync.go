@@ -12,7 +12,10 @@ import (
 
 	"github.com/sei-protocol/seictl/internal/patch"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seilog"
 )
+
+var ssLog = seilog.NewLogger("seictl", "task", "state-sync")
 
 const (
 	stateSyncMarkerFile = ".sei-sidecar-statesync-done"
@@ -57,6 +60,7 @@ func (s *StateSyncConfigurer) Handler() engine.TaskHandler {
 // trust point, and writes the state sync settings back to config.toml.
 func (s *StateSyncConfigurer) Configure(ctx context.Context) error {
 	if markerExists(s.homeDir, stateSyncMarkerFile) {
+		ssLog.Debug("already completed, skipping")
 		return nil
 	}
 
@@ -67,12 +71,14 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context) error {
 	if len(peers) == 0 {
 		return fmt.Errorf("configure-state-sync: no peers in config.toml")
 	}
+	ssLog.Debug("found peers", "count", len(peers))
 
 	rpcHosts := extractRPCHosts(peers, 2)
 	if len(rpcHosts) == 0 {
 		return fmt.Errorf("configure-state-sync: could not extract RPC hosts from peers")
 	}
 
+	ssLog.Info("querying latest height", "host", rpcHosts[0])
 	latestHeight, err := s.queryLatestHeight(ctx, rpcHosts[0])
 	if err != nil {
 		return fmt.Errorf("configure-state-sync: querying latest height: %w", err)
@@ -83,13 +89,13 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context) error {
 		trustHeight = 1
 	}
 
+	ssLog.Info("querying trust hash", "trust-height", trustHeight, "latest-height", latestHeight)
 	trustHash, err := s.queryBlockHash(ctx, rpcHosts[0], trustHeight)
 	if err != nil {
 		return fmt.Errorf("configure-state-sync: querying block hash at height %d: %w", trustHeight, err)
 	}
 
 	// Tendermint requires at least two comma-separated RPC servers for state sync.
-	// When only one peer is available, duplicate it to satisfy the requirement.
 	for len(rpcHosts) < 2 {
 		rpcHosts = append(rpcHosts, rpcHosts[0])
 	}
@@ -104,6 +110,7 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context) error {
 		RpcServers:  strings.Join(rpcServers, ","),
 	}
 
+	ssLog.Info("writing config", "trust-height", trustHeight, "trust-hash", trustHash, "rpc-servers", cfg.RpcServers)
 	if err := writeStateSyncToConfig(s.homeDir, cfg); err != nil {
 		return fmt.Errorf("configure-state-sync: writing config.toml: %w", err)
 	}
@@ -165,10 +172,15 @@ func (s *StateSyncConfigurer) queryBlockHash(ctx context.Context, host string, h
 	if err := json.Unmarshal(body, &block); err != nil {
 		return "", fmt.Errorf("parsing block response: %w", err)
 	}
-	if block.BlockID.Hash == "" {
+	hash := block.BlockID.Hash
+	if hash == "" {
 		return "", fmt.Errorf("empty block hash at height %d", height)
 	}
-	return block.BlockID.Hash, nil
+	const sha256HexLen = 64
+	if len(hash) != sha256HexLen {
+		return "", fmt.Errorf("unexpected block hash length at height %d: got %d, want %d", height, len(hash), sha256HexLen)
+	}
+	return hash, nil
 }
 
 func (s *StateSyncConfigurer) doGet(ctx context.Context, url string) ([]byte, error) {

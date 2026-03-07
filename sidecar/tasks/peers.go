@@ -15,7 +15,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seilog"
 )
+
+var peerLog = seilog.NewLogger("seictl", "task", "peers")
 
 const p2pPort = "26656"
 
@@ -182,6 +185,7 @@ func discoverFromSources(ctx context.Context, sources []PeerSource) ([]string, e
 		if err != nil {
 			return nil, err
 		}
+		peerLog.Debug("source returned peers", "count", len(peers))
 		for _, p := range peers {
 			if !seen[p] {
 				seen[p] = true
@@ -194,6 +198,7 @@ func discoverFromSources(ctx context.Context, sources []PeerSource) ([]string, e
 		return nil, fmt.Errorf("no peers discovered from any source")
 	}
 
+	peerLog.Info("peers discovered", "total", len(all))
 	return all, nil
 }
 

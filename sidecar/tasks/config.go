@@ -9,7 +9,10 @@ import (
 	"github.com/sei-protocol/seictl/internal/patch"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seictl/sidecar/tasks/defaults"
+	"github.com/sei-protocol/seilog"
 )
+
+var patchLog = seilog.NewLogger("seictl", "task", "config-patch")
 
 // ConfigPatcher applies generic TOML merge-patches to seid configuration files.
 type ConfigPatcher struct {
@@ -50,10 +53,12 @@ func (p *ConfigPatcher) PatchFiles(_ context.Context, files map[string]any) erro
 			return fmt.Errorf("config-patch: value for %q must be a map", filename)
 		}
 		filePath := filepath.Join(p.homeDir, "config", filename)
+		patchLog.Debug("patching file", "file", filename)
 		if err := mergeAndWrite(filePath, patchMap); err != nil {
 			return fmt.Errorf("config-patch %s: %w", filename, err)
 		}
 	}
+	patchLog.Info("files patched", "count", len(files))
 	return nil
 }
 

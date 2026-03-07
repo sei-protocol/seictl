@@ -152,6 +152,25 @@ func TestSnapshotUploadRoundTrip(t *testing.T) {
 	properties.TestingRun(t)
 }
 
+func TestSnapshotUploadTask_CronSchedule(t *testing.T) {
+	task := SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "0 0 * * *"}
+	req := task.ToTaskRequest()
+	if req.Schedule == nil {
+		t.Fatal("expected Schedule to be set")
+	}
+	if req.Schedule.Cron == nil || *req.Schedule.Cron != "0 0 * * *" {
+		t.Errorf("Schedule.Cron = %v, want %q", req.Schedule.Cron, "0 0 * * *")
+	}
+}
+
+func TestSnapshotUploadTask_NoCron(t *testing.T) {
+	task := SnapshotUploadTask{Bucket: "b", Region: "r"}
+	req := task.ToTaskRequest()
+	if req.Schedule != nil {
+		t.Errorf("expected nil Schedule when Cron is empty, got %v", req.Schedule)
+	}
+}
+
 func TestConfigureGenesisRoundTrip(t *testing.T) {
 	properties := gopter.NewProperties(gopter.DefaultTestParameters())
 	properties.Property("ConfigureGenesisTask round-trips through TaskRequest", prop.ForAll(
@@ -302,18 +321,29 @@ func TestSnapshotRestoreValidationRejectsMissingFields(t *testing.T) {
 	}
 }
 
-func TestSnapshotUploadValidationRejectsMissingFields(t *testing.T) {
+func TestSnapshotUploadValidation(t *testing.T) {
 	cases := []struct {
 		name string
 		task SnapshotUploadTask
+		ok   bool
 	}{
-		{"missing bucket", SnapshotUploadTask{Region: "r"}},
-		{"missing region", SnapshotUploadTask{Bucket: "b"}},
-		{"all empty", SnapshotUploadTask{}},
+		{"valid no cron", SnapshotUploadTask{Bucket: "b", Region: "r"}, true},
+		{"valid daily cron", SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "0 0 * * *"}, true},
+		{"valid weekly cron", SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "0 0 * * 0"}, true},
+		{"rejects hourly cron", SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "0 * * * *"}, false},
+		{"rejects every-minute cron", SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "* * * * *"}, false},
+		{"rejects invalid cron", SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "not-a-cron"}, false},
+		{"missing bucket", SnapshotUploadTask{Region: "r"}, false},
+		{"missing region", SnapshotUploadTask{Bucket: "b"}, false},
+		{"all empty", SnapshotUploadTask{}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.task.Validate(); err == nil {
+			err := tc.task.Validate()
+			if tc.ok && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if !tc.ok && err == nil {
 				t.Error("expected validation error, got nil")
 			}
 		})

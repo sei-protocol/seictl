@@ -4,13 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sei-protocol/seilog"
 )
+
+var log = seilog.NewLogger("seictl", "engine")
 
 const maxResults = 10
 
@@ -95,9 +97,11 @@ func (e *Engine) Submit(task Task) (string, error) {
 		return "", fmt.Errorf("unknown task type: %s", task.Type)
 	}
 	if !e.taskMu.TryLock() {
+		log.Debug("task rejected, engine busy", "type", task.Type)
 		return "", ErrBusy
 	}
 	id := uuid.New().String()
+	log.Info("task submitted", "type", task.Type, "id", id)
 	e.taskCh <- taskEnvelope{id: id, task: task, handler: handler, submittedAt: time.Now()}
 	return id, nil
 }
@@ -130,6 +134,7 @@ func (e *Engine) SubmitScheduled(task Task, sched Schedule) (string, error) {
 	e.scheduled[id] = tr
 	e.mu.Unlock()
 
+	log.Info("scheduled task registered", "type", task.Type, "id", id, "cron", sched.Cron, "next-run", next.Format(time.RFC3339))
 	return id, nil
 }
 
@@ -150,7 +155,7 @@ func (e *Engine) EvalSchedules() {
 	for _, tr := range due {
 		handler, ok := e.handlers[TaskType(tr.Type)]
 		if !ok {
-			log.Printf("[%s] scheduled task %s has no registered handler, removing", tr.Type, tr.ID)
+			log.Warn("scheduled task has no handler, removing", "type", tr.Type, "id", tr.ID)
 			e.mu.Lock()
 			delete(e.scheduled, tr.ID)
 			e.mu.Unlock()
@@ -163,10 +168,12 @@ func (e *Engine) EvalSchedules() {
 		if tr.Schedule != nil && tr.Schedule.Cron != "" {
 			if next, cronErr := nextCronTime(tr.Schedule.Cron, now); cronErr == nil {
 				tr.NextRunAt = &next
+				log.Debug("scheduled task advancing", "type", tr.Type, "id", tr.ID, "next-run", next.Format(time.RFC3339))
 			}
 		}
 		e.mu.Unlock()
 
+		log.Info("executing scheduled task", "type", tr.Type, "id", tr.ID)
 		go func(tr *TaskResult, h TaskHandler) {
 			err := e.execute(TaskType(tr.Type), h, tr.Params)
 
@@ -188,11 +195,12 @@ func (e *Engine) EvalSchedules() {
 
 // execute runs a handler synchronously and logs the outcome.
 func (e *Engine) execute(taskType TaskType, handler TaskHandler, params map[string]any) error {
+	start := time.Now()
 	if err := handler(e.ctx, params); err != nil {
-		log.Printf("[%s] error: %v", taskType, err)
+		log.Error("task failed", "type", taskType, "elapsed", time.Since(start).Round(time.Millisecond), "err", err)
 		return err
 	}
-	log.Printf("[%s] completed", taskType)
+	log.Info("task completed", "type", taskType, "elapsed", time.Since(start).Round(time.Millisecond))
 	if taskType == TaskMarkReady {
 		e.mu.Lock()
 		e.ready = true

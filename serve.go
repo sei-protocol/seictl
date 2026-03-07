@@ -9,6 +9,7 @@ import (
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seictl/sidecar/server"
 	"github.com/sei-protocol/seictl/sidecar/tasks"
+	"github.com/sei-protocol/seilog"
 	"github.com/urfave/cli/v3"
 )
 
@@ -24,6 +25,8 @@ var serveCmd = cli.Command{
 		},
 	},
 	Action: func(ctx context.Context, cmd *cli.Command) error {
+		defer seilog.Close()
+
 		homeDir := destinations.home
 		if homeDir == "" {
 			homeDir = "/sei"
