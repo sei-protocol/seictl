@@ -12,7 +12,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seilog"
 )
+
+var genesisLog = seilog.NewLogger("seictl", "task", "genesis")
 
 const genesisMarkerFile = ".sei-sidecar-genesis-done"
 
@@ -54,9 +57,11 @@ func (g *GenesisFetcher) Handler() engine.TaskHandler {
 // Fetch downloads genesis.json from S3, skipping if the marker file exists.
 func (g *GenesisFetcher) Fetch(ctx context.Context, cfg GenesisS3Config) error {
 	if markerExists(g.homeDir, genesisMarkerFile) {
+		genesisLog.Debug("already completed, skipping")
 		return nil
 	}
 
+	genesisLog.Info("downloading genesis.json", "bucket", cfg.Bucket, "key", cfg.Key)
 	s3Client, err := g.s3ClientFactory(ctx, cfg.Region)
 	if err != nil {
 		return fmt.Errorf("building S3 client: %w", err)
@@ -87,6 +92,7 @@ func (g *GenesisFetcher) Fetch(ctx context.Context, cfg GenesisS3Config) error {
 		return fmt.Errorf("writing %s: %w", destPath, err)
 	}
 
+	genesisLog.Info("genesis download complete", "dest", destPath)
 	return writeMarker(g.homeDir, genesisMarkerFile)
 }
 

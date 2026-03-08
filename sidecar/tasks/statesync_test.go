@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,12 @@ func (m *mockHTTPDoer) Do(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("unexpected request: %s", req.URL.String())
 	}
 	return resp, nil
+}
+
+func generateBlockHash() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return fmt.Sprintf("%X", b)
 }
 
 func jsonResponse(body string) *http.Response {
@@ -46,14 +53,15 @@ func TestStateSyncConfigurer_Success(t *testing.T) {
 	homeDir := t.TempDir()
 	setupPeersInConfig(t, homeDir, []string{"nodeId1@1.2.3.4:26656", "nodeId2@5.6.7.8:26656"})
 
+	hash := generateBlockHash()
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
 			"http://1.2.3.4:26657/status": jsonResponse(`{
 				"sync_info": {"latest_block_height": "10000"}
 			}`),
-			"http://1.2.3.4:26657/block?height=8000": jsonResponse(`{
-				"block_id": {"hash": "ABCDEF123456"}
-			}`),
+			"http://1.2.3.4:26657/block?height=8000": jsonResponse(fmt.Sprintf(`{
+				"block_id": {"hash": %q}
+			}`, hash)),
 		},
 	}
 
@@ -74,8 +82,8 @@ func TestStateSyncConfigurer_Success(t *testing.T) {
 	if ss["trust-height"] != int64(8000) {
 		t.Errorf("expected statesync.trust-height = 8000, got %v", ss["trust-height"])
 	}
-	if ss["trust-hash"] != "ABCDEF123456" {
-		t.Errorf("expected trust-hash = ABCDEF123456, got %v", ss["trust-hash"])
+	if ss["trust-hash"] != hash {
+		t.Errorf("expected trust-hash = %s, got %v", hash, ss["trust-hash"])
 	}
 	if ss["rpc-servers"] != "1.2.3.4:26657,5.6.7.8:26657" {
 		t.Errorf("expected rpc-servers, got %v", ss["rpc-servers"])
@@ -110,14 +118,15 @@ func TestStateSyncConfigurer_LowHeight(t *testing.T) {
 	homeDir := t.TempDir()
 	setupPeersInConfig(t, homeDir, []string{"nodeId1@10.0.0.1:26656"})
 
+	hash := generateBlockHash()
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
 			"http://10.0.0.1:26657/status": jsonResponse(`{
 				"sync_info": {"latest_block_height": "500"}
 			}`),
-			"http://10.0.0.1:26657/block?height=1": jsonResponse(`{
-				"block_id": {"hash": "GENESIS_HASH"}
-			}`),
+			"http://10.0.0.1:26657/block?height=1": jsonResponse(fmt.Sprintf(`{
+				"block_id": {"hash": %q}
+			}`, hash)),
 		},
 	}
 
@@ -131,12 +140,51 @@ func TestStateSyncConfigurer_LowHeight(t *testing.T) {
 	if ss["trust-height"] != int64(1) {
 		t.Errorf("expected trustHeight clamped to 1, got %v", ss["trust-height"])
 	}
-	if ss["trust-hash"] != "GENESIS_HASH" {
-		t.Errorf("expected trustHash GENESIS_HASH, got %v", ss["trust-hash"])
+	if ss["trust-hash"] != hash {
+		t.Errorf("expected trustHash %s, got %v", hash, ss["trust-hash"])
 	}
 	// Single peer should be duplicated to satisfy Tendermint requirement.
 	if ss["rpc-servers"] != "10.0.0.1:26657,10.0.0.1:26657" {
 		t.Errorf("expected duplicated rpc-servers, got %v", ss["rpc-servers"])
+	}
+}
+
+func TestStateSyncConfigurer_InvalidBlockHash(t *testing.T) {
+	tests := []struct {
+		name    string
+		hash    string
+		wantErr string
+	}{
+		{"empty hash", "", "empty block hash"},
+		{"short hash", "ABCDEF", "unexpected block hash length"},
+		{"long hash", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA00", "unexpected block hash length"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			setupPeersInConfig(t, homeDir, []string{"nodeId1@1.2.3.4:26656"})
+
+			mock := &mockHTTPDoer{
+				responses: map[string]*http.Response{
+					"http://1.2.3.4:26657/status": jsonResponse(`{
+						"sync_info": {"latest_block_height": "10000"}
+					}`),
+					"http://1.2.3.4:26657/block?height=8000": jsonResponse(fmt.Sprintf(`{
+						"block_id": {"hash": %q}
+					}`, tt.hash)),
+				},
+			}
+
+			configurer := NewStateSyncConfigurer(homeDir, mock)
+			err := configurer.Configure(context.Background())
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error %q does not contain %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -204,14 +252,15 @@ func TestStateSyncConfigurer_Handler(t *testing.T) {
 	homeDir := t.TempDir()
 	setupPeersInConfig(t, homeDir, []string{"nodeId1@1.2.3.4:26656"})
 
+	hash := generateBlockHash()
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
 			"http://1.2.3.4:26657/status": jsonResponse(`{
 				"sync_info": {"latest_block_height": "5000"}
 			}`),
-			"http://1.2.3.4:26657/block?height=3000": jsonResponse(`{
-				"block_id": {"hash": "TRUST_HASH"}
-			}`),
+			"http://1.2.3.4:26657/block?height=3000": jsonResponse(fmt.Sprintf(`{
+				"block_id": {"hash": %q}
+			}`, hash)),
 		},
 	}
 

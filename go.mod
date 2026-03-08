@@ -1,6 +1,6 @@
 module github.com/sei-protocol/seictl
 
-go 1.25.4
+go 1.25.6
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.3
@@ -13,6 +13,7 @@ require (
 	github.com/oapi-codegen/runtime v1.2.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/robfig/cron/v3 v3.0.1
+	github.com/sei-protocol/seilog v0.0.1
 	github.com/urfave/cli/v3 v3.6.1
 )
 
