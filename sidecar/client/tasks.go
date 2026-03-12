@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	seiconfig "github.com/sei-protocol/sei-config"
 )
 
 // TaskBuilder is implemented by every typed task struct. It converts a
@@ -21,6 +22,9 @@ const (
 	TaskTypeSnapshotRestore    = "snapshot-restore"
 	TaskTypeDiscoverPeers      = "discover-peers"
 	TaskTypeConfigPatch        = "config-patch"
+	TaskTypeConfigApply        = "config-apply"
+	TaskTypeConfigValidate     = "config-validate"
+	TaskTypeConfigReload       = "config-reload"
 	TaskTypeMarkReady          = "mark-ready"
 	TaskTypeConfigureGenesis   = "configure-genesis"
 	TaskTypeConfigureStateSync = "configure-state-sync"
@@ -348,4 +352,110 @@ func (t MarkReadyTask) Validate() error  { return nil }
 
 func (t MarkReadyTask) ToTaskRequest() TaskRequest {
 	return TaskRequest{Type: t.TaskType()}
+}
+
+// ConfigApplyTask generates or patches node config using sei-config's
+// intent resolution pipeline. The caller builds a ConfigIntent describing
+// the desired state; the sidecar resolves it via sei-config.
+type ConfigApplyTask struct {
+	Intent seiconfig.ConfigIntent
+}
+
+func (t ConfigApplyTask) TaskType() string { return TaskTypeConfigApply }
+
+func (t ConfigApplyTask) Validate() error {
+	result := seiconfig.ValidateIntent(t.Intent)
+	if !result.Valid {
+		return fmt.Errorf("config-apply: invalid intent: %v", result.Diagnostics)
+	}
+	return nil
+}
+
+func (t ConfigApplyTask) ToTaskRequest() TaskRequest {
+	p := map[string]interface{}{
+		"mode":          string(t.Intent.Mode),
+		"incremental":   t.Intent.Incremental,
+		"targetVersion": t.Intent.TargetVersion,
+	}
+	if len(t.Intent.Overrides) > 0 {
+		overrides := make(map[string]interface{}, len(t.Intent.Overrides))
+		for k, v := range t.Intent.Overrides {
+			overrides[k] = v
+		}
+		p["overrides"] = overrides
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// ConfigApplyTaskFromParams reconstructs a ConfigApplyTask from a generic
+// params map.
+func ConfigApplyTaskFromParams(params map[string]interface{}) ConfigApplyTask {
+	s := func(k string) string { v, _ := params[k].(string); return v }
+	inc, _ := params["incremental"].(bool)
+	tv := 0
+	if raw, ok := params["targetVersion"].(float64); ok {
+		tv = int(raw)
+	}
+	var overrides map[string]string
+	if raw, ok := params["overrides"].(map[string]interface{}); ok {
+		overrides = make(map[string]string, len(raw))
+		for k, v := range raw {
+			overrides[k], _ = v.(string)
+		}
+	}
+	return ConfigApplyTask{
+		Intent: seiconfig.ConfigIntent{
+			Mode:          seiconfig.NodeMode(s("mode")),
+			Overrides:     overrides,
+			Incremental:   inc,
+			TargetVersion: tv,
+		},
+	}
+}
+
+// ConfigValidateTask reads on-disk config and returns validation diagnostics.
+type ConfigValidateTask struct{}
+
+func (t ConfigValidateTask) TaskType() string { return TaskTypeConfigValidate }
+func (t ConfigValidateTask) Validate() error  { return nil }
+
+func (t ConfigValidateTask) ToTaskRequest() TaskRequest {
+	return TaskRequest{Type: t.TaskType()}
+}
+
+// ConfigReloadTask patches hot-reloadable fields on disk and signals seid
+// to re-read its configuration.
+type ConfigReloadTask struct {
+	Fields map[string]string
+}
+
+func (t ConfigReloadTask) TaskType() string { return TaskTypeConfigReload }
+
+func (t ConfigReloadTask) Validate() error {
+	if len(t.Fields) == 0 {
+		return fmt.Errorf("config-reload: at least one field is required")
+	}
+	return nil
+}
+
+func (t ConfigReloadTask) ToTaskRequest() TaskRequest {
+	fields := make(map[string]interface{}, len(t.Fields))
+	for k, v := range t.Fields {
+		fields[k] = v
+	}
+	p := map[string]interface{}{"fields": fields}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// ConfigReloadTaskFromParams reconstructs a ConfigReloadTask from a generic
+// params map.
+func ConfigReloadTaskFromParams(params map[string]interface{}) ConfigReloadTask {
+	var fields map[string]string
+	if raw, ok := params["fields"].(map[string]interface{}); ok {
+		fields = make(map[string]string, len(raw))
+		for k, v := range raw {
+			fields[k], _ = v.(string)
+		}
+	}
+	return ConfigReloadTask{Fields: fields}
 }
