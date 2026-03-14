@@ -334,14 +334,21 @@ func (t ConfigPatchTask) ToTaskRequest() TaskRequest {
 }
 
 // ConfigureStateSyncTask discovers a trust point and configures state sync.
-// No parameters are required; configuration is derived from the peers file.
-type ConfigureStateSyncTask struct{}
+// When UseLocalSnapshot is true, the task uses the locally-restored snapshot
+// height as the trust height and sets use-local-snapshot = true in config.toml.
+type ConfigureStateSyncTask struct {
+	UseLocalSnapshot bool
+}
 
 func (t ConfigureStateSyncTask) TaskType() string { return TaskTypeConfigureStateSync }
 func (t ConfigureStateSyncTask) Validate() error  { return nil }
 
 func (t ConfigureStateSyncTask) ToTaskRequest() TaskRequest {
-	return TaskRequest{Type: t.TaskType()}
+	if !t.UseLocalSnapshot {
+		return TaskRequest{Type: t.TaskType()}
+	}
+	p := map[string]interface{}{"useLocalSnapshot": true}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
 
 // MarkReadyTask signals that bootstrap is complete.

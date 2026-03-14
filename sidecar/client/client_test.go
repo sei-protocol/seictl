@@ -29,7 +29,7 @@ func TestStatus_OK(t *testing.T) {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(StatusResponse{Status: Ready})
+		_ = json.NewEncoder(w).Encode(StatusResponse{Status: Ready})
 	}))
 
 	resp, err := c.Status(context.Background())
@@ -74,7 +74,7 @@ func TestSubmitTask_Accepted(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(TaskSubmitResponse{Id: taskID})
+		_ = json.NewEncoder(w).Encode(TaskSubmitResponse{Id: taskID})
 	}))
 
 	task := SnapshotRestoreTask{
@@ -108,7 +108,7 @@ func TestSubmitTask_Scheduled(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(TaskSubmitResponse{Id: taskID})
+		_ = json.NewEncoder(w).Encode(TaskSubmitResponse{Id: taskID})
 	}))
 
 	id, err := c.SubmitRawTask(context.Background(), TaskRequest{
@@ -127,7 +127,7 @@ func TestSubmitTask_Busy(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "task already running"})
+		_ = json.NewEncoder(w).Encode(ErrorResponse{Error: "task already running"})
 	}))
 
 	_, err := c.SubmitTask(context.Background(), MarkReadyTask{})
@@ -140,7 +140,7 @@ func TestSubmitTask_BadRequest(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "unknown task type"})
+		_ = json.NewEncoder(w).Encode(ErrorResponse{Error: "unknown task type"})
 	}))
 
 	_, err := c.SubmitRawTask(context.Background(), TaskRequest{Type: "invalid"})
@@ -172,7 +172,7 @@ func TestListTasks_OK(t *testing.T) {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]TaskResult{
+		_ = json.NewEncoder(w).Encode([]TaskResult{
 			{Id: uuid.New(), Type: "mark-ready"},
 		})
 	}))
@@ -196,7 +196,7 @@ func TestGetTask_OK(t *testing.T) {
 			t.Errorf("unexpected method: %s", r.Method)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(TaskResult{Id: taskID, Type: "config-patch"})
+		_ = json.NewEncoder(w).Encode(TaskResult{Id: taskID, Type: "config-patch"})
 	}))
 
 	result, err := c.GetTask(context.Background(), taskID)
@@ -212,7 +212,7 @@ func TestGetTask_NotFound(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "not found"})
+		_ = json.NewEncoder(w).Encode(ErrorResponse{Error: "not found"})
 	}))
 
 	_, err := c.GetTask(context.Background(), uuid.New())
@@ -238,7 +238,7 @@ func TestDeleteTask_NotFound(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "not found"})
+		_ = json.NewEncoder(w).Encode(ErrorResponse{Error: "not found"})
 	}))
 
 	err := c.DeleteTask(context.Background(), uuid.New())

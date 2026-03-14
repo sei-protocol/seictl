@@ -25,7 +25,7 @@ var serveCmd = cli.Command{
 		},
 	},
 	Action: func(ctx context.Context, cmd *cli.Command) error {
-		defer seilog.Close()
+		defer func() { _ = seilog.Close() }()
 
 		homeDir := destinations.home
 		if homeDir == "" {

@@ -108,7 +108,7 @@ func TestMarkReadySetsHealthz(t *testing.T) {
 		t.Fatal("healthz should be false before mark-ready")
 	}
 
-	eng.Submit(Task{Type: TaskMarkReady})
+	_, _ = eng.Submit(Task{Type: TaskMarkReady})
 	waitForHealthz(t, eng)
 
 	if !eng.Healthz() {
@@ -126,7 +126,7 @@ func TestHealthzMonotonicity(t *testing.T) {
 	waitForHealthz(t, eng)
 	waitForResult(t, eng, id)
 
-	eng.Submit(Task{Type: TaskConfigPatch})
+	_, _ = eng.Submit(Task{Type: TaskConfigPatch})
 	waitForStatus(t, eng, "Ready")
 
 	if !eng.Healthz() {
@@ -143,7 +143,7 @@ func TestStatusReflectsReady(t *testing.T) {
 		t.Fatalf("expected Initializing initially, got %q", eng.Status().Status)
 	}
 
-	eng.Submit(Task{Type: TaskMarkReady})
+	_, _ = eng.Submit(Task{Type: TaskMarkReady})
 	waitForStatus(t, eng, "Ready")
 
 	if eng.Status().Status != "Ready" {
@@ -164,7 +164,7 @@ func TestStatusReflectsRunning(t *testing.T) {
 		},
 	})
 
-	eng.Submit(Task{Type: TaskConfigPatch})
+	_, _ = eng.Submit(Task{Type: TaskConfigPatch})
 
 	select {
 	case <-started:
@@ -343,7 +343,7 @@ func TestContextCancellationStopsEngine(t *testing.T) {
 		},
 	})
 
-	eng.Submit(Task{Type: TaskConfigPatch})
+	_, _ = eng.Submit(Task{Type: TaskConfigPatch})
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 

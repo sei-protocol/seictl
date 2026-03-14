@@ -208,7 +208,7 @@ func writeArchive(ctx context.Context, wc io.WriteCloser, snapshotsDir string, h
 		if retErr != nil {
 			wc.(*io.PipeWriter).CloseWithError(retErr)
 		} else {
-			wc.Close()
+			_ = wc.Close()
 		}
 	}()
 
@@ -267,7 +267,7 @@ func addDirToTar(ctx context.Context, tw *tar.Writer, dir, base string) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		_, err = io.Copy(tw, f)
 		return err
 	})
@@ -286,7 +286,7 @@ func addFileToTar(tw *tar.Writer, path, name string, info os.FileInfo) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, err = io.Copy(tw, f)
 	return err
 }

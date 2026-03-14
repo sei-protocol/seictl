@@ -68,7 +68,7 @@ func TestHealthzReturns200AfterMarkReady(t *testing.T) {
 	})
 	srv := NewServer(":0", eng)
 
-	eng.Submit(engine.Task{Type: engine.TaskMarkReady})
+	_, _ = eng.Submit(engine.Task{Type: engine.TaskMarkReady})
 	waitForReady(eng)
 
 	rec := serveHTTP(srv, http.MethodGet, "/v0/healthz", "")
@@ -96,7 +96,7 @@ func TestStatusResponse(t *testing.T) {
 		t.Fatalf("expected Initializing initially, got %q", resp.Status)
 	}
 
-	eng.Submit(engine.Task{Type: engine.TaskMarkReady})
+	_, _ = eng.Submit(engine.Task{Type: engine.TaskMarkReady})
 	waitForReady(eng)
 
 	rec = serveHTTP(srv, http.MethodGet, "/v0/status", "")
@@ -236,7 +236,7 @@ func TestListTasksAfterSubmit(t *testing.T) {
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	var resp map[string]string
-	json.NewDecoder(rec.Body).Decode(&resp)
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
 	waitForTaskResult(eng, resp["id"])
 
 	rec = serveHTTP(srv, http.MethodGet, "/v0/tasks", "")
@@ -257,7 +257,7 @@ func TestGetTask(t *testing.T) {
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	var resp map[string]string
-	json.NewDecoder(rec.Body).Decode(&resp)
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
 	id := resp["id"]
 	waitForTaskResult(eng, id)
 
@@ -267,7 +267,7 @@ func TestGetTask(t *testing.T) {
 	}
 
 	var result engine.TaskResult
-	json.NewDecoder(rec.Body).Decode(&result)
+	_ = json.NewDecoder(rec.Body).Decode(&result)
 	if result.ID != id {
 		t.Fatalf("expected ID %q, got %q", id, result.ID)
 	}
@@ -290,7 +290,7 @@ func TestDeleteTask(t *testing.T) {
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	var resp map[string]string
-	json.NewDecoder(rec.Body).Decode(&resp)
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
 	id := resp["id"]
 	waitForTaskResult(eng, id)
 
@@ -313,7 +313,7 @@ func TestDeleteScheduledTask(t *testing.T) {
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","schedule":{"cron":"*/5 * * * *"}}`)
 	var resp map[string]string
-	json.NewDecoder(rec.Body).Decode(&resp)
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
 	id := resp["id"]
 
 	rec = serveHTTP(srv, http.MethodDelete, "/v0/tasks/"+id, "")
