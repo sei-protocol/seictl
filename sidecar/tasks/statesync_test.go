@@ -66,7 +66,7 @@ func TestStateSyncConfigurer_Success(t *testing.T) {
 	}
 
 	configurer := NewStateSyncConfigurer(homeDir, mock)
-	if err := configurer.Configure(context.Background(), false); err != nil {
+	if err := configurer.Configure(context.Background(), StateSyncParams{}); err != nil {
 		t.Fatalf("Configure failed: %v", err)
 	}
 
@@ -101,7 +101,7 @@ func TestStateSyncConfigurer_MarkerSkips(t *testing.T) {
 	}
 
 	configurer := NewStateSyncConfigurer(homeDir, &mockHTTPDoer{})
-	if err := configurer.Configure(context.Background(), false); err != nil {
+	if err := configurer.Configure(context.Background(), StateSyncParams{}); err != nil {
 		t.Fatalf("expected nil error when marker exists, got: %v", err)
 	}
 }
@@ -111,7 +111,7 @@ func TestStateSyncConfigurer_NoPeers(t *testing.T) {
 	setupPeersInConfig(t, homeDir, nil)
 
 	configurer := NewStateSyncConfigurer(homeDir, &mockHTTPDoer{})
-	err := configurer.Configure(context.Background(), false)
+	err := configurer.Configure(context.Background(), StateSyncParams{})
 	if err == nil {
 		t.Fatal("expected error when no peers in config")
 	}
@@ -134,7 +134,7 @@ func TestStateSyncConfigurer_LowHeight(t *testing.T) {
 	}
 
 	configurer := NewStateSyncConfigurer(homeDir, mock)
-	if err := configurer.Configure(context.Background(), false); err != nil {
+	if err := configurer.Configure(context.Background(), StateSyncParams{}); err != nil {
 		t.Fatalf("Configure failed: %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestStateSyncConfigurer_InvalidBlockHash(t *testing.T) {
 			}
 
 			configurer := NewStateSyncConfigurer(homeDir, mock)
-			err := configurer.Configure(context.Background(), false)
+			err := configurer.Configure(context.Background(), StateSyncParams{})
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -281,6 +281,44 @@ func TestStateSyncConfigurer_Handler(t *testing.T) {
 	}
 }
 
+func TestStateSyncConfigurer_NetworkWithBackfill(t *testing.T) {
+	homeDir := t.TempDir()
+	setupPeersInConfig(t, homeDir, []string{"nodeId1@1.2.3.4:26656", "nodeId2@5.6.7.8:26656"})
+
+	hash := generateBlockHash()
+	mock := &mockHTTPDoer{
+		responses: map[string]*http.Response{
+			"http://1.2.3.4:26657/status": jsonResponse(`{
+				"sync_info": {"latest_block_height": "10000"}
+			}`),
+			"http://1.2.3.4:26657/block?height=8000": jsonResponse(fmt.Sprintf(`{
+				"block_id": {"hash": %q}
+			}`, hash)),
+		},
+	}
+
+	configurer := NewStateSyncConfigurer(homeDir, mock)
+	err := configurer.Configure(context.Background(), StateSyncParams{
+		TrustPeriod:    "168h0m0s",
+		BackfillBlocks: 6000,
+	})
+	if err != nil {
+		t.Fatalf("Configure failed: %v", err)
+	}
+
+	configDoc := readTOML(t, filepath.Join(homeDir, "config", "config.toml"))
+	ss := configDoc["statesync"].(map[string]any)
+	if ss["trust-period"] != "168h0m0s" {
+		t.Errorf("expected trust-period = 168h0m0s, got %v", ss["trust-period"])
+	}
+	if ss["backfill-blocks"] != int64(6000) {
+		t.Errorf("expected backfill-blocks = 6000, got %v", ss["backfill-blocks"])
+	}
+	if ss["use-local-snapshot"] != false {
+		t.Errorf("expected use-local-snapshot = false, got %v", ss["use-local-snapshot"])
+	}
+}
+
 func TestStateSyncConfigurer_LocalSnapshot(t *testing.T) {
 	homeDir := t.TempDir()
 	setupPeersInConfig(t, homeDir, []string{"nodeId1@1.2.3.4:26656", "nodeId2@5.6.7.8:26656"})
@@ -301,7 +339,12 @@ func TestStateSyncConfigurer_LocalSnapshot(t *testing.T) {
 	}
 
 	configurer := NewStateSyncConfigurer(homeDir, mock)
-	if err := configurer.Configure(context.Background(), true); err != nil {
+	err := configurer.Configure(context.Background(), StateSyncParams{
+		UseLocalSnapshot: true,
+		TrustPeriod:      "9999h0m0s",
+		BackfillBlocks:   0,
+	})
+	if err != nil {
 		t.Fatalf("Configure with local snapshot failed: %v", err)
 	}
 
@@ -317,6 +360,9 @@ func TestStateSyncConfigurer_LocalSnapshot(t *testing.T) {
 	if ss["use-local-snapshot"] != true {
 		t.Errorf("expected use-local-snapshot = true, got %v", ss["use-local-snapshot"])
 	}
+	if ss["trust-period"] != "9999h0m0s" {
+		t.Errorf("expected trust-period = 9999h0m0s, got %v", ss["trust-period"])
+	}
 	if ss["enable"] != true {
 		t.Error("expected statesync.enable = true")
 	}
@@ -327,7 +373,7 @@ func TestStateSyncConfigurer_LocalSnapshotNoDir(t *testing.T) {
 	setupPeersInConfig(t, homeDir, []string{"nodeId1@1.2.3.4:26656"})
 
 	configurer := NewStateSyncConfigurer(homeDir, &mockHTTPDoer{})
-	err := configurer.Configure(context.Background(), true)
+	err := configurer.Configure(context.Background(), StateSyncParams{UseLocalSnapshot: true})
 	if err == nil {
 		t.Fatal("expected error when no snapshot directory exists")
 	}
