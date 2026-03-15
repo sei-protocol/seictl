@@ -13,21 +13,24 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 )
 
-// mockTransferClient implements S3TransferClient for testing.
-// responses maps S3 object keys to their body bytes.
-// If a key is not in responses, errDefault is returned.
+// mockTransferClient implements S3TransferClient via DownloadObject.
+// It maps S3 object keys to their body bytes and writes them to the
+// provided WriterAt.
 type mockTransferClient struct {
 	responses  map[string][]byte
 	errDefault error
 }
 
-func (m *mockTransferClient) GetObject(_ context.Context, in *transfermanager.GetObjectInput, _ ...func(*transfermanager.Options)) (*transfermanager.GetObjectOutput, error) {
+func (m *mockTransferClient) DownloadObject(_ context.Context, in *transfermanager.DownloadObjectInput, _ ...func(*transfermanager.Options)) (*transfermanager.DownloadObjectOutput, error) {
 	key := ""
 	if in.Key != nil {
 		key = *in.Key
 	}
 	if body, ok := m.responses[key]; ok {
-		return &transfermanager.GetObjectOutput{Body: bytes.NewReader(body)}, nil
+		if _, err := in.WriterAt.WriteAt(body, 0); err != nil {
+			return nil, fmt.Errorf("writing to WriterAt: %w", err)
+		}
+		return &transfermanager.DownloadObjectOutput{}, nil
 	}
 	if m.errDefault != nil {
 		return nil, m.errDefault
@@ -35,7 +38,7 @@ func (m *mockTransferClient) GetObject(_ context.Context, in *transfermanager.Ge
 	return nil, fmt.Errorf("unexpected key: %s", key)
 }
 
-func mockTransferFactory(client S3TransferClient) S3TransferClientFactory {
+func mockFactory(client S3TransferClient) S3TransferClientFactory {
 	return func(_ context.Context, _ string) (S3TransferClient, error) {
 		return client, nil
 	}
@@ -81,7 +84,7 @@ func TestSnapshotRestoreExtractsArchive(t *testing.T) {
 			"snapshots/snapshot_100000000_testchain_us-east-1.tar.gz": archive,
 		},
 	}
-	restorer := NewSnapshotRestorer(homeDir, mockTransferFactory(client))
+	restorer := NewSnapshotRestorer(homeDir, mockFactory(client))
 	err := restorer.Restore(context.Background(), SnapshotConfig{
 		Bucket:  "test-bucket",
 		Prefix:  "snapshots/",
@@ -112,13 +115,11 @@ func TestSnapshotRestoreExtractsArchive(t *testing.T) {
 func TestSnapshotRestoreSkipsWhenMarkerExists(t *testing.T) {
 	homeDir := t.TempDir()
 
-	// Pre-create the marker file.
 	if err := writeMarker(homeDir, snapshotMarkerFile); err != nil {
 		t.Fatalf("writing marker: %v", err)
 	}
 
-	// S3 client that would fail if called — proves we skip the download.
-	restorer := NewSnapshotRestorer(homeDir, mockTransferFactory(&mockTransferClient{
+	restorer := NewSnapshotRestorer(homeDir, mockFactory(&mockTransferClient{
 		errDefault: fmt.Errorf("should not be called"),
 	}))
 
@@ -136,7 +137,7 @@ func TestSnapshotRestoreSkipsWhenMarkerExists(t *testing.T) {
 func TestSnapshotRestoreNoMarkerOnLatestTxtError(t *testing.T) {
 	homeDir := t.TempDir()
 
-	restorer := NewSnapshotRestorer(homeDir, mockTransferFactory(&mockTransferClient{
+	restorer := NewSnapshotRestorer(homeDir, mockFactory(&mockTransferClient{
 		errDefault: fmt.Errorf("access denied"),
 	}))
 
@@ -164,7 +165,7 @@ func TestSnapshotRestoreNoMarkerOnDownloadError(t *testing.T) {
 		},
 		errDefault: fmt.Errorf("access denied"),
 	}
-	restorer := NewSnapshotRestorer(homeDir, mockTransferFactory(client))
+	restorer := NewSnapshotRestorer(homeDir, mockFactory(client))
 
 	err := restorer.Restore(context.Background(), SnapshotConfig{
 		Bucket:  "test-bucket",
@@ -193,7 +194,7 @@ func TestSnapshotRestoreRejectsPathTraversal(t *testing.T) {
 			"snapshots/snapshot_100000000_testchain_us-east-1.tar.gz": archive,
 		},
 	}
-	restorer := NewSnapshotRestorer(homeDir, mockTransferFactory(client))
+	restorer := NewSnapshotRestorer(homeDir, mockFactory(client))
 	err := restorer.Restore(context.Background(), SnapshotConfig{
 		Bucket:  "test-bucket",
 		Prefix:  "snapshots/",
@@ -202,6 +203,42 @@ func TestSnapshotRestoreRejectsPathTraversal(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for path traversal attempt")
+	}
+}
+
+func TestSnapshotRestoreCleansUpTempFile(t *testing.T) {
+	homeDir := t.TempDir()
+	archive := buildTarGzArchive(t, map[string]string{
+		"data/chain.db": "chaindata",
+	})
+
+	client := &mockTransferClient{
+		responses: map[string][]byte{
+			"snapshots/latest.txt": []byte("100000000"),
+			"snapshots/snapshot_100000000_testchain_us-east-1.tar.gz": archive,
+		},
+	}
+
+	restorer := NewSnapshotRestorer(homeDir, mockFactory(client))
+	err := restorer.Restore(context.Background(), SnapshotConfig{
+		Bucket:  "test-bucket",
+		Prefix:  "snapshots/",
+		Region:  "us-east-1",
+		ChainID: "testchain",
+	})
+	if err != nil {
+		t.Fatalf("Restore failed: %v", err)
+	}
+
+	tmpDir := filepath.Join(homeDir, "tmp")
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("reading tmp dir: %v", err)
+	}
+	for _, e := range entries {
+		if matched, _ := filepath.Match("snapshot-*.tar.gz", e.Name()); matched {
+			t.Fatalf("temp file %s was not cleaned up", e.Name())
+		}
 	}
 }
 
