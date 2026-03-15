@@ -101,7 +101,7 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 	if err != nil {
 		return fmt.Errorf("s3 GetObject %s: %w", snapshotKey, err)
 	}
-	defer output.Body.Close()
+	defer func() { _ = output.Body.Close() }()
 
 	snapshotDir := filepath.Join(r.homeDir, "data", "snapshots")
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
@@ -126,7 +126,7 @@ func resolveSnapshotKey(ctx context.Context, s3Client S3GetObjectAPI, cfg Snapsh
 	if err != nil {
 		return "", fmt.Errorf("reading latest.txt: %w", err)
 	}
-	defer out.Body.Close()
+	defer func() { _ = out.Body.Close() }()
 
 	data, err := io.ReadAll(out.Body)
 	if err != nil {
@@ -173,7 +173,7 @@ func extractTarStream(ctx context.Context, r io.Reader, destDir string) error {
 	if err != nil {
 		return fmt.Errorf("creating gzip reader: %w", err)
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }()
 	tr := tar.NewReader(gzr)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -227,7 +227,7 @@ func extractFile(r io.Reader, path string, mode os.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("creating file %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := io.Copy(f, r); err != nil {
 		return fmt.Errorf("writing file %s: %w", path, err)

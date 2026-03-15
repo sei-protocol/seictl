@@ -24,7 +24,7 @@ func newMockS3Uploader() *mockS3Uploader {
 func (m *mockS3Uploader) UploadObject(_ context.Context, input *transfermanager.UploadObjectInput, _ ...func(*transfermanager.Options)) (*transfermanager.UploadObjectOutput, error) {
 	var buf bytes.Buffer
 	if input.Body != nil {
-		io.Copy(&buf, input.Body)
+		_, _ = io.Copy(&buf, input.Body)
 	}
 	key := *input.Bucket + "/" + *input.Key
 	m.uploads[key] = buf.Bytes()
@@ -128,7 +128,7 @@ func TestUpload_SkipsWhenAlreadyUploaded(t *testing.T) {
 
 	state := uploadState{LastUploadedHeight: 1000}
 	data, _ := json.Marshal(state)
-	os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
+	_ = os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
 	mock := newMockS3Uploader()
 	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))
@@ -153,7 +153,7 @@ func TestUpload_UploadsNewerSnapshot(t *testing.T) {
 
 	state := uploadState{LastUploadedHeight: 1000}
 	data, _ := json.Marshal(state)
-	os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
+	_ = os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
 	mock := newMockS3Uploader()
 	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))

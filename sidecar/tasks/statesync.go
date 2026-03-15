@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,9 +27,10 @@ const (
 
 // StateSyncConfig holds the trust point and RPC servers for Tendermint state sync.
 type StateSyncConfig struct {
-	TrustHeight int64
-	TrustHash   string
-	RpcServers  string
+	TrustHeight      int64
+	TrustHash        string
+	RpcServers       string
+	UseLocalSnapshot bool
 }
 
 // HTTPDoer abstracts HTTP requests for testability.
@@ -51,14 +54,17 @@ func NewStateSyncConfigurer(homeDir string, client HTTPDoer) *StateSyncConfigure
 
 // Handler returns an engine.TaskHandler.
 func (s *StateSyncConfigurer) Handler() engine.TaskHandler {
-	return func(ctx context.Context, _ map[string]any) error {
-		return s.Configure(ctx)
+	return func(ctx context.Context, params map[string]any) error {
+		useLocal, _ := params["useLocalSnapshot"].(bool)
+		return s.Configure(ctx, useLocal)
 	}
 }
 
 // Configure reads persistent-peers from config.toml, queries a peer for a
 // trust point, and writes the state sync settings back to config.toml.
-func (s *StateSyncConfigurer) Configure(ctx context.Context) error {
+// When useLocalSnapshot is true, the trust height is derived from the
+// locally-restored snapshot and use-local-snapshot is set in config.toml.
+func (s *StateSyncConfigurer) Configure(ctx context.Context, useLocalSnapshot bool) error {
 	if markerExists(s.homeDir, stateSyncMarkerFile) {
 		ssLog.Debug("already completed, skipping")
 		return nil
@@ -78,24 +84,32 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context) error {
 		return fmt.Errorf("configure-state-sync: could not extract RPC hosts from peers")
 	}
 
-	ssLog.Info("querying latest height", "host", rpcHosts[0])
-	latestHeight, err := s.queryLatestHeight(ctx, rpcHosts[0])
-	if err != nil {
-		return fmt.Errorf("configure-state-sync: querying latest height: %w", err)
+	var trustHeight int64
+	if useLocalSnapshot {
+		h, err := discoverLocalSnapshotHeight(s.homeDir)
+		if err != nil {
+			return fmt.Errorf("configure-state-sync: discovering local snapshot height: %w", err)
+		}
+		trustHeight = h
+		ssLog.Info("using local snapshot height as trust height", "height", trustHeight)
+	} else {
+		ssLog.Info("querying latest height", "host", rpcHosts[0])
+		latestHeight, err := s.queryLatestHeight(ctx, rpcHosts[0])
+		if err != nil {
+			return fmt.Errorf("configure-state-sync: querying latest height: %w", err)
+		}
+		trustHeight = latestHeight - trustHeightOffset
+		if trustHeight < 1 {
+			trustHeight = 1
+		}
 	}
 
-	trustHeight := latestHeight - trustHeightOffset
-	if trustHeight < 1 {
-		trustHeight = 1
-	}
-
-	ssLog.Info("querying trust hash", "trust-height", trustHeight, "latest-height", latestHeight)
+	ssLog.Info("querying trust hash", "trust-height", trustHeight, "host", rpcHosts[0])
 	trustHash, err := s.queryBlockHash(ctx, rpcHosts[0], trustHeight)
 	if err != nil {
 		return fmt.Errorf("configure-state-sync: querying block hash at height %d: %w", trustHeight, err)
 	}
 
-	// Tendermint requires at least two comma-separated RPC servers for state sync.
 	for len(rpcHosts) < 2 {
 		rpcHosts = append(rpcHosts, rpcHosts[0])
 	}
@@ -105,17 +119,49 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context) error {
 	}
 
 	cfg := StateSyncConfig{
-		TrustHeight: trustHeight,
-		TrustHash:   trustHash,
-		RpcServers:  strings.Join(rpcServers, ","),
+		TrustHeight:      trustHeight,
+		TrustHash:        trustHash,
+		RpcServers:       strings.Join(rpcServers, ","),
+		UseLocalSnapshot: useLocalSnapshot,
 	}
 
-	ssLog.Info("writing config", "trust-height", trustHeight, "trust-hash", trustHash, "rpc-servers", cfg.RpcServers)
+	ssLog.Info("writing config", "trust-height", trustHeight, "trust-hash", trustHash,
+		"rpc-servers", cfg.RpcServers, "use-local-snapshot", useLocalSnapshot)
 	if err := writeStateSyncToConfig(s.homeDir, cfg); err != nil {
 		return fmt.Errorf("configure-state-sync: writing config.toml: %w", err)
 	}
 
 	return writeMarker(s.homeDir, stateSyncMarkerFile)
+}
+
+// discoverLocalSnapshotHeight scans the Tendermint snapshots directory for the
+// highest available snapshot height. Snapshots are stored as
+// <home>/data/snapshots/<height>/<format>/.
+func discoverLocalSnapshotHeight(homeDir string) (int64, error) {
+	snapshotDir := filepath.Join(homeDir, "data", "snapshots")
+	entries, err := os.ReadDir(snapshotDir)
+	if err != nil {
+		return 0, fmt.Errorf("reading snapshots directory: %w", err)
+	}
+
+	var maxHeight int64
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		h, err := strconv.ParseInt(e.Name(), 10, 64)
+		if err != nil {
+			continue
+		}
+		if h > maxHeight {
+			maxHeight = h
+		}
+	}
+
+	if maxHeight == 0 {
+		return 0, fmt.Errorf("no snapshot found in %s", snapshotDir)
+	}
+	return maxHeight, nil
 }
 
 // extractRPCHosts extracts up to maxHosts host addresses from peer strings
@@ -193,7 +239,7 @@ func (s *StateSyncConfigurer) doGet(ctx context.Context, url string) ([]byte, er
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -207,10 +253,11 @@ func writeStateSyncToConfig(homeDir string, cfg StateSyncConfig) error {
 	configPath := filepath.Join(homeDir, "config", "config.toml")
 	ssPatch := map[string]any{
 		"statesync": map[string]any{
-			"enable":       true,
-			"trust-height": cfg.TrustHeight,
-			"trust-hash":   cfg.TrustHash,
-			"rpc-servers":  cfg.RpcServers,
+			"enable":             true,
+			"trust-height":       cfg.TrustHeight,
+			"trust-hash":         cfg.TrustHash,
+			"rpc-servers":        cfg.RpcServers,
+			"use-local-snapshot": cfg.UseLocalSnapshot,
 		},
 	}
 	return mergeAndWrite(configPath, ssPatch)

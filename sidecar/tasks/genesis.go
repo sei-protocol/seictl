@@ -74,7 +74,7 @@ func (g *GenesisFetcher) Fetch(ctx context.Context, cfg GenesisS3Config) error {
 	if err != nil {
 		return fmt.Errorf("s3 GetObject %s/%s: %w", cfg.Bucket, cfg.Key, err)
 	}
-	defer output.Body.Close()
+	defer func() { _ = output.Body.Close() }()
 
 	destDir := filepath.Join(g.homeDir, "config")
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -86,7 +86,7 @@ func (g *GenesisFetcher) Fetch(ctx context.Context, cfg GenesisS3Config) error {
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", destPath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := io.Copy(f, output.Body); err != nil {
 		return fmt.Errorf("writing %s: %w", destPath, err)
