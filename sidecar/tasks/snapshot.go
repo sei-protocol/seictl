@@ -12,6 +12,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seilog"
@@ -38,6 +39,26 @@ func DefaultS3ClientFactory(ctx context.Context, region string) (S3GetObjectAPI,
 	return s3.NewFromConfig(cfg), nil
 }
 
+// S3TransferClient abstracts the transfer manager GetObject call for testing.
+// The transfer manager's GetObject downloads byte ranges in parallel and
+// reassembles them into a sequential io.Reader, giving us parallel throughput
+// with a streaming API.
+type S3TransferClient interface {
+	GetObject(ctx context.Context, input *transfermanager.GetObjectInput, opts ...func(*transfermanager.Options)) (*transfermanager.GetObjectOutput, error)
+}
+
+// S3TransferClientFactory builds an S3TransferClient for a given region.
+type S3TransferClientFactory func(ctx context.Context, region string) (S3TransferClient, error)
+
+// DefaultS3TransferClientFactory creates a transfermanager.Client backed by a real S3 client.
+func DefaultS3TransferClientFactory(ctx context.Context, region string) (S3TransferClient, error) {
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	if err != nil {
+		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+	return transfermanager.New(s3.NewFromConfig(cfg)), nil
+}
+
 // SnapshotConfig holds S3 coordinates for snapshot download.
 type SnapshotConfig struct {
 	Bucket  string
@@ -48,18 +69,18 @@ type SnapshotConfig struct {
 
 // SnapshotRestorer downloads and extracts a snapshot archive from S3.
 type SnapshotRestorer struct {
-	homeDir         string
-	s3ClientFactory S3ClientFactory
+	homeDir                 string
+	s3TransferClientFactory S3TransferClientFactory
 }
 
 // NewSnapshotRestorer creates a restorer targeting the given home directory.
-func NewSnapshotRestorer(homeDir string, factory S3ClientFactory) *SnapshotRestorer {
+func NewSnapshotRestorer(homeDir string, factory S3TransferClientFactory) *SnapshotRestorer {
 	if factory == nil {
-		factory = DefaultS3ClientFactory
+		factory = DefaultS3TransferClientFactory
 	}
 	return &SnapshotRestorer{
-		homeDir:         homeDir,
-		s3ClientFactory: factory,
+		homeDir:                 homeDir,
+		s3TransferClientFactory: factory,
 	}
 }
 
@@ -77,31 +98,32 @@ func (r *SnapshotRestorer) Handler() engine.TaskHandler {
 
 // Restore downloads and extracts the snapshot, skipping if the marker file exists.
 // It reads latest.txt from the prefix to resolve the current snapshot object key.
+// The transfer manager downloads byte ranges in parallel behind the scenes,
+// presenting the data as a sequential io.Reader for streaming extraction.
 func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) error {
 	if markerExists(r.homeDir, snapshotMarkerFile) {
 		restoreLog.Debug("already completed, skipping")
 		return nil
 	}
 
-	s3Client, err := r.s3ClientFactory(ctx, cfg.Region)
+	tmClient, err := r.s3TransferClientFactory(ctx, cfg.Region)
 	if err != nil {
-		return fmt.Errorf("building S3 client: %w", err)
+		return fmt.Errorf("building S3 transfer client: %w", err)
 	}
 
-	snapshotKey, err := resolveSnapshotKey(ctx, s3Client, cfg)
+	snapshotKey, err := resolveSnapshotKey(ctx, tmClient, cfg)
 	if err != nil {
 		return err
 	}
 
 	restoreLog.Info("downloading snapshot", "bucket", cfg.Bucket, "key", snapshotKey)
-	output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+	output, err := tmClient.GetObject(ctx, &transfermanager.GetObjectInput{
 		Bucket: aws.String(cfg.Bucket),
 		Key:    aws.String(snapshotKey),
 	})
 	if err != nil {
 		return fmt.Errorf("s3 GetObject %s: %w", snapshotKey, err)
 	}
-	defer func() { _ = output.Body.Close() }()
 
 	snapshotDir := filepath.Join(r.homeDir, "data", "snapshots")
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
@@ -118,15 +140,14 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 }
 
 // resolveSnapshotKey reads <prefix>latest.txt to find the current snapshot object key.
-func resolveSnapshotKey(ctx context.Context, s3Client S3GetObjectAPI, cfg SnapshotConfig) (string, error) {
-	out, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+func resolveSnapshotKey(ctx context.Context, tmClient S3TransferClient, cfg SnapshotConfig) (string, error) {
+	out, err := tmClient.GetObject(ctx, &transfermanager.GetObjectInput{
 		Bucket: aws.String(cfg.Bucket),
 		Key:    aws.String(cfg.Prefix + "latest.txt"),
 	})
 	if err != nil {
 		return "", fmt.Errorf("reading latest.txt: %w", err)
 	}
-	defer func() { _ = out.Body.Close() }()
 
 	data, err := io.ReadAll(out.Body)
 	if err != nil {
