@@ -29,8 +29,10 @@ const (
 type StateSyncConfig struct {
 	TrustHeight      int64
 	TrustHash        string
+	TrustPeriod      string
 	RpcServers       string
 	UseLocalSnapshot bool
+	BackfillBlocks   int64
 }
 
 // HTTPDoer abstracts HTTP requests for testability.
@@ -56,15 +58,34 @@ func NewStateSyncConfigurer(homeDir string, client HTTPDoer) *StateSyncConfigure
 func (s *StateSyncConfigurer) Handler() engine.TaskHandler {
 	return func(ctx context.Context, params map[string]any) error {
 		useLocal, _ := params["useLocalSnapshot"].(bool)
-		return s.Configure(ctx, useLocal)
+		trustPeriod, _ := params["trustPeriod"].(string)
+		var backfill int64
+		switch v := params["backfillBlocks"].(type) {
+		case float64:
+			backfill = int64(v)
+		case int64:
+			backfill = v
+		}
+		return s.Configure(ctx, StateSyncParams{
+			UseLocalSnapshot: useLocal,
+			TrustPeriod:      trustPeriod,
+			BackfillBlocks:   backfill,
+		})
 	}
+}
+
+// StateSyncParams groups the caller-provided parameters for state-sync configuration.
+type StateSyncParams struct {
+	UseLocalSnapshot bool
+	TrustPeriod      string
+	BackfillBlocks   int64
 }
 
 // Configure reads persistent-peers from config.toml, queries a peer for a
 // trust point, and writes the state sync settings back to config.toml.
-// When useLocalSnapshot is true, the trust height is derived from the
+// When UseLocalSnapshot is true, the trust height is derived from the
 // locally-restored snapshot and use-local-snapshot is set in config.toml.
-func (s *StateSyncConfigurer) Configure(ctx context.Context, useLocalSnapshot bool) error {
+func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncParams) error {
 	if markerExists(s.homeDir, stateSyncMarkerFile) {
 		ssLog.Debug("already completed, skipping")
 		return nil
@@ -85,7 +106,7 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context, useLocalSnapshot bo
 	}
 
 	var trustHeight int64
-	if useLocalSnapshot {
+	if p.UseLocalSnapshot {
 		h, err := discoverLocalSnapshotHeight(s.homeDir)
 		if err != nil {
 			return fmt.Errorf("configure-state-sync: discovering local snapshot height: %w", err)
@@ -121,12 +142,15 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context, useLocalSnapshot bo
 	cfg := StateSyncConfig{
 		TrustHeight:      trustHeight,
 		TrustHash:        trustHash,
+		TrustPeriod:      p.TrustPeriod,
 		RpcServers:       strings.Join(rpcServers, ","),
-		UseLocalSnapshot: useLocalSnapshot,
+		UseLocalSnapshot: p.UseLocalSnapshot,
+		BackfillBlocks:   p.BackfillBlocks,
 	}
 
 	ssLog.Info("writing config", "trust-height", trustHeight, "trust-hash", trustHash,
-		"rpc-servers", cfg.RpcServers, "use-local-snapshot", useLocalSnapshot)
+		"trust-period", p.TrustPeriod, "rpc-servers", cfg.RpcServers,
+		"use-local-snapshot", p.UseLocalSnapshot, "backfill-blocks", p.BackfillBlocks)
 	if err := writeStateSyncToConfig(s.homeDir, cfg); err != nil {
 		return fmt.Errorf("configure-state-sync: writing config.toml: %w", err)
 	}
@@ -251,16 +275,20 @@ func (s *StateSyncConfigurer) doGet(ctx context.Context, url string) ([]byte, er
 
 func writeStateSyncToConfig(homeDir string, cfg StateSyncConfig) error {
 	configPath := filepath.Join(homeDir, "config", "config.toml")
-	ssPatch := map[string]any{
-		"statesync": map[string]any{
-			"enable":             true,
-			"trust-height":       cfg.TrustHeight,
-			"trust-hash":         cfg.TrustHash,
-			"rpc-servers":        cfg.RpcServers,
-			"use-local-snapshot": cfg.UseLocalSnapshot,
-		},
+	ss := map[string]any{
+		"enable":             true,
+		"trust-height":       cfg.TrustHeight,
+		"trust-hash":         cfg.TrustHash,
+		"rpc-servers":        cfg.RpcServers,
+		"use-local-snapshot": cfg.UseLocalSnapshot,
 	}
-	return mergeAndWrite(configPath, ssPatch)
+	if cfg.TrustPeriod != "" {
+		ss["trust-period"] = cfg.TrustPeriod
+	}
+	if cfg.BackfillBlocks > 0 {
+		ss["backfill-blocks"] = cfg.BackfillBlocks
+	}
+	return mergeAndWrite(configPath, map[string]any{"statesync": ss})
 }
 
 // readPeersFromConfig reads the persistent-peers value from config.toml and

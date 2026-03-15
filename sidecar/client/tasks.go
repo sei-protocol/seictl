@@ -338,16 +338,27 @@ func (t ConfigPatchTask) ToTaskRequest() TaskRequest {
 // height as the trust height and sets use-local-snapshot = true in config.toml.
 type ConfigureStateSyncTask struct {
 	UseLocalSnapshot bool
+	TrustPeriod      string
+	BackfillBlocks   int64
 }
 
 func (t ConfigureStateSyncTask) TaskType() string { return TaskTypeConfigureStateSync }
 func (t ConfigureStateSyncTask) Validate() error  { return nil }
 
 func (t ConfigureStateSyncTask) ToTaskRequest() TaskRequest {
-	if !t.UseLocalSnapshot {
+	p := map[string]interface{}{}
+	if t.UseLocalSnapshot {
+		p["useLocalSnapshot"] = true
+	}
+	if t.TrustPeriod != "" {
+		p["trustPeriod"] = t.TrustPeriod
+	}
+	if t.BackfillBlocks > 0 {
+		p["backfillBlocks"] = t.BackfillBlocks
+	}
+	if len(p) == 0 {
 		return TaskRequest{Type: t.TaskType()}
 	}
-	p := map[string]interface{}{"useLocalSnapshot": true}
 	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
 
