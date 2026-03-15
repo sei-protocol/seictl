@@ -6,29 +6,28 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 )
 
-// mockS3Client implements S3GetObjectAPI for testing.
+// mockTransferClient implements S3TransferClient for testing.
 // responses maps S3 object keys to their body bytes.
 // If a key is not in responses, errDefault is returned.
-type mockS3Client struct {
+type mockTransferClient struct {
 	responses  map[string][]byte
 	errDefault error
 }
 
-func (m *mockS3Client) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+func (m *mockTransferClient) GetObject(_ context.Context, in *transfermanager.GetObjectInput, _ ...func(*transfermanager.Options)) (*transfermanager.GetObjectOutput, error) {
 	key := ""
 	if in.Key != nil {
 		key = *in.Key
 	}
 	if body, ok := m.responses[key]; ok {
-		return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(body))}, nil
+		return &transfermanager.GetObjectOutput{Body: bytes.NewReader(body)}, nil
 	}
 	if m.errDefault != nil {
 		return nil, m.errDefault
@@ -36,8 +35,8 @@ func (m *mockS3Client) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...
 	return nil, fmt.Errorf("unexpected key: %s", key)
 }
 
-func mockS3Factory(client S3GetObjectAPI) S3ClientFactory {
-	return func(_ context.Context, _ string) (S3GetObjectAPI, error) {
+func mockTransferFactory(client S3TransferClient) S3TransferClientFactory {
+	return func(_ context.Context, _ string) (S3TransferClient, error) {
 		return client, nil
 	}
 }
@@ -76,13 +75,13 @@ func TestSnapshotRestoreExtractsArchive(t *testing.T) {
 		"config.toml":   "[p2p]\npersistent_peers = \"\"",
 	})
 
-	client := &mockS3Client{
+	client := &mockTransferClient{
 		responses: map[string][]byte{
 			"snapshots/latest.txt": []byte("100000000"),
 			"snapshots/snapshot_100000000_testchain_us-east-1.tar.gz": archive,
 		},
 	}
-	restorer := NewSnapshotRestorer(homeDir, mockS3Factory(client))
+	restorer := NewSnapshotRestorer(homeDir, mockTransferFactory(client))
 	err := restorer.Restore(context.Background(), SnapshotConfig{
 		Bucket:  "test-bucket",
 		Prefix:  "snapshots/",
@@ -119,7 +118,7 @@ func TestSnapshotRestoreSkipsWhenMarkerExists(t *testing.T) {
 	}
 
 	// S3 client that would fail if called — proves we skip the download.
-	restorer := NewSnapshotRestorer(homeDir, mockS3Factory(&mockS3Client{
+	restorer := NewSnapshotRestorer(homeDir, mockTransferFactory(&mockTransferClient{
 		errDefault: fmt.Errorf("should not be called"),
 	}))
 
@@ -137,7 +136,7 @@ func TestSnapshotRestoreSkipsWhenMarkerExists(t *testing.T) {
 func TestSnapshotRestoreNoMarkerOnLatestTxtError(t *testing.T) {
 	homeDir := t.TempDir()
 
-	restorer := NewSnapshotRestorer(homeDir, mockS3Factory(&mockS3Client{
+	restorer := NewSnapshotRestorer(homeDir, mockTransferFactory(&mockTransferClient{
 		errDefault: fmt.Errorf("access denied"),
 	}))
 
@@ -159,13 +158,13 @@ func TestSnapshotRestoreNoMarkerOnLatestTxtError(t *testing.T) {
 func TestSnapshotRestoreNoMarkerOnDownloadError(t *testing.T) {
 	homeDir := t.TempDir()
 
-	client := &mockS3Client{
+	client := &mockTransferClient{
 		responses: map[string][]byte{
 			"snapshots/latest.txt": []byte("100000000"),
 		},
 		errDefault: fmt.Errorf("access denied"),
 	}
-	restorer := NewSnapshotRestorer(homeDir, mockS3Factory(client))
+	restorer := NewSnapshotRestorer(homeDir, mockTransferFactory(client))
 
 	err := restorer.Restore(context.Background(), SnapshotConfig{
 		Bucket:  "test-bucket",
@@ -188,13 +187,13 @@ func TestSnapshotRestoreRejectsPathTraversal(t *testing.T) {
 		"../../etc/passwd": "malicious",
 	})
 
-	client := &mockS3Client{
+	client := &mockTransferClient{
 		responses: map[string][]byte{
 			"snapshots/latest.txt": []byte("100000000"),
 			"snapshots/snapshot_100000000_testchain_us-east-1.tar.gz": archive,
 		},
 	}
-	restorer := NewSnapshotRestorer(homeDir, mockS3Factory(client))
+	restorer := NewSnapshotRestorer(homeDir, mockTransferFactory(client))
 	err := restorer.Restore(context.Background(), SnapshotConfig{
 		Bucket:  "test-bucket",
 		Prefix:  "snapshots/",
