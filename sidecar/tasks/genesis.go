@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seilog"
@@ -18,6 +19,23 @@ import (
 var genesisLog = seilog.NewLogger("seictl", "task", "genesis")
 
 const genesisMarkerFile = ".sei-sidecar-genesis-done"
+
+// S3GetObjectAPI abstracts a single-object S3 download for small files.
+type S3GetObjectAPI interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
+// S3ClientFactory builds an S3GetObjectAPI for a given region.
+type S3ClientFactory func(ctx context.Context, region string) (S3GetObjectAPI, error)
+
+// DefaultS3ClientFactory creates a real S3 client using default credentials.
+func DefaultS3ClientFactory(ctx context.Context, region string) (S3GetObjectAPI, error) {
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	if err != nil {
+		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+	return s3.NewFromConfig(cfg), nil
+}
 
 // GenesisS3Config holds S3 coordinates for genesis.json download.
 type GenesisS3Config struct {

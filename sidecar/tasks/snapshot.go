@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -22,35 +23,18 @@ var restoreLog = seilog.NewLogger("seictl", "task", "snapshot-restore")
 
 const snapshotMarkerFile = ".sei-sidecar-snapshot-done"
 
-// S3GetObjectAPI abstracts the S3 GetObject call for testing.
-type S3GetObjectAPI interface {
-	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
-}
-
-// S3ClientFactory builds an S3 client for a given region.
-type S3ClientFactory func(ctx context.Context, region string) (S3GetObjectAPI, error)
-
-// DefaultS3ClientFactory creates a real S3 client using IRSA credentials.
-func DefaultS3ClientFactory(ctx context.Context, region string) (S3GetObjectAPI, error) {
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return nil, fmt.Errorf("loading AWS config: %w", err)
-	}
-	return s3.NewFromConfig(cfg), nil
-}
-
-// S3TransferClient abstracts the transfer manager GetObject call for testing.
-// The transfer manager's GetObject downloads byte ranges in parallel and
-// reassembles them into a sequential io.Reader, giving us parallel throughput
-// with a streaming API.
+// S3TransferClient abstracts S3 downloads via the transfer manager's
+// DownloadObject API (io.WriterAt path). We avoid the streaming GetObject
+// path whose concurrentReader has a bounds-check bug in v0.1.x.
 type S3TransferClient interface {
-	GetObject(ctx context.Context, input *transfermanager.GetObjectInput, opts ...func(*transfermanager.Options)) (*transfermanager.GetObjectOutput, error)
+	DownloadObject(ctx context.Context, input *transfermanager.DownloadObjectInput, opts ...func(*transfermanager.Options)) (*transfermanager.DownloadObjectOutput, error)
 }
 
 // S3TransferClientFactory builds an S3TransferClient for a given region.
 type S3TransferClientFactory func(ctx context.Context, region string) (S3TransferClient, error)
 
-// DefaultS3TransferClientFactory creates a transfermanager.Client backed by a real S3 client.
+// DefaultS3TransferClientFactory creates a transfermanager.Client backed by a
+// real S3 service client.
 func DefaultS3TransferClientFactory(ctx context.Context, region string) (S3TransferClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
@@ -69,18 +53,19 @@ type SnapshotConfig struct {
 
 // SnapshotRestorer downloads and extracts a snapshot archive from S3.
 type SnapshotRestorer struct {
-	homeDir                 string
-	s3TransferClientFactory S3TransferClientFactory
+	homeDir       string
+	clientFactory S3TransferClientFactory
 }
 
 // NewSnapshotRestorer creates a restorer targeting the given home directory.
+// Pass nil to use the default AWS transfer manager.
 func NewSnapshotRestorer(homeDir string, factory S3TransferClientFactory) *SnapshotRestorer {
 	if factory == nil {
 		factory = DefaultS3TransferClientFactory
 	}
 	return &SnapshotRestorer{
-		homeDir:                 homeDir,
-		s3TransferClientFactory: factory,
+		homeDir:       homeDir,
+		clientFactory: factory,
 	}
 }
 
@@ -97,32 +82,46 @@ func (r *SnapshotRestorer) Handler() engine.TaskHandler {
 }
 
 // Restore downloads and extracts the snapshot, skipping if the marker file exists.
-// It reads latest.txt from the prefix to resolve the current snapshot object key.
-// The transfer manager downloads byte ranges in parallel behind the scenes,
-// presenting the data as a sequential io.Reader for streaming extraction.
+// It reads latest.txt to resolve the current snapshot key, then uses the transfer
+// manager's DownloadObject (io.WriterAt path) for parallel byte-range downloads
+// to a temp file, and finally streams the temp file through gzip+tar extraction.
 func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) error {
 	if markerExists(r.homeDir, snapshotMarkerFile) {
 		restoreLog.Debug("already completed, skipping")
 		return nil
 	}
 
-	tmClient, err := r.s3TransferClientFactory(ctx, cfg.Region)
+	client, err := r.clientFactory(ctx, cfg.Region)
 	if err != nil {
 		return fmt.Errorf("building S3 transfer client: %w", err)
 	}
 
-	snapshotKey, err := resolveSnapshotKey(ctx, tmClient, cfg)
+	snapshotKey, err := resolveSnapshotKey(ctx, client, cfg)
 	if err != nil {
 		return err
 	}
 
-	restoreLog.Info("downloading snapshot", "bucket", cfg.Bucket, "key", snapshotKey)
-	output, err := tmClient.GetObject(ctx, &transfermanager.GetObjectInput{
-		Bucket: aws.String(cfg.Bucket),
-		Key:    aws.String(snapshotKey),
-	})
+	tmpDir := filepath.Join(r.homeDir, "tmp")
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		return fmt.Errorf("creating tmp directory: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(tmpDir, "snapshot-*.tar.gz")
 	if err != nil {
-		return fmt.Errorf("s3 GetObject %s: %w", snapshotKey, err)
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	restoreLog.Info("downloading snapshot", "bucket", cfg.Bucket, "key", snapshotKey, "dest", tmpPath)
+	_, err = client.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
+		Bucket:   aws.String(cfg.Bucket),
+		Key:      aws.String(snapshotKey),
+		WriterAt: tmpFile,
+	})
+	_ = tmpFile.Close()
+	if err != nil {
+		return fmt.Errorf("s3 DownloadObject %s: %w", snapshotKey, err)
 	}
 
 	snapshotDir := filepath.Join(r.homeDir, "data", "snapshots")
@@ -130,8 +129,14 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 		return fmt.Errorf("creating snapshot directory: %w", err)
 	}
 
+	f, err := os.Open(tmpPath)
+	if err != nil {
+		return fmt.Errorf("opening downloaded archive: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
 	restoreLog.Info("extracting archive", "dest", snapshotDir)
-	if err := extractTarStream(ctx, output.Body, snapshotDir); err != nil {
+	if err := extractTarStream(ctx, f, snapshotDir); err != nil {
 		return fmt.Errorf("extracting snapshot: %w", err)
 	}
 
@@ -140,27 +145,22 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 }
 
 // resolveSnapshotKey reads <prefix>latest.txt to find the current snapshot object key.
-func resolveSnapshotKey(ctx context.Context, tmClient S3TransferClient, cfg SnapshotConfig) (string, error) {
-	out, err := tmClient.GetObject(ctx, &transfermanager.GetObjectInput{
-		Bucket: aws.String(cfg.Bucket),
-		Key:    aws.String(cfg.Prefix + "latest.txt"),
+func resolveSnapshotKey(ctx context.Context, client S3TransferClient, cfg SnapshotConfig) (string, error) {
+	var buf writeAtBuffer
+	_, err := client.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
+		Bucket:   aws.String(cfg.Bucket),
+		Key:      aws.String(cfg.Prefix + "latest.txt"),
+		WriterAt: &buf,
 	})
 	if err != nil {
 		return "", fmt.Errorf("reading latest.txt: %w", err)
 	}
 
-	data, err := io.ReadAll(out.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading latest.txt body: %w", err)
-	}
-
-	height := strings.TrimSpace(string(data))
+	height := strings.TrimSpace(string(buf.Bytes()))
 	if height == "" {
 		return "", fmt.Errorf("latest.txt is empty")
 	}
 
-	// Snapshot files follow the naming convention:
-	// snapshot_<height>_<chainId>_<region>.tar.gz
 	filename := fmt.Sprintf("snapshot_%s_%s_%s.tar.gz", height, cfg.ChainID, cfg.Region)
 	return cfg.Prefix + filename, nil
 }
@@ -185,6 +185,32 @@ func parseSnapshotConfig(params map[string]any) (SnapshotConfig, error) {
 	}
 
 	return SnapshotConfig{Bucket: bucket, Prefix: prefix, Region: region, ChainID: chainID}, nil
+}
+
+// writeAtBuffer is a goroutine-safe in-memory io.WriterAt, used for
+// downloading small S3 objects (e.g. latest.txt) via DownloadObject.
+type writeAtBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (w *writeAtBuffer) WriteAt(p []byte, off int64) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	end := int(off) + len(p)
+	if end > len(w.buf) {
+		grown := make([]byte, end)
+		copy(grown, w.buf)
+		w.buf = grown
+	}
+	copy(w.buf[off:], p)
+	return len(p), nil
+}
+
+func (w *writeAtBuffer) Bytes() []byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf
 }
 
 // extractTarStream reads a gzip-compressed tar archive from r and extracts
