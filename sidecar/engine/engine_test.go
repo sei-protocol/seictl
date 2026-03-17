@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -334,6 +335,50 @@ func TestEvalSchedulesFiresDueTasks(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected scheduled task to execute")
 	}
+}
+
+func TestEvalSchedulesSkipsAlreadyRunning(t *testing.T) {
+	started := make(chan struct{})
+	blocked := make(chan struct{})
+	callCount := int32(0)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			atomic.AddInt32(&callCount, 1)
+			started <- struct{}{}
+			<-blocked
+			return nil
+		},
+	})
+
+	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, Schedule{Cron: "* * * * *"})
+
+	eng.mu.Lock()
+	past := time.Now().Add(-1 * time.Minute)
+	eng.scheduled[id].NextRunAt = &past
+	eng.mu.Unlock()
+
+	eng.EvalSchedules()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for task to start")
+	}
+
+	eng.mu.Lock()
+	past2 := time.Now().Add(-1 * time.Minute)
+	eng.scheduled[id].NextRunAt = &past2
+	eng.mu.Unlock()
+
+	eng.EvalSchedules()
+	time.Sleep(50 * time.Millisecond)
+
+	if c := atomic.LoadInt32(&callCount); c != 1 {
+		t.Fatalf("expected handler called once (overlap prevented), got %d", c)
+	}
+
+	close(blocked)
 }
 
 func TestContextCancellationStopsEngine(t *testing.T) {
