@@ -570,3 +570,102 @@ func TestScheduleJSONRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestResultExportRoundTrip(t *testing.T) {
+	properties := gopter.NewProperties(gopter.DefaultTestParameters())
+	properties.Property("ResultExportTask round-trips through TaskRequest", prop.ForAll(
+		func(bucket, region string) bool {
+			task := ResultExportTask{Bucket: bucket, Region: region}
+			if err := task.Validate(); err != nil {
+				return false
+			}
+			req := task.ToTaskRequest()
+			if req.Type != TaskTypeResultExport {
+				return false
+			}
+			if req.Schedule == nil {
+				return false
+			}
+			rebuilt := ResultExportTaskFromParams(*req.Params)
+			return rebuilt.Bucket == task.Bucket &&
+				rebuilt.Region == task.Region
+		},
+		genNonEmptyString(),
+		genNonEmptyString(),
+	))
+	properties.TestingRun(t)
+}
+
+func TestResultExportValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		task ResultExportTask
+		ok   bool
+	}{
+		{"valid", ResultExportTask{Bucket: "b", Region: "r"}, true},
+		{"missing bucket", ResultExportTask{Region: "r"}, false},
+		{"missing region", ResultExportTask{Bucket: "b"}, false},
+		{"all empty", ResultExportTask{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.task.Validate()
+			if tc.ok && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Error("expected validation error, got nil")
+			}
+		})
+	}
+}
+
+func TestSnapshotRestoreRoundTrip_WithTargetHeight(t *testing.T) {
+	task := SnapshotRestoreTask{
+		Bucket:       "my-bucket",
+		Prefix:       "snapshots/",
+		Region:       "us-east-1",
+		ChainID:      "pacific-1",
+		TargetHeight: 198000000,
+	}
+	req := task.ToTaskRequest()
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded TaskRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	rebuilt := SnapshotRestoreTaskFromParams(*decoded.Params)
+	if rebuilt.TargetHeight != 198000000 {
+		t.Errorf("TargetHeight = %d, want 198000000", rebuilt.TargetHeight)
+	}
+}
+
+func TestSnapshotRestoreRoundTrip_ZeroTargetHeight(t *testing.T) {
+	task := SnapshotRestoreTask{
+		Bucket:  "my-bucket",
+		Prefix:  "snapshots/",
+		Region:  "us-east-1",
+		ChainID: "pacific-1",
+	}
+	req := task.ToTaskRequest()
+
+	if _, present := (*req.Params)["targetHeight"]; present {
+		t.Error("expected targetHeight to be absent from params when zero")
+	}
+}
+
+func TestResultExportTask_HasCronSchedule(t *testing.T) {
+	task := ResultExportTask{Bucket: "b", Region: "r"}
+	req := task.ToTaskRequest()
+	if req.Schedule == nil {
+		t.Fatal("expected Schedule to be set")
+	}
+	if req.Schedule.Cron == nil {
+		t.Fatal("expected Schedule.Cron to be set")
+	}
+}

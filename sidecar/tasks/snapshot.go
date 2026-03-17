@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -23,32 +25,57 @@ var restoreLog = seilog.NewLogger("seictl", "task", "snapshot-restore")
 
 const snapshotMarkerFile = ".sei-sidecar-snapshot-done"
 
-// S3TransferClient abstracts S3 downloads via the transfer manager's
-// DownloadObject API (io.WriterAt path). We avoid the streaming GetObject
-// path whose concurrentReader has a bounds-check bug in v0.1.x.
+// SnapshotHeightFile stores the height of the restored snapshot so that
+// downstream tasks (e.g. result export) can auto-discover their start point.
+const SnapshotHeightFile = ".sei-sidecar-snapshot-height"
+
+// S3TransferClient abstracts S3 downloads and listing. DownloadObject uses
+// the transfer manager's io.WriterAt path for parallel byte-range downloads.
+// ListObjectsV2 is used for height-based snapshot discovery.
 type S3TransferClient interface {
 	DownloadObject(ctx context.Context, input *transfermanager.DownloadObjectInput, opts ...func(*transfermanager.Options)) (*transfermanager.DownloadObjectOutput, error)
+	ListObjectsV2(ctx context.Context, input *s3.ListObjectsV2Input, opts ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+}
+
+// s3CompositeClient bundles the transfer manager (download) and raw S3 client
+// (list) behind the single S3TransferClient interface.
+type s3CompositeClient struct {
+	tm       *transfermanager.Client
+	s3Client *s3.Client
+}
+
+func (c *s3CompositeClient) DownloadObject(ctx context.Context, input *transfermanager.DownloadObjectInput, opts ...func(*transfermanager.Options)) (*transfermanager.DownloadObjectOutput, error) {
+	return c.tm.DownloadObject(ctx, input, opts...)
+}
+
+func (c *s3CompositeClient) ListObjectsV2(ctx context.Context, input *s3.ListObjectsV2Input, opts ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	return c.s3Client.ListObjectsV2(ctx, input, opts...)
 }
 
 // S3TransferClientFactory builds an S3TransferClient for a given region.
 type S3TransferClientFactory func(ctx context.Context, region string) (S3TransferClient, error)
 
-// DefaultS3TransferClientFactory creates a transfermanager.Client backed by a
-// real S3 service client.
+// DefaultS3TransferClientFactory creates a composite client backed by a real
+// S3 service client supporting both downloads and listing.
 func DefaultS3TransferClientFactory(ctx context.Context, region string) (S3TransferClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
 	}
-	return transfermanager.New(s3.NewFromConfig(cfg)), nil
+	s3Client := s3.NewFromConfig(cfg)
+	return &s3CompositeClient{
+		tm:       transfermanager.New(s3Client),
+		s3Client: s3Client,
+	}, nil
 }
 
 // SnapshotConfig holds S3 coordinates for snapshot download.
 type SnapshotConfig struct {
-	Bucket  string
-	Prefix  string
-	Region  string
-	ChainID string
+	Bucket       string
+	Prefix       string
+	Region       string
+	ChainID      string
+	TargetHeight int64
 }
 
 // SnapshotRestorer downloads and extracts a snapshot archive from S3.
@@ -96,7 +123,12 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 		return fmt.Errorf("building S3 transfer client: %w", err)
 	}
 
-	snapshotKey, err := resolveSnapshotKey(ctx, client, cfg)
+	var snapshotKey string
+	if cfg.TargetHeight > 0 {
+		snapshotKey, err = resolveSnapshotByHeight(ctx, client, cfg, cfg.TargetHeight)
+	} else {
+		snapshotKey, err = resolveSnapshotKey(ctx, client, cfg)
+	}
 	if err != nil {
 		return err
 	}
@@ -138,6 +170,16 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 	restoreLog.Info("extracting archive", "dest", snapshotDir)
 	if err := extractTarStream(ctx, f, snapshotDir); err != nil {
 		return fmt.Errorf("extracting snapshot: %w", err)
+	}
+
+	if h := parseHeightFromKey(snapshotKey); h > 0 {
+		if err := os.WriteFile(
+			filepath.Join(r.homeDir, SnapshotHeightFile),
+			[]byte(strconv.FormatInt(h, 10)),
+			0o644,
+		); err != nil {
+			restoreLog.Warn("failed to write snapshot height file", "err", err)
+		}
 	}
 
 	restoreLog.Info("restore complete")
@@ -184,7 +226,73 @@ func parseSnapshotConfig(params map[string]any) (SnapshotConfig, error) {
 		return SnapshotConfig{}, fmt.Errorf("snapshot-restore: missing required param 'chainId'")
 	}
 
-	return SnapshotConfig{Bucket: bucket, Prefix: prefix, Region: region, ChainID: chainID}, nil
+	var targetHeight int64
+	if v, ok := params["targetHeight"].(float64); ok {
+		targetHeight = int64(v)
+	}
+
+	return SnapshotConfig{Bucket: bucket, Prefix: prefix, Region: region, ChainID: chainID, TargetHeight: targetHeight}, nil
+}
+
+// snapshotHeightRe extracts heights from S3 keys like snapshot_198030000_pacific-1_eu-central-1.tar.gz.
+var snapshotHeightRe = regexp.MustCompile(`snapshot_(\d+)_`)
+
+func parseHeightFromKey(key string) int64 {
+	m := snapshotHeightRe.FindStringSubmatch(key)
+	if len(m) < 2 {
+		return 0
+	}
+	h, _ := strconv.ParseInt(m[1], 10, 64)
+	return h
+}
+
+// resolveSnapshotByHeight lists S3 objects under the configured prefix and
+// selects the snapshot with the highest height at or below targetHeight.
+func resolveSnapshotByHeight(ctx context.Context, client S3TransferClient, cfg SnapshotConfig, targetHeight int64) (string, error) {
+	prefix := normalizePrefix(cfg.Prefix)
+	var bestHeight int64
+	var bestKey string
+
+	input := &s3.ListObjectsV2Input{
+		Bucket: aws.String(cfg.Bucket),
+		Prefix: aws.String(prefix),
+	}
+
+	for {
+		out, err := client.ListObjectsV2(ctx, input)
+		if err != nil {
+			return "", fmt.Errorf("listing snapshots in s3://%s/%s: %w", cfg.Bucket, prefix, err)
+		}
+		for _, obj := range out.Contents {
+			key := aws.ToString(obj.Key)
+			matches := snapshotHeightRe.FindStringSubmatch(key)
+			if len(matches) < 2 {
+				continue
+			}
+			h, err := strconv.ParseInt(matches[1], 10, 64)
+			if err != nil {
+				continue
+			}
+			if h <= targetHeight && h > bestHeight {
+				bestHeight = h
+				bestKey = key
+			}
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		input.ContinuationToken = out.NextContinuationToken
+	}
+
+	if bestKey == "" {
+		return "", fmt.Errorf("no snapshot found at or below height %d in s3://%s/%s", targetHeight, cfg.Bucket, prefix)
+	}
+
+	restoreLog.Info("resolved snapshot by height",
+		"target", targetHeight,
+		"selected", bestHeight,
+		"key", bestKey)
+	return bestKey, nil
 }
 
 // writeAtBuffer is a goroutine-safe in-memory io.WriterAt, used for

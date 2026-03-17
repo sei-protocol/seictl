@@ -19,6 +19,7 @@ const (
 	TaskConfigureGenesis   TaskType = "configure-genesis"
 	TaskConfigureStateSync TaskType = "configure-state-sync"
 	TaskSnapshotUpload     TaskType = "snapshot-upload"
+	TaskResultExport       TaskType = "result-export"
 )
 
 // Task is a unit of work submitted by the controller.
