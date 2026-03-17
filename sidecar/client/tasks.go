@@ -31,6 +31,9 @@ const (
 	TaskTypeConfigureGenesis   = string(engine.TaskConfigureGenesis)
 	TaskTypeConfigureStateSync = string(engine.TaskConfigureStateSync)
 	TaskTypeSnapshotUpload     = string(engine.TaskSnapshotUpload)
+	TaskTypeResultExport       = string(engine.TaskResultExport)
+
+	defaultResultExportCron = "*/10 * * * *"
 )
 
 // SnapshotRestoreTask downloads and extracts a snapshot archive from S3.
@@ -484,4 +487,51 @@ func ConfigReloadTaskFromParams(params map[string]interface{}) ConfigReloadTask 
 		}
 	}
 	return ConfigReloadTask{Fields: fields}
+}
+
+// ResultExportTask queries the local seid RPC for block results and uploads
+// them in paginated NDJSON files to S3.
+type ResultExportTask struct {
+	Bucket string
+	Prefix string
+	Region string
+}
+
+func (t ResultExportTask) TaskType() string { return TaskTypeResultExport }
+
+func (t ResultExportTask) Validate() error {
+	if t.Bucket == "" {
+		return fmt.Errorf("result-export: missing required field Bucket")
+	}
+	if t.Region == "" {
+		return fmt.Errorf("result-export: missing required field Region")
+	}
+	return nil
+}
+
+func (t ResultExportTask) ToTaskRequest() TaskRequest {
+	p := map[string]interface{}{
+		"bucket": t.Bucket,
+		"region": t.Region,
+	}
+	if t.Prefix != "" {
+		p["prefix"] = t.Prefix
+	}
+	cron := defaultResultExportCron
+	return TaskRequest{
+		Type:     t.TaskType(),
+		Params:   &p,
+		Schedule: &Schedule{Cron: &cron},
+	}
+}
+
+// ResultExportTaskFromParams reconstructs a ResultExportTask from
+// a generic params map.
+func ResultExportTaskFromParams(params map[string]interface{}) ResultExportTask {
+	s := func(k string) string { v, _ := params[k].(string); return v }
+	return ResultExportTask{
+		Bucket: s("bucket"),
+		Prefix: s("prefix"),
+		Region: s("region"),
+	}
 }

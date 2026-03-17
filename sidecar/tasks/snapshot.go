@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -23,9 +25,12 @@ var restoreLog = seilog.NewLogger("seictl", "task", "snapshot-restore")
 
 const snapshotMarkerFile = ".sei-sidecar-snapshot-done"
 
-// S3TransferClient abstracts S3 downloads via the transfer manager's
-// DownloadObject API (io.WriterAt path). We avoid the streaming GetObject
-// path whose concurrentReader has a bounds-check bug in v0.1.x.
+// SnapshotHeightFile stores the height of the restored snapshot so that
+// downstream tasks (e.g. result export) can auto-discover their start point.
+const SnapshotHeightFile = ".sei-sidecar-snapshot-height"
+
+// S3TransferClient abstracts S3 downloads. DownloadObject uses the transfer
+// manager's io.WriterAt path for parallel byte-range downloads.
 type S3TransferClient interface {
 	DownloadObject(ctx context.Context, input *transfermanager.DownloadObjectInput, opts ...func(*transfermanager.Options)) (*transfermanager.DownloadObjectOutput, error)
 }
@@ -33,8 +38,8 @@ type S3TransferClient interface {
 // S3TransferClientFactory builds an S3TransferClient for a given region.
 type S3TransferClientFactory func(ctx context.Context, region string) (S3TransferClient, error)
 
-// DefaultS3TransferClientFactory creates a transfermanager.Client backed by a
-// real S3 service client.
+// DefaultS3TransferClientFactory creates a transfer manager backed by a real
+// S3 service client.
 func DefaultS3TransferClientFactory(ctx context.Context, region string) (S3TransferClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
@@ -140,6 +145,16 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 		return fmt.Errorf("extracting snapshot: %w", err)
 	}
 
+	if h := parseHeightFromKey(snapshotKey); h > 0 {
+		if err := os.WriteFile(
+			filepath.Join(r.homeDir, SnapshotHeightFile),
+			[]byte(strconv.FormatInt(h, 10)),
+			0o644,
+		); err != nil {
+			restoreLog.Warn("failed to write snapshot height file", "err", err)
+		}
+	}
+
 	restoreLog.Info("restore complete")
 	return writeMarker(r.homeDir, snapshotMarkerFile)
 }
@@ -185,6 +200,18 @@ func parseSnapshotConfig(params map[string]any) (SnapshotConfig, error) {
 	}
 
 	return SnapshotConfig{Bucket: bucket, Prefix: prefix, Region: region, ChainID: chainID}, nil
+}
+
+// snapshotHeightRe extracts heights from S3 keys like snapshot_198030000_pacific-1_eu-central-1.tar.gz.
+var snapshotHeightRe = regexp.MustCompile(`snapshot_(\d+)_`)
+
+func parseHeightFromKey(key string) int64 {
+	m := snapshotHeightRe.FindStringSubmatch(key)
+	if len(m) < 2 {
+		return 0
+	}
+	h, _ := strconv.ParseInt(m[1], 10, 64)
+	return h
 }
 
 // writeAtBuffer is a goroutine-safe in-memory io.WriterAt, used for

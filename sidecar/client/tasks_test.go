@@ -570,3 +570,63 @@ func TestScheduleJSONRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestResultExportRoundTrip(t *testing.T) {
+	properties := gopter.NewProperties(gopter.DefaultTestParameters())
+	properties.Property("ResultExportTask round-trips through TaskRequest", prop.ForAll(
+		func(bucket, region string) bool {
+			task := ResultExportTask{Bucket: bucket, Region: region}
+			if err := task.Validate(); err != nil {
+				return false
+			}
+			req := task.ToTaskRequest()
+			if req.Type != TaskTypeResultExport {
+				return false
+			}
+			if req.Schedule == nil {
+				return false
+			}
+			rebuilt := ResultExportTaskFromParams(*req.Params)
+			return rebuilt.Bucket == task.Bucket &&
+				rebuilt.Region == task.Region
+		},
+		genNonEmptyString(),
+		genNonEmptyString(),
+	))
+	properties.TestingRun(t)
+}
+
+func TestResultExportValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		task ResultExportTask
+		ok   bool
+	}{
+		{"valid", ResultExportTask{Bucket: "b", Region: "r"}, true},
+		{"missing bucket", ResultExportTask{Region: "r"}, false},
+		{"missing region", ResultExportTask{Bucket: "b"}, false},
+		{"all empty", ResultExportTask{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.task.Validate()
+			if tc.ok && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Error("expected validation error, got nil")
+			}
+		})
+	}
+}
+
+func TestResultExportTask_HasCronSchedule(t *testing.T) {
+	task := ResultExportTask{Bucket: "b", Region: "r"}
+	req := task.ToTaskRequest()
+	if req.Schedule == nil {
+		t.Fatal("expected Schedule to be set")
+	}
+	if req.Schedule.Cron == nil {
+		t.Fatal("expected Schedule.Cron to be set")
+	}
+}

@@ -50,6 +50,7 @@ var serveCmd = cli.Command{
 			engine.TaskConfigureGenesis:   tasks.NewGenesisFetcher(homeDir, chainID, nil).Handler(),
 			engine.TaskConfigureStateSync: tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
 			engine.TaskSnapshotUpload:     tasks.NewSnapshotUploader(homeDir, nil).Handler(),
+			engine.TaskResultExport:       tasks.NewResultExporter(homeDir, nil).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers)

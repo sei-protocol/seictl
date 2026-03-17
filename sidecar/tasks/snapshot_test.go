@@ -265,3 +265,35 @@ func TestSnapshotHandlerParamValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotRestoreWritesHeightFile(t *testing.T) {
+	homeDir := t.TempDir()
+	archive := buildTarGzArchive(t, map[string]string{
+		"data/chain.db": "chaindata",
+	})
+
+	client := &mockTransferClient{
+		responses: map[string][]byte{
+			"snapshots/latest.txt": []byte("100000000"),
+			"snapshots/snapshot_100000000_testchain_us-east-1.tar.gz": archive,
+		},
+	}
+	restorer := NewSnapshotRestorer(homeDir, mockFactory(client))
+	err := restorer.Restore(context.Background(), SnapshotConfig{
+		Bucket:  "test-bucket",
+		Prefix:  "snapshots/",
+		Region:  "us-east-1",
+		ChainID: "testchain",
+	})
+	if err != nil {
+		t.Fatalf("Restore failed: %v", err)
+	}
+
+	heightBytes, err := os.ReadFile(filepath.Join(homeDir, SnapshotHeightFile))
+	if err != nil {
+		t.Fatalf("reading snapshot height file: %v", err)
+	}
+	if string(heightBytes) != "100000000" {
+		t.Errorf("snapshot height file = %q, want %q", string(heightBytes), "100000000")
+	}
+}
