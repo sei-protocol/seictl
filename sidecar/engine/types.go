@@ -30,6 +30,15 @@ type Task struct {
 // TaskHandler executes a specific task type.
 type TaskHandler func(ctx context.Context, params map[string]any) error
 
+// TaskStatus represents the lifecycle state of a task.
+type TaskStatus string
+
+const (
+	TaskStatusRunning   TaskStatus = "running"
+	TaskStatusCompleted TaskStatus = "completed"
+	TaskStatusFailed    TaskStatus = "failed"
+)
+
 // Schedule defines when a task should recur. Exactly one field should be set.
 // Cron is supported today; BlockHeight is reserved for future use.
 type Schedule struct {
@@ -43,6 +52,7 @@ type Schedule struct {
 type TaskResult struct {
 	ID          string         `json:"id"`
 	Type        string         `json:"type"`
+	Status      TaskStatus     `json:"status"`
 	Params      map[string]any `json:"params,omitempty"`
 	Schedule    *Schedule      `json:"schedule,omitempty"`
 	Error       string         `json:"error,omitempty"`

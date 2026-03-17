@@ -194,6 +194,9 @@ func TestGetResultReturnsCompleted(t *testing.T) {
 	if result.Type != string(TaskConfigPatch) {
 		t.Fatalf("expected type %q, got %q", TaskConfigPatch, result.Type)
 	}
+	if result.Status != TaskStatusCompleted {
+		t.Fatalf("expected status %q, got %q", TaskStatusCompleted, result.Status)
+	}
 	if result.Error != "" {
 		t.Fatalf("expected no error, got %q", result.Error)
 	}
@@ -208,6 +211,9 @@ func TestGetResultReturnsFailure(t *testing.T) {
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 	result := waitForResult(t, eng, id)
 
+	if result.Status != TaskStatusFailed {
+		t.Fatalf("expected status %q, got %q", TaskStatusFailed, result.Status)
+	}
 	if result.Error != handlerErr.Error() {
 		t.Fatalf("expected error %q, got %q", handlerErr.Error(), result.Error)
 	}
@@ -352,4 +358,78 @@ func TestContextCancellationStopsEngine(t *testing.T) {
 		t.Fatalf("expected 1 execution, got %d", executed)
 	}
 	mu.Unlock()
+}
+
+func TestGetResultReturnsRunning(t *testing.T) {
+	started := make(chan struct{})
+	blocked := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			close(started)
+			<-blocked
+			return nil
+		},
+	})
+
+	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for task to start")
+	}
+
+	result := eng.GetResult(id)
+	if result == nil {
+		t.Fatal("expected non-nil result for in-flight task")
+	}
+	if result.Status != TaskStatusRunning {
+		t.Fatalf("expected status %q, got %q", TaskStatusRunning, result.Status)
+	}
+	if result.CompletedAt != nil {
+		t.Fatal("expected CompletedAt to be nil for running task")
+	}
+
+	close(blocked)
+	completed := waitForResult(t, eng, id)
+	if completed.Status != TaskStatusCompleted {
+		t.Fatalf("expected status %q after completion, got %q", TaskStatusCompleted, completed.Status)
+	}
+}
+
+func TestRecentResultsIncludesInflight(t *testing.T) {
+	started := make(chan struct{})
+	blocked := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			close(started)
+			<-blocked
+			return nil
+		},
+	})
+
+	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for task to start")
+	}
+
+	results := eng.RecentResults()
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result (in-flight), got %d", len(results))
+	}
+	if results[0].ID != id {
+		t.Fatalf("expected ID %q, got %q", id, results[0].ID)
+	}
+	if results[0].Status != TaskStatusRunning {
+		t.Fatalf("expected status %q, got %q", TaskStatusRunning, results[0].Status)
+	}
+
+	close(blocked)
 }

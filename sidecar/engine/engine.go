@@ -38,6 +38,7 @@ type Engine struct {
 	running   atomic.Bool
 	mu        sync.RWMutex
 	ready     bool
+	inflight  *TaskResult
 	results   []*TaskResult
 	scheduled map[string]*TaskResult
 }
@@ -66,21 +67,20 @@ func (e *Engine) loop() {
 			err := e.execute(env.task.Type, env.handler, env.task.Params)
 
 			now := time.Now()
-			result := &TaskResult{
-				ID:          env.id,
-				Type:        string(env.task.Type),
-				Params:      env.task.Params,
-				SubmittedAt: env.submittedAt,
-				CompletedAt: &now,
-			}
-			if err != nil {
-				result.Error = err.Error()
-			}
-
 			e.mu.Lock()
-			e.results = append(e.results, result)
-			if len(e.results) > maxResults {
-				e.results = e.results[len(e.results)-maxResults:]
+			if e.inflight != nil {
+				e.inflight.CompletedAt = &now
+				if err != nil {
+					e.inflight.Error = err.Error()
+					e.inflight.Status = TaskStatusFailed
+				} else {
+					e.inflight.Status = TaskStatusCompleted
+				}
+				e.results = append(e.results, e.inflight)
+				if len(e.results) > maxResults {
+					e.results = e.results[len(e.results)-maxResults:]
+				}
+				e.inflight = nil
 			}
 			e.mu.Unlock()
 
@@ -101,8 +101,20 @@ func (e *Engine) Submit(task Task) (string, error) {
 		return "", ErrBusy
 	}
 	id := uuid.New().String()
+	now := time.Now()
+
+	e.mu.Lock()
+	e.inflight = &TaskResult{
+		ID:          id,
+		Type:        string(task.Type),
+		Status:      TaskStatusRunning,
+		Params:      task.Params,
+		SubmittedAt: now,
+	}
+	e.mu.Unlock()
+
 	log.Info("task submitted", "type", task.Type, "id", id)
-	e.taskCh <- taskEnvelope{id: id, task: task, handler: handler, submittedAt: time.Now()}
+	e.taskCh <- taskEnvelope{id: id, task: task, handler: handler, submittedAt: now}
 	return id, nil
 }
 
@@ -124,6 +136,7 @@ func (e *Engine) SubmitScheduled(task Task, sched Schedule) (string, error) {
 	tr := &TaskResult{
 		ID:          id,
 		Type:        string(task.Type),
+		Status:      TaskStatusRunning,
 		Params:      task.Params,
 		Schedule:    &sched,
 		SubmittedAt: now,
@@ -188,6 +201,9 @@ func (e *Engine) EvalSchedules() {
 			s.Error = ""
 			if err != nil {
 				s.Error = err.Error()
+				s.Status = TaskStatusFailed
+			} else {
+				s.Status = TaskStatusCompleted
 			}
 		}(tr, handler)
 	}
@@ -231,12 +247,16 @@ func (e *Engine) Status() StatusResponse {
 }
 
 // RecentResults returns the most recent task results (newest first),
-// combining completed one-shot results and active scheduled tasks.
+// combining in-flight, completed one-shot results, and active scheduled tasks.
 func (e *Engine) RecentResults() []TaskResult {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	all := make([]TaskResult, 0, len(e.results)+len(e.scheduled))
+	cap := len(e.results) + len(e.scheduled) + 1
+	all := make([]TaskResult, 0, cap)
+	if e.inflight != nil {
+		all = append(all, *e.inflight)
+	}
 	for i := len(e.results) - 1; i >= 0; i-- {
 		all = append(all, *e.results[i])
 	}
@@ -250,11 +270,15 @@ func (e *Engine) RecentResults() []TaskResult {
 	return all
 }
 
-// GetResult returns a task by ID (one-shot result or scheduled), or nil.
+// GetResult returns a task by ID (in-flight, completed, or scheduled), or nil.
 func (e *Engine) GetResult(id string) *TaskResult {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	if e.inflight != nil && e.inflight.ID == id {
+		cp := *e.inflight
+		return &cp
+	}
 	if s, ok := e.scheduled[id]; ok {
 		cp := *s
 		return &cp

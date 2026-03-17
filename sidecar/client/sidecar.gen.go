@@ -20,9 +20,16 @@ import (
 
 // Defines values for StatusResponseStatus.
 const (
-	Initializing StatusResponseStatus = "Initializing"
-	Ready        StatusResponseStatus = "Ready"
-	Running      StatusResponseStatus = "Running"
+	StatusResponseStatusInitializing StatusResponseStatus = "Initializing"
+	StatusResponseStatusReady        StatusResponseStatus = "Ready"
+	StatusResponseStatusRunning      StatusResponseStatus = "Running"
+)
+
+// Defines values for TaskResultStatus.
+const (
+	TaskResultStatusCompleted TaskResultStatus = "completed"
+	TaskResultStatusFailed    TaskResultStatus = "failed"
+	TaskResultStatusRunning   TaskResultStatus = "running"
 )
 
 // ErrorResponse defines model for ErrorResponse.
@@ -69,12 +76,18 @@ type TaskResult struct {
 	Params    *map[string]interface{} `json:"params,omitempty"`
 
 	// Schedule Defines when a task should recur. Currently only cron is supported; blockHeight is reserved for future use.
-	Schedule    *Schedule `json:"schedule,omitempty"`
-	SubmittedAt time.Time `json:"submittedAt"`
+	Schedule *Schedule `json:"schedule,omitempty"`
+
+	// Status Current task lifecycle state.
+	Status      TaskResultStatus `json:"status"`
+	SubmittedAt time.Time        `json:"submittedAt"`
 
 	// Type Task type that was executed.
 	Type string `json:"type"`
 }
+
+// TaskResultStatus Current task lifecycle state.
+type TaskResultStatus string
 
 // TaskSubmitResponse defines model for TaskSubmitResponse.
 type TaskSubmitResponse struct {
