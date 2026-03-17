@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
@@ -32,6 +33,7 @@ var serveCmd = cli.Command{
 			homeDir = "/sei"
 		}
 		port := cmd.String("port")
+		chainID := os.Getenv("SEI_CHAIN_ID")
 
 		if err := tasks.EnsureDefaultConfig(homeDir); err != nil {
 			return fmt.Errorf("home directory init failed: %w", err)
@@ -45,7 +47,7 @@ var serveCmd = cli.Command{
 			engine.TaskConfigValidate:     tasks.NewConfigValidator(homeDir).Handler(),
 			engine.TaskConfigReload:       tasks.NewConfigReloader(homeDir).Handler(),
 			engine.TaskMarkReady:          tasks.MarkReadyHandler(),
-			engine.TaskConfigureGenesis:   tasks.NewGenesisFetcher(homeDir, nil).Handler(),
+			engine.TaskConfigureGenesis:   tasks.NewGenesisFetcher(homeDir, chainID, nil).Handler(),
 			engine.TaskConfigureStateSync: tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
 			engine.TaskSnapshotUpload:     tasks.NewSnapshotUploader(homeDir, nil).Handler(),
 		}

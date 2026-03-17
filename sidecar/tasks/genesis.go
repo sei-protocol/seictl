@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	seiconfig "github.com/sei-protocol/sei-config"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seilog"
 )
@@ -44,42 +45,62 @@ type GenesisS3Config struct {
 	Region string
 }
 
-// GenesisFetcher downloads genesis.json from S3 and writes it to the config directory.
+// GenesisFetcher writes genesis.json to the config directory. When S3 params
+// are provided in the task, it downloads from S3. Otherwise it writes the
+// embedded genesis for the configured chain ID (from SEI_CHAIN_ID).
 type GenesisFetcher struct {
 	homeDir         string
+	chainID         string
 	s3ClientFactory S3ClientFactory
 }
 
 // NewGenesisFetcher creates a fetcher targeting the given home directory.
-func NewGenesisFetcher(homeDir string, factory S3ClientFactory) *GenesisFetcher {
+// chainID is the chain this sidecar is running for (typically from SEI_CHAIN_ID).
+// When a task has no S3 params, the fetcher writes embedded genesis for this chain.
+func NewGenesisFetcher(homeDir string, chainID string, factory S3ClientFactory) *GenesisFetcher {
 	if factory == nil {
 		factory = DefaultS3ClientFactory
 	}
 	return &GenesisFetcher{
 		homeDir:         homeDir,
+		chainID:         chainID,
 		s3ClientFactory: factory,
 	}
 }
 
-// Handler returns an engine.TaskHandler that parses params and delegates to Fetch.
+// Handler returns an engine.TaskHandler that parses params and delegates to
+// the appropriate genesis source.
 func (g *GenesisFetcher) Handler() engine.TaskHandler {
 	return func(ctx context.Context, params map[string]any) error {
-		cfg, err := parseGenesisConfig(params)
+		if markerExists(g.homeDir, genesisMarkerFile) {
+			genesisLog.Debug("already completed, skipping")
+			return nil
+		}
+
+		s3Cfg, err := parseGenesisS3Config(params)
 		if err != nil {
 			return err
 		}
-		return g.Fetch(ctx, cfg)
+		if s3Cfg != nil {
+			return g.fetchFromS3(ctx, *s3Cfg)
+		}
+		return g.writeEmbeddedGenesis()
 	}
 }
 
 // Fetch downloads genesis.json from S3, skipping if the marker file exists.
+// Retained for backward compatibility with callers that build GenesisS3Config
+// directly.
 func (g *GenesisFetcher) Fetch(ctx context.Context, cfg GenesisS3Config) error {
 	if markerExists(g.homeDir, genesisMarkerFile) {
 		genesisLog.Debug("already completed, skipping")
 		return nil
 	}
+	return g.fetchFromS3(ctx, cfg)
+}
 
-	genesisLog.Info("downloading genesis.json", "bucket", cfg.Bucket, "key", cfg.Key)
+func (g *GenesisFetcher) fetchFromS3(ctx context.Context, cfg GenesisS3Config) error {
+	genesisLog.Info("downloading genesis.json from S3", "bucket", cfg.Bucket, "key", cfg.Key)
 	s3Client, err := g.s3ClientFactory(ctx, cfg.Region)
 	if err != nil {
 		return fmt.Errorf("building S3 client: %w", err)
@@ -94,6 +115,42 @@ func (g *GenesisFetcher) Fetch(ctx context.Context, cfg GenesisS3Config) error {
 	}
 	defer func() { _ = output.Body.Close() }()
 
+	if err := g.writeGenesisFile(func(f *os.File) error {
+		_, err := io.Copy(f, output.Body)
+		return err
+	}); err != nil {
+		return err
+	}
+
+	genesisLog.Info("genesis download complete (S3)")
+	return writeMarker(g.homeDir, genesisMarkerFile)
+}
+
+func (g *GenesisFetcher) writeEmbeddedGenesis() error {
+	if g.chainID == "" {
+		return fmt.Errorf("configure-genesis: no S3 params and SEI_CHAIN_ID is not set")
+	}
+
+	genesisLog.Info("writing embedded genesis", "chainId", g.chainID)
+	data, err := seiconfig.GenesisForChain(g.chainID)
+	if err != nil {
+		return fmt.Errorf("configure-genesis: %w", err)
+	}
+
+	if err := g.writeGenesisFile(func(f *os.File) error {
+		_, err := f.Write(data)
+		return err
+	}); err != nil {
+		return err
+	}
+
+	genesisLog.Info("genesis written from embedded data", "chainId", g.chainID)
+	return writeMarker(g.homeDir, genesisMarkerFile)
+}
+
+// writeGenesisFile creates the config directory and genesis.json file, calling
+// writeFn to populate its contents.
+func (g *GenesisFetcher) writeGenesisFile(writeFn func(*os.File) error) error {
 	destDir := filepath.Join(g.homeDir, "config")
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
@@ -106,38 +163,39 @@ func (g *GenesisFetcher) Fetch(ctx context.Context, cfg GenesisS3Config) error {
 	}
 	defer func() { _ = f.Close() }()
 
-	if _, err := io.Copy(f, output.Body); err != nil {
+	if err := writeFn(f); err != nil {
 		return fmt.Errorf("writing %s: %w", destPath, err)
 	}
-
-	genesisLog.Info("genesis download complete", "dest", destPath)
-	return writeMarker(g.homeDir, genesisMarkerFile)
+	return nil
 }
 
-func parseGenesisConfig(params map[string]any) (GenesisS3Config, error) {
+// parseGenesisS3Config extracts S3 configuration from task params. Returns nil
+// (not an error) when no S3 params are present, indicating the handler should
+// use the embedded genesis.
+func parseGenesisS3Config(params map[string]any) (*GenesisS3Config, error) {
 	uri, _ := params["uri"].(string)
-	region, _ := params["region"].(string)
-
 	if uri == "" {
-		return GenesisS3Config{}, fmt.Errorf("configure-genesis: missing required param 'uri'")
+		return nil, nil
 	}
+
+	region, _ := params["region"].(string)
 	if region == "" {
-		return GenesisS3Config{}, fmt.Errorf("configure-genesis: missing required param 'region'")
+		return nil, fmt.Errorf("configure-genesis: 'region' is required when 'uri' is set")
 	}
 
 	parsed, err := url.Parse(uri)
 	if err != nil {
-		return GenesisS3Config{}, fmt.Errorf("configure-genesis: invalid uri %q: %w", uri, err)
+		return nil, fmt.Errorf("configure-genesis: invalid uri %q: %w", uri, err)
 	}
 	if parsed.Scheme != "s3" {
-		return GenesisS3Config{}, fmt.Errorf("configure-genesis: uri must use s3:// scheme, got %q", parsed.Scheme)
+		return nil, fmt.Errorf("configure-genesis: uri must use s3:// scheme, got %q", parsed.Scheme)
 	}
 
 	bucket := parsed.Host
 	key := strings.TrimPrefix(parsed.Path, "/")
 	if bucket == "" || key == "" {
-		return GenesisS3Config{}, fmt.Errorf("configure-genesis: uri must be s3://bucket/key, got %q", uri)
+		return nil, fmt.Errorf("configure-genesis: uri must be s3://bucket/key, got %q", uri)
 	}
 
-	return GenesisS3Config{Bucket: bucket, Key: key, Region: region}, nil
+	return &GenesisS3Config{Bucket: bucket, Key: key, Region: region}, nil
 }
