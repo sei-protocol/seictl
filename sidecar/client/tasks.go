@@ -7,6 +7,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 	seiconfig "github.com/sei-protocol/sei-config"
+	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
 // TaskBuilder is implemented by every typed task struct. It converts a
@@ -18,17 +19,18 @@ type TaskBuilder interface {
 	ToTaskRequest() TaskRequest
 }
 
+// Task type constants re-exported from engine for external consumers.
 const (
-	TaskTypeSnapshotRestore    = "snapshot-restore"
-	TaskTypeDiscoverPeers      = "discover-peers"
-	TaskTypeConfigPatch        = "config-patch"
-	TaskTypeConfigApply        = "config-apply"
-	TaskTypeConfigValidate     = "config-validate"
-	TaskTypeConfigReload       = "config-reload"
-	TaskTypeMarkReady          = "mark-ready"
-	TaskTypeConfigureGenesis   = "configure-genesis"
-	TaskTypeConfigureStateSync = "configure-state-sync"
-	TaskTypeSnapshotUpload     = "snapshot-upload"
+	TaskTypeSnapshotRestore    = string(engine.TaskSnapshotRestore)
+	TaskTypeDiscoverPeers      = string(engine.TaskDiscoverPeers)
+	TaskTypeConfigPatch        = string(engine.TaskConfigPatch)
+	TaskTypeConfigApply        = string(engine.TaskConfigApply)
+	TaskTypeConfigValidate     = string(engine.TaskConfigValidate)
+	TaskTypeConfigReload       = string(engine.TaskConfigReload)
+	TaskTypeMarkReady          = string(engine.TaskMarkReady)
+	TaskTypeConfigureGenesis   = string(engine.TaskConfigureGenesis)
+	TaskTypeConfigureStateSync = string(engine.TaskConfigureStateSync)
+	TaskTypeSnapshotUpload     = string(engine.TaskSnapshotUpload)
 )
 
 // SnapshotRestoreTask downloads and extracts a snapshot archive from S3.
@@ -146,7 +148,10 @@ func SnapshotUploadTaskFromParams(params map[string]interface{}) SnapshotUploadT
 	}
 }
 
-// ConfigureGenesisTask downloads genesis.json from an S3 URI.
+// ConfigureGenesisTask configures genesis.json for a node. When URI and Region
+// are set, the sidecar downloads from S3. When they are empty, the sidecar
+// falls back to writing the embedded genesis for the chain ID it was started
+// with (set via SEI_CHAIN_ID environment variable).
 type ConfigureGenesisTask struct {
 	URI    string
 	Region string
@@ -156,10 +161,10 @@ func (t ConfigureGenesisTask) TaskType() string { return TaskTypeConfigureGenesi
 
 func (t ConfigureGenesisTask) Validate() error {
 	if t.URI == "" {
-		return fmt.Errorf("configure-genesis: missing required field URI")
+		return nil
 	}
 	if t.Region == "" {
-		return fmt.Errorf("configure-genesis: missing required field Region")
+		return fmt.Errorf("configure-genesis: Region is required when URI is set")
 	}
 	parsed, err := url.Parse(t.URI)
 	if err != nil {
@@ -175,6 +180,9 @@ func (t ConfigureGenesisTask) Validate() error {
 }
 
 func (t ConfigureGenesisTask) ToTaskRequest() TaskRequest {
+	if t.URI == "" {
+		return TaskRequest{Type: t.TaskType()}
+	}
 	p := map[string]interface{}{
 		"uri":    t.URI,
 		"region": t.Region,

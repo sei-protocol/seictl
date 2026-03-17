@@ -10,7 +10,7 @@ import (
 
 func TestConfigReloader_HotReloadableField(t *testing.T) {
 	homeDir := t.TempDir()
-	writeDefaultConfig(t, homeDir, seiconfig.ModeRPC)
+	writeDefaultConfig(t, homeDir, seiconfig.ModeFull)
 
 	reloader := NewConfigReloader(homeDir)
 	handler := reloader.Handler()
@@ -35,7 +35,7 @@ func TestConfigReloader_HotReloadableField(t *testing.T) {
 
 func TestConfigReloader_NonHotReloadableField(t *testing.T) {
 	homeDir := t.TempDir()
-	writeDefaultConfig(t, homeDir, seiconfig.ModeRPC)
+	writeDefaultConfig(t, homeDir, seiconfig.ModeFull)
 
 	reloader := NewConfigReloader(homeDir)
 	handler := reloader.Handler()
@@ -55,7 +55,7 @@ func TestConfigReloader_NonHotReloadableField(t *testing.T) {
 
 func TestConfigReloader_UnknownField(t *testing.T) {
 	homeDir := t.TempDir()
-	writeDefaultConfig(t, homeDir, seiconfig.ModeRPC)
+	writeDefaultConfig(t, homeDir, seiconfig.ModeFull)
 
 	reloader := NewConfigReloader(homeDir)
 	handler := reloader.Handler()

@@ -49,7 +49,7 @@ func TestConfigApplier_FullWithOverrides(t *testing.T) {
 	handler := applier.Handler()
 
 	err := handler(context.Background(), map[string]any{
-		"mode":        "rpc",
+		"mode":        "full",
 		"incremental": false,
 		"overrides": map[string]any{
 			"evm.http_port": "9545",
@@ -103,7 +103,7 @@ func TestConfigApplier_FullInvalidMode(t *testing.T) {
 
 func TestConfigApplier_Incremental(t *testing.T) {
 	homeDir := t.TempDir()
-	writeDefaultConfig(t, homeDir, seiconfig.ModeRPC)
+	writeDefaultConfig(t, homeDir, seiconfig.ModeFull)
 
 	applier := NewConfigApplier(homeDir)
 	handler := applier.Handler()
@@ -125,7 +125,7 @@ func TestConfigApplier_Incremental(t *testing.T) {
 	if cfg.EVM.HTTPPort != 9999 {
 		t.Errorf("evm.http_port: got %d, want 9999", cfg.EVM.HTTPPort)
 	}
-	if cfg.Mode != seiconfig.ModeRPC {
+	if cfg.Mode != seiconfig.ModeFull {
 		t.Errorf("mode should be preserved: got %q", cfg.Mode)
 	}
 }
@@ -183,7 +183,7 @@ func TestConfigApplier_WritesFiles(t *testing.T) {
 }
 
 func TestConfigApplier_AllModes(t *testing.T) {
-	modes := []string{"validator", "full", "seed", "archive", "rpc", "indexer"}
+	modes := []string{"validator", "full", "seed", "archive"}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			homeDir := t.TempDir()

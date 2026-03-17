@@ -24,7 +24,7 @@ func TestConfigValidator_ValidConfig(t *testing.T) {
 func TestConfigValidator_AllModes(t *testing.T) {
 	modes := []seiconfig.NodeMode{
 		seiconfig.ModeValidator, seiconfig.ModeFull, seiconfig.ModeSeed,
-		seiconfig.ModeArchive, seiconfig.ModeRPC, seiconfig.ModeIndexer,
+		seiconfig.ModeArchive,
 	}
 	for _, mode := range modes {
 		t.Run(string(mode), func(t *testing.T) {

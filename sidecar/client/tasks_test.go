@@ -171,9 +171,9 @@ func TestSnapshotUploadTask_NoCron(t *testing.T) {
 	}
 }
 
-func TestConfigureGenesisRoundTrip(t *testing.T) {
+func TestConfigureGenesisRoundTrip_S3(t *testing.T) {
 	properties := gopter.NewProperties(gopter.DefaultTestParameters())
-	properties.Property("ConfigureGenesisTask round-trips through TaskRequest", prop.ForAll(
+	properties.Property("ConfigureGenesisTask (S3) round-trips through TaskRequest", prop.ForAll(
 		func(task ConfigureGenesisTask) bool {
 			if err := task.Validate(); err != nil {
 				return false
@@ -188,6 +188,20 @@ func TestConfigureGenesisRoundTrip(t *testing.T) {
 		genConfigureGenesisTask(),
 	))
 	properties.TestingRun(t)
+}
+
+func TestConfigureGenesisRoundTrip_Empty(t *testing.T) {
+	task := ConfigureGenesisTask{}
+	if err := task.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	req := task.ToTaskRequest()
+	if req.Type != TaskTypeConfigureGenesis {
+		t.Errorf("Type = %q, want %q", req.Type, TaskTypeConfigureGenesis)
+	}
+	if req.Params != nil {
+		t.Errorf("expected nil Params for empty genesis task, got %v", req.Params)
+	}
 }
 
 func TestDiscoverPeersRoundTrip(t *testing.T) {
@@ -356,9 +370,9 @@ func TestConfigureGenesisValidation(t *testing.T) {
 		task ConfigureGenesisTask
 		ok   bool
 	}{
-		{"valid", ConfigureGenesisTask{URI: "s3://bucket/key", Region: "us-east-1"}, true},
-		{"missing uri", ConfigureGenesisTask{Region: "us-east-1"}, false},
-		{"missing region", ConfigureGenesisTask{URI: "s3://bucket/key"}, false},
+		{"valid s3", ConfigureGenesisTask{URI: "s3://bucket/key", Region: "us-east-1"}, true},
+		{"empty (uses embedded)", ConfigureGenesisTask{}, true},
+		{"uri without region", ConfigureGenesisTask{URI: "s3://bucket/key"}, false},
 		{"wrong scheme", ConfigureGenesisTask{URI: "https://bucket/key", Region: "us-east-1"}, false},
 		{"no key", ConfigureGenesisTask{URI: "s3://bucket", Region: "us-east-1"}, false},
 		{"no key trailing slash", ConfigureGenesisTask{URI: "s3://bucket/", Region: "us-east-1"}, false},
