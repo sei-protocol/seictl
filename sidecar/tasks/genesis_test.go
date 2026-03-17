@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,6 +70,28 @@ func TestGenesisFetcher_NoChainIDNoS3(t *testing.T) {
 	err := handler(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when both chainID and S3 params are missing")
+	}
+}
+
+func TestGenesisFetcher_S3TakesPriority(t *testing.T) {
+	homeDir := t.TempDir()
+	called := false
+	mockFactory := func(ctx context.Context, region string) (S3GetObjectAPI, error) {
+		called = true
+		return nil, fmt.Errorf("mock: intentional S3 error to prove S3 path was taken")
+	}
+	fetcher := NewGenesisFetcher(homeDir, "pacific-1", mockFactory)
+	handler := fetcher.Handler()
+
+	err := handler(context.Background(), map[string]any{
+		"uri":    "s3://custom-bucket/custom/genesis.json",
+		"region": "us-west-2",
+	})
+	if !called {
+		t.Fatal("expected S3 client factory to be called when S3 params are present")
+	}
+	if err == nil {
+		t.Fatal("expected error from mock S3 factory")
 	}
 }
 
