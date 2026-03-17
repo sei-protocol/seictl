@@ -29,15 +29,15 @@ func TestStatus_OK(t *testing.T) {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(StatusResponse{Status: Ready})
+		_ = json.NewEncoder(w).Encode(StatusResponse{Status: StatusResponseStatusReady})
 	}))
 
 	resp, err := c.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if resp.Status != Ready {
-		t.Errorf("Status = %q, want %q", resp.Status, Ready)
+	if resp.Status != StatusResponseStatusReady {
+		t.Errorf("Status = %q, want %q", resp.Status, StatusResponseStatusReady)
 	}
 }
 

@@ -273,6 +273,61 @@ func TestGetTask(t *testing.T) {
 	}
 }
 
+func TestGetTaskInProgress(t *testing.T) {
+	started := make(chan struct{})
+	blocked := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := engine.NewEngine(ctx, map[engine.TaskType]engine.TaskHandler{
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			close(started)
+			<-blocked
+			return nil
+		},
+	})
+	srv := NewServer(":0", eng)
+
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rec.Code)
+	}
+	var resp map[string]string
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	id := resp["id"]
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for task to start")
+	}
+
+	rec = serveHTTP(srv, http.MethodGet, "/v0/tasks/"+id, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for in-progress task, got %d", rec.Code)
+	}
+
+	var result engine.TaskResult
+	_ = json.NewDecoder(rec.Body).Decode(&result)
+	if result.Status != engine.TaskStatusRunning {
+		t.Fatalf("expected status %q, got %q", engine.TaskStatusRunning, result.Status)
+	}
+	if result.CompletedAt != nil {
+		t.Fatal("expected CompletedAt to be nil for running task")
+	}
+
+	close(blocked)
+	waitForTaskResult(eng, id)
+
+	rec = serveHTTP(srv, http.MethodGet, "/v0/tasks/"+id, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for completed task, got %d", rec.Code)
+	}
+	_ = json.NewDecoder(rec.Body).Decode(&result)
+	if result.Status != engine.TaskStatusCompleted {
+		t.Fatalf("expected status %q after completion, got %q", engine.TaskStatusCompleted, result.Status)
+	}
+}
+
 func TestGetTaskNotFound(t *testing.T) {
 	eng := newTestEngine(t, nil)
 	srv := NewServer(":0", eng)

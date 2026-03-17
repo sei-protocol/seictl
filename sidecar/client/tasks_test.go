@@ -500,7 +500,7 @@ func TestStatusResponseJSONRoundTrip(t *testing.T) {
 			}
 			return decoded.Status == sr.Status
 		},
-		gen.OneConstOf(Initializing, Running, Ready),
+		gen.OneConstOf(StatusResponseStatusInitializing, StatusResponseStatusRunning, StatusResponseStatusReady),
 	))
 	properties.TestingRun(t)
 }
