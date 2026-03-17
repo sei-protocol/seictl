@@ -96,7 +96,7 @@ func TestExportRPCUnavailable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
-	srv.Close() // close immediately so connections fail
+	srv.Close()
 
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
@@ -108,6 +108,38 @@ func TestExportRPCUnavailable(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Export() returned error %v, want nil (fail-safe)", err)
+	}
+}
+
+func TestExportRPCNon200Status(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, "node is syncing")
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+
+	err := e.Export(context.Background(), ResultExportConfig{
+		Bucket:      "test-bucket",
+		Region:      "us-east-1",
+		RPCEndpoint: srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("Export() returned error %v, want nil (fail-safe on HTTP error)", err)
+	}
+}
+
+func TestQueryLatestHeight_ZeroHeight(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"result":{"sync_info":{"latest_block_height":"0"}}}`)
+	}))
+	defer srv.Close()
+
+	_, err := queryLatestHeight(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("expected error for zero height, got nil")
 	}
 }
 

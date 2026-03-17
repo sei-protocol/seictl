@@ -16,6 +16,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	seiconfig "github.com/sei-protocol/sei-config"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seilog"
 )
@@ -23,11 +24,12 @@ import (
 var exportLog = seilog.NewLogger("seictl", "task", "result-export")
 
 const (
-	exportStateFile    = ".sei-sidecar-last-export.json"
-	defaultRPCEndpoint = "http://localhost:26657"
-	defaultPageSize    = 1000
-	exportRPCTimeout   = 10 * time.Second
+	exportStateFile  = ".sei-sidecar-last-export.json"
+	defaultPageSize  = 1000
+	exportRPCTimeout = 10 * time.Second
 )
+
+var defaultRPCEndpoint = fmt.Sprintf("http://localhost:%d", seiconfig.PortRPC)
 
 // ResultExportConfig holds the parameters for the result-export task.
 type ResultExportConfig struct {
@@ -235,6 +237,11 @@ func queryLatestHeight(ctx context.Context, rpcEndpoint string) (int64, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+	}
+
 	var rpcResp struct {
 		Result struct {
 			SyncInfo struct {
@@ -246,7 +253,14 @@ func queryLatestHeight(ctx context.Context, rpcEndpoint string) (int64, error) {
 		return 0, fmt.Errorf("decoding /status response: %w", err)
 	}
 
-	return strconv.ParseInt(rpcResp.Result.SyncInfo.LatestBlockHeight, 10, 64)
+	h, err := strconv.ParseInt(rpcResp.Result.SyncInfo.LatestBlockHeight, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parsing latest_block_height %q: %w", rpcResp.Result.SyncInfo.LatestBlockHeight, err)
+	}
+	if h <= 0 {
+		return 0, fmt.Errorf("latest_block_height is %d, node may still be syncing", h)
+	}
+	return h, nil
 }
 
 func queryBlockResults(ctx context.Context, rpcEndpoint string, height int64) (json.RawMessage, error) {

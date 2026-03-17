@@ -31,26 +31,28 @@ type taskEnvelope struct {
 // with a TryLock gate. Scheduled tasks run in their own goroutines when their
 // cron fires. Both share the unified TaskResult model.
 type Engine struct {
-	handlers  map[TaskType]TaskHandler
-	ctx       context.Context
-	taskCh    chan taskEnvelope
-	taskMu    sync.Mutex
-	running   atomic.Bool
-	mu        sync.RWMutex
-	ready     bool
-	inflight  *TaskResult
-	results   []*TaskResult
-	scheduled map[string]*TaskResult
+	handlers     map[TaskType]TaskHandler
+	ctx          context.Context
+	taskCh       chan taskEnvelope
+	taskMu       sync.Mutex
+	running      atomic.Bool
+	mu           sync.RWMutex
+	ready        bool
+	inflight     *TaskResult
+	results      []*TaskResult
+	scheduled    map[string]*TaskResult
+	runningTasks map[string]struct{}
 }
 
 // NewEngine creates a new Engine and starts its worker loop. The engine
 // runs until ctx is cancelled.
 func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler) *Engine {
 	e := &Engine{
-		handlers:  handlers,
-		ctx:       ctx,
-		taskCh:    make(chan taskEnvelope, 1),
-		scheduled: make(map[string]*TaskResult),
+		handlers:     handlers,
+		ctx:          ctx,
+		taskCh:       make(chan taskEnvelope, 1),
+		scheduled:    make(map[string]*TaskResult),
+		runningTasks: make(map[string]struct{}),
 	}
 	go e.loop()
 	return e
@@ -175,9 +177,14 @@ func (e *Engine) EvalSchedules() {
 			continue
 		}
 
-		// Advance NextRunAt before launching so a concurrent EvalSchedules
-		// call won't fire the same task again while it's still running.
 		e.mu.Lock()
+		if _, alreadyRunning := e.runningTasks[tr.ID]; alreadyRunning {
+			e.mu.Unlock()
+			log.Debug("scheduled task still running, skipping", "type", tr.Type, "id", tr.ID)
+			continue
+		}
+		e.runningTasks[tr.ID] = struct{}{}
+
 		if tr.Schedule != nil && tr.Schedule.Cron != "" {
 			if next, cronErr := nextCronTime(tr.Schedule.Cron, now); cronErr == nil {
 				tr.NextRunAt = &next
@@ -192,6 +199,7 @@ func (e *Engine) EvalSchedules() {
 
 			e.mu.Lock()
 			defer e.mu.Unlock()
+			delete(e.runningTasks, tr.ID)
 			s, ok := e.scheduled[tr.ID]
 			if !ok {
 				return
