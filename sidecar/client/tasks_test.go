@@ -620,45 +620,6 @@ func TestResultExportValidation(t *testing.T) {
 	}
 }
 
-func TestSnapshotRestoreRoundTrip_WithTargetHeight(t *testing.T) {
-	task := SnapshotRestoreTask{
-		Bucket:       "my-bucket",
-		Prefix:       "snapshots/",
-		Region:       "us-east-1",
-		ChainID:      "pacific-1",
-		TargetHeight: 198000000,
-	}
-	req := task.ToTaskRequest()
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	var decoded TaskRequest
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-
-	rebuilt := SnapshotRestoreTaskFromParams(*decoded.Params)
-	if rebuilt.TargetHeight != 198000000 {
-		t.Errorf("TargetHeight = %d, want 198000000", rebuilt.TargetHeight)
-	}
-}
-
-func TestSnapshotRestoreRoundTrip_ZeroTargetHeight(t *testing.T) {
-	task := SnapshotRestoreTask{
-		Bucket:  "my-bucket",
-		Prefix:  "snapshots/",
-		Region:  "us-east-1",
-		ChainID: "pacific-1",
-	}
-	req := task.ToTaskRequest()
-
-	if _, present := (*req.Params)["targetHeight"]; present {
-		t.Error("expected targetHeight to be absent from params when zero")
-	}
-}
-
 func TestResultExportTask_HasCronSchedule(t *testing.T) {
 	task := ResultExportTask{Bucket: "b", Region: "r"}
 	req := task.ToTaskRequest()

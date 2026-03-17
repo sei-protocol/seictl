@@ -38,11 +38,10 @@ const (
 
 // SnapshotRestoreTask downloads and extracts a snapshot archive from S3.
 type SnapshotRestoreTask struct {
-	Bucket       string
-	Prefix       string
-	Region       string
-	ChainID      string
-	TargetHeight int64
+	Bucket  string
+	Prefix  string
+	Region  string
+	ChainID string
 }
 
 func (t SnapshotRestoreTask) TaskType() string { return TaskTypeSnapshotRestore }
@@ -70,9 +69,6 @@ func (t SnapshotRestoreTask) ToTaskRequest() TaskRequest {
 		"region":  t.Region,
 		"chainId": t.ChainID,
 	}
-	if t.TargetHeight > 0 {
-		p["targetHeight"] = t.TargetHeight
-	}
 	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
 
@@ -80,16 +76,11 @@ func (t SnapshotRestoreTask) ToTaskRequest() TaskRequest {
 // a generic params map. Useful for round-trip testing.
 func SnapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestoreTask {
 	s := func(k string) string { v, _ := params[k].(string); return v }
-	var targetHeight int64
-	if v, ok := params["targetHeight"].(float64); ok {
-		targetHeight = int64(v)
-	}
 	return SnapshotRestoreTask{
-		Bucket:       s("bucket"),
-		Prefix:       s("prefix"),
-		Region:       s("region"),
-		ChainID:      s("chainId"),
-		TargetHeight: targetHeight,
+		Bucket:  s("bucket"),
+		Prefix:  s("prefix"),
+		Region:  s("region"),
+		ChainID: s("chainId"),
 	}
 }
 
