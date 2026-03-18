@@ -32,13 +32,25 @@ const (
 	TaskResultStatusRunning   TaskResultStatus = "running"
 )
 
+// AsyncConfig Describes asynchronous task execution. Omit for immediate one-shot. Set exactly one field.
+type AsyncConfig struct {
+	// Daemon Marks a task as long-running. The handler runs indefinitely; only an unrecoverable error produces a terminal status.
+	Daemon *DaemonConfig `json:"daemon,omitempty"`
+
+	// Schedule Triggers a task on a recurring basis.
+	Schedule *ScheduleConfig `json:"schedule,omitempty"`
+}
+
+// DaemonConfig Marks a task as long-running. The handler runs indefinitely; only an unrecoverable error produces a terminal status.
+type DaemonConfig = map[string]interface{}
+
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// Schedule Defines when a task should recur. Currently only cron is supported; blockHeight is reserved for future use.
-type Schedule struct {
+// ScheduleConfig Triggers a task on a recurring basis.
+type ScheduleConfig struct {
 	// BlockHeight Reserved for future block-height-based scheduling.
 	BlockHeight *int64 `json:"blockHeight,omitempty"`
 
@@ -56,10 +68,9 @@ type StatusResponseStatus string
 
 // TaskRequest defines model for TaskRequest.
 type TaskRequest struct {
+	// Async Describes asynchronous task execution. Omit for immediate one-shot. Set exactly one field.
+	Async  *AsyncConfig            `json:"async,omitempty"`
 	Params *map[string]interface{} `json:"params,omitempty"`
-
-	// Schedule Defines when a task should recur. Currently only cron is supported; blockHeight is reserved for future use.
-	Schedule *Schedule `json:"schedule,omitempty"`
 
 	// Type Task type identifier.
 	Type string `json:"type"`
@@ -67,16 +78,15 @@ type TaskRequest struct {
 
 // TaskResult defines model for TaskResult.
 type TaskResult struct {
-	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	// Async Describes asynchronous task execution. Omit for immediate one-shot. Set exactly one field.
+	Async       *AsyncConfig `json:"async,omitempty"`
+	CompletedAt *time.Time   `json:"completedAt,omitempty"`
 
 	// Error Error message if the task failed.
 	Error     *string                 `json:"error,omitempty"`
 	Id        openapi_types.UUID      `json:"id"`
 	NextRunAt *time.Time              `json:"nextRunAt,omitempty"`
 	Params    *map[string]interface{} `json:"params,omitempty"`
-
-	// Schedule Defines when a task should recur. Currently only cron is supported; blockHeight is reserved for future use.
-	Schedule *Schedule `json:"schedule,omitempty"`
 
 	// Status Current task lifecycle state.
 	Status      TaskResultStatus `json:"status"`

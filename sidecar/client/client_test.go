@@ -83,9 +83,9 @@ func TestSubmitTask_Accepted(t *testing.T) {
 		Region:  "us-east-1",
 		ChainID: "sei-chain",
 	}
-	id, err := c.SubmitTask(context.Background(), task)
+	id, err := c.SubmitSnapshotRestoreTask(context.Background(), task)
 	if err != nil {
-		t.Fatalf("SubmitTask() error = %v", err)
+		t.Fatalf("SubmitSnapshotRestoreTask() error = %v", err)
 	}
 	if id != taskID {
 		t.Errorf("returned id = %s, want %s", id, taskID)
@@ -100,23 +100,23 @@ func TestSubmitTask_Scheduled(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		if req.Schedule == nil || req.Schedule.Cron == nil {
-			t.Fatal("expected schedule.cron to be set")
+		if req.Async == nil || req.Async.Schedule == nil || req.Async.Schedule.Cron == nil {
+			t.Fatal("expected async.schedule.cron to be set")
 		}
-		if *req.Schedule.Cron != cron {
-			t.Errorf("schedule.cron = %q, want %q", *req.Schedule.Cron, cron)
+		if *req.Async.Schedule.Cron != cron {
+			t.Errorf("async.schedule.cron = %q, want %q", *req.Async.Schedule.Cron, cron)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(TaskSubmitResponse{Id: taskID})
 	}))
 
-	id, err := c.SubmitRawTask(context.Background(), TaskRequest{
-		Type:     TaskTypeDiscoverPeers,
-		Schedule: &Schedule{Cron: &cron},
+	id, err := c.SubmitTask(context.Background(), TaskRequest{
+		Type:  TaskTypeDiscoverPeers,
+		Async: &AsyncConfig{Schedule: &ScheduleConfig{Cron: &cron}},
 	})
 	if err != nil {
-		t.Fatalf("SubmitRawTask() error = %v", err)
+		t.Fatalf("SubmitTask() error = %v", err)
 	}
 	if id != taskID {
 		t.Errorf("returned id = %s, want %s", id, taskID)
@@ -130,7 +130,7 @@ func TestSubmitTask_Busy(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(ErrorResponse{Error: "task already running"})
 	}))
 
-	_, err := c.SubmitTask(context.Background(), MarkReadyTask{})
+	_, err := c.SubmitMarkReadyTask(context.Background(), MarkReadyTask{})
 	if !errors.Is(err, ErrBusy) {
 		t.Errorf("error = %v, want ErrBusy", err)
 	}
@@ -143,7 +143,7 @@ func TestSubmitTask_BadRequest(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(ErrorResponse{Error: "unknown task type"})
 	}))
 
-	_, err := c.SubmitRawTask(context.Background(), TaskRequest{Type: "invalid"})
+	_, err := c.SubmitTask(context.Background(), TaskRequest{Type: "invalid"})
 	if err == nil {
 		t.Fatal("expected error for 400 response")
 	}
@@ -157,7 +157,7 @@ func TestSubmitTask_ValidationFailure(t *testing.T) {
 		t.Fatal("server should not be called when validation fails")
 	}))
 
-	_, err := c.SubmitTask(context.Background(), SnapshotRestoreTask{})
+	_, err := c.SubmitSnapshotRestoreTask(context.Background(), SnapshotRestoreTask{})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}

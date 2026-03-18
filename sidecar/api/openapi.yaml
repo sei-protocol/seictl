@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: sei-sidecar API
   description: HTTP API for the sei-sidecar task executor.
-  version: 0.3.0
+  version: 0.4.0
   license:
     name: Apache-2.0
 
@@ -38,9 +38,11 @@ paths:
       operationId: submitTask
       summary: Submit a task
       description: |
-        If `schedule` is provided, a recurring scheduled task is created and
-        201 is returned. Otherwise the task is submitted for immediate execution
-        and 202 is returned. Returns 409 if a one-shot task is already running.
+        The `async` field selects the execution mode:
+        - Omitted: immediate one-shot (202).
+        - `async.schedule`: recurring cron-triggered task (201).
+        - `async.daemon`: long-running daemon task (201).
+        Returns 409 if an immediate task is already running.
       requestBody:
         required: true
         content:
@@ -49,7 +51,7 @@ paths:
               $ref: "#/components/schemas/TaskRequest"
       responses:
         "201":
-          description: Scheduled task created.
+          description: Scheduled or daemon task created.
           content:
             application/json:
               schema:
@@ -75,7 +77,7 @@ paths:
     get:
       operationId: listTasks
       summary: List recent task results
-      description: Returns the most recent completed task results and active scheduled tasks.
+      description: Returns the most recent completed task results, active scheduled tasks, and daemon tasks.
       responses:
         "200":
           description: Task results.
@@ -113,7 +115,9 @@ paths:
     delete:
       operationId: deleteTask
       summary: Remove a task
-      description: Removes a completed task result or stops and removes a scheduled task.
+      description: |
+        Removes a completed task result, stops and removes a scheduled task,
+        or cancels and removes a daemon task.
       parameters:
         - name: id
           in: path
@@ -143,12 +147,23 @@ components:
         params:
           type: object
           additionalProperties: true
-        schedule:
-          $ref: "#/components/schemas/Schedule"
+        async:
+          $ref: "#/components/schemas/AsyncConfig"
 
-    Schedule:
+    AsyncConfig:
       type: object
-      description: Defines when a task should recur. Currently only cron is supported; blockHeight is reserved for future use.
+      description: >
+        Describes asynchronous task execution. Omit for immediate one-shot.
+        Set exactly one field.
+      properties:
+        schedule:
+          $ref: "#/components/schemas/ScheduleConfig"
+        daemon:
+          $ref: "#/components/schemas/DaemonConfig"
+
+    ScheduleConfig:
+      type: object
+      description: Triggers a task on a recurring basis.
       properties:
         cron:
           type: string
@@ -157,6 +172,13 @@ components:
           type: integer
           format: int64
           description: Reserved for future block-height-based scheduling.
+
+    DaemonConfig:
+      type: object
+      description: >
+        Marks a task as long-running. The handler runs indefinitely; only an
+        unrecoverable error produces a terminal status.
+      additionalProperties: false
 
     StatusResponse:
       type: object
@@ -192,8 +214,8 @@ components:
         params:
           type: object
           additionalProperties: true
-        schedule:
-          $ref: "#/components/schemas/Schedule"
+        async:
+          $ref: "#/components/schemas/AsyncConfig"
         error:
           type: string
           description: Error message if the task failed.

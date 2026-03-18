@@ -161,7 +161,7 @@ func TestPostTaskScheduled(t *testing.T) {
 	})
 	srv := NewServer(":0", eng)
 
-	body := `{"type":"config-patch","schedule":{"cron":"*/5 * * * *"}}`
+	body := `{"type":"config-patch","async":{"schedule":{"cron":"*/5 * * * *"}}}`
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
@@ -208,7 +208,7 @@ func TestPostTaskInvalidSchedule(t *testing.T) {
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 	srv := NewServer(":0", eng)
-	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","schedule":{"cron":"not a cron"}}`)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","async":{"schedule":{"cron":"not a cron"}}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
@@ -366,7 +366,7 @@ func TestDeleteScheduledTask(t *testing.T) {
 	})
 	srv := NewServer(":0", eng)
 
-	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","schedule":{"cron":"*/5 * * * *"}}`)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","async":{"schedule":{"cron":"*/5 * * * *"}}}`)
 	var resp map[string]string
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
 	id := resp["id"]

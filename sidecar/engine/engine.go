@@ -27,21 +27,35 @@ type taskEnvelope struct {
 	submittedAt time.Time
 }
 
-// Engine is the task executor. One-shot tasks are serialized through a channel
-// with a TryLock gate. Scheduled tasks run in their own goroutines when their
-// cron fires. Both share the unified TaskResult model.
+// daemonEntry tracks a running daemon task and its cancel func.
+type daemonEntry struct {
+	result *TaskResult
+	cancel context.CancelFunc
+}
+
+// Engine is the task executor. Immediate tasks are serialized through a
+// channel with a TryLock gate. Scheduled tasks run in their own goroutines
+// when their cron fires. Daemon tasks run indefinitely in dedicated
+// goroutines. All three share the unified TaskResult model.
 type Engine struct {
-	handlers     map[TaskType]TaskHandler
-	ctx          context.Context
-	taskCh       chan taskEnvelope
-	taskMu       sync.Mutex
-	running      atomic.Bool
-	mu           sync.RWMutex
-	ready        bool
-	inflight     *TaskResult
-	results      []*TaskResult
+	handlers map[TaskType]TaskHandler
+	ctx      context.Context
+	taskCh   chan taskEnvelope
+	taskMu   sync.Mutex
+	running  atomic.Bool
+	mu       sync.RWMutex
+	ready    bool
+
+	// Immediate one-shot tasks.
+	inflight *TaskResult
+	results  []*TaskResult
+
+	// Scheduled (cron) tasks.
 	scheduled    map[string]*TaskResult
 	runningTasks map[string]struct{}
+
+	// Long-running daemon tasks.
+	daemons map[string]*daemonEntry
 }
 
 // NewEngine creates a new Engine and starts its worker loop. The engine
@@ -53,6 +67,7 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler) *Engine {
 		taskCh:       make(chan taskEnvelope, 1),
 		scheduled:    make(map[string]*TaskResult),
 		runningTasks: make(map[string]struct{}),
+		daemons:      make(map[string]*daemonEntry),
 	}
 	go e.loop()
 	return e
@@ -123,7 +138,7 @@ func (e *Engine) Submit(task Task) (string, error) {
 // SubmitScheduled creates a scheduled task. Returns the task ID. Currently
 // only cron schedules are supported; block-height scheduling is reserved for
 // future use. The schedule is evaluated by EvalSchedules.
-func (e *Engine) SubmitScheduled(task Task, sched Schedule) (string, error) {
+func (e *Engine) SubmitScheduled(task Task, sched ScheduleConfig) (string, error) {
 	if _, ok := e.handlers[task.Type]; !ok {
 		return "", fmt.Errorf("unknown task type: %s", task.Type)
 	}
@@ -140,7 +155,7 @@ func (e *Engine) SubmitScheduled(task Task, sched Schedule) (string, error) {
 		Type:        string(task.Type),
 		Status:      TaskStatusRunning,
 		Params:      task.Params,
-		Schedule:    &sched,
+		Async:       &AsyncConfig{Schedule: &sched},
 		SubmittedAt: now,
 		NextRunAt:   &next,
 	}
@@ -150,6 +165,59 @@ func (e *Engine) SubmitScheduled(task Task, sched Schedule) (string, error) {
 	e.mu.Unlock()
 
 	log.Info("scheduled task registered", "type", task.Type, "id", id, "cron", sched.Cron, "next-run", next.Format(time.RFC3339))
+	return id, nil
+}
+
+// SubmitDaemon starts a long-running daemon task in its own goroutine.
+// The handler is expected to run indefinitely; a nil return is treated as
+// unexpected completion and a non-nil return as a terminal failure. Daemon
+// tasks bypass the one-shot lock.
+func (e *Engine) SubmitDaemon(task Task, cfg DaemonConfig) (string, error) {
+	handler, ok := e.handlers[task.Type]
+	if !ok {
+		return "", fmt.Errorf("unknown task type: %s", task.Type)
+	}
+
+	id := uuid.New().String()
+	now := time.Now()
+	daemonCtx, cancel := context.WithCancel(e.ctx)
+
+	tr := &TaskResult{
+		ID:          id,
+		Type:        string(task.Type),
+		Status:      TaskStatusRunning,
+		Params:      task.Params,
+		Async:       &AsyncConfig{Daemon: &cfg},
+		SubmittedAt: now,
+	}
+
+	e.mu.Lock()
+	e.daemons[id] = &daemonEntry{result: tr, cancel: cancel}
+	e.mu.Unlock()
+
+	log.Info("daemon task started", "type", task.Type, "id", id)
+
+	go func() {
+		err := handler(daemonCtx, task.Params)
+
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		entry, ok := e.daemons[id]
+		if !ok {
+			return
+		}
+		t := time.Now()
+		entry.result.CompletedAt = &t
+		if err != nil {
+			entry.result.Error = err.Error()
+			entry.result.Status = TaskStatusFailed
+			log.Error("daemon task failed", "type", task.Type, "id", id, "err", err)
+		} else {
+			entry.result.Status = TaskStatusCompleted
+			log.Warn("daemon task returned unexpectedly", "type", task.Type, "id", id)
+		}
+	}()
+
 	return id, nil
 }
 
@@ -185,8 +253,8 @@ func (e *Engine) EvalSchedules() {
 		}
 		e.runningTasks[tr.ID] = struct{}{}
 
-		if tr.Schedule != nil && tr.Schedule.Cron != "" {
-			if next, cronErr := nextCronTime(tr.Schedule.Cron, now); cronErr == nil {
+		if tr.Async != nil && tr.Async.Schedule != nil && tr.Async.Schedule.Cron != "" {
+			if next, cronErr := nextCronTime(tr.Async.Schedule.Cron, now); cronErr == nil {
 				tr.NextRunAt = &next
 				log.Debug("scheduled task advancing", "type", tr.Type, "id", tr.ID, "next-run", next.Format(time.RFC3339))
 			}
@@ -255,12 +323,13 @@ func (e *Engine) Status() StatusResponse {
 }
 
 // RecentResults returns the most recent task results (newest first),
-// combining in-flight, completed one-shot results, and active scheduled tasks.
+// combining in-flight, completed one-shot results, scheduled tasks, and
+// daemon tasks.
 func (e *Engine) RecentResults() []TaskResult {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	cap := len(e.results) + len(e.scheduled) + 1
+	cap := len(e.results) + len(e.scheduled) + len(e.daemons) + 1
 	all := make([]TaskResult, 0, cap)
 	if e.inflight != nil {
 		all = append(all, *e.inflight)
@@ -271,6 +340,9 @@ func (e *Engine) RecentResults() []TaskResult {
 	for _, s := range e.scheduled {
 		all = append(all, *s)
 	}
+	for _, d := range e.daemons {
+		all = append(all, *d.result)
+	}
 
 	if len(all) > maxResults {
 		all = all[:maxResults]
@@ -278,7 +350,8 @@ func (e *Engine) RecentResults() []TaskResult {
 	return all
 }
 
-// GetResult returns a task by ID (in-flight, completed, or scheduled), or nil.
+// GetResult returns a task by ID (in-flight, completed, scheduled, or
+// daemon), or nil.
 func (e *Engine) GetResult(id string) *TaskResult {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -291,6 +364,10 @@ func (e *Engine) GetResult(id string) *TaskResult {
 		cp := *s
 		return &cp
 	}
+	if d, ok := e.daemons[id]; ok {
+		cp := *d.result
+		return &cp
+	}
 	for _, r := range e.results {
 		if r.ID == id {
 			cp := *r
@@ -301,13 +378,19 @@ func (e *Engine) GetResult(id string) *TaskResult {
 }
 
 // RemoveResult removes a task by ID. For scheduled tasks this stops the
-// schedule. Returns true if found.
+// schedule. For daemon tasks this cancels the goroutine's context.
+// Returns true if found.
 func (e *Engine) RemoveResult(id string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	if _, ok := e.scheduled[id]; ok {
 		delete(e.scheduled, id)
+		return true
+	}
+	if d, ok := e.daemons[id]; ok {
+		d.cancel()
+		delete(e.daemons, id)
 		return true
 	}
 	for i, r := range e.results {

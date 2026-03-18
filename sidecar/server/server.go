@@ -17,12 +17,13 @@ type Server struct {
 	mux    *http.ServeMux
 }
 
-// TaskRequest is the JSON body for POST /v0/tasks. If Schedule is set the
-// task becomes a recurring cron-triggered task; otherwise it runs immediately.
+// TaskRequest is the JSON body for POST /v0/tasks. The Async field
+// selects the execution mode: nil = immediate one-shot,
+// async.schedule = cron-triggered, async.daemon = long-running.
 type TaskRequest struct {
-	Type     string           `json:"type"`
-	Params   map[string]any   `json:"params,omitempty"`
-	Schedule *engine.Schedule `json:"schedule,omitempty"`
+	Type   string              `json:"type"`
+	Params map[string]any      `json:"params,omitempty"`
+	Async  *engine.AsyncConfig `json:"async,omitempty"`
 }
 
 // ErrorResponse is a standard JSON error envelope.
@@ -81,32 +82,41 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 
 	task := engine.Task{Type: engine.TaskType(req.Type), Params: req.Params}
 
-	if req.Schedule != nil {
-		if req.Schedule.Cron != "" {
-			if err := engine.ValidateCron(req.Schedule.Cron); err != nil {
+	switch {
+	case req.Async != nil && req.Async.Schedule != nil:
+		if req.Async.Schedule.Cron != "" {
+			if err := engine.ValidateCron(req.Async.Schedule.Cron); err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
 		}
-		id, err := s.engine.SubmitScheduled(task, *req.Schedule)
+		id, err := s.engine.SubmitScheduled(task, *req.Async.Schedule)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
-		return
-	}
 
-	id, err := s.engine.Submit(task)
-	if err != nil {
-		if errors.Is(err, engine.ErrBusy) {
-			writeError(w, http.StatusConflict, err.Error())
+	case req.Async != nil && req.Async.Daemon != nil:
+		id, err := s.engine.SubmitDaemon(task, *req.Async.Daemon)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+
+	default:
+		id, err := s.engine.Submit(task)
+		if err != nil {
+			if errors.Is(err, engine.ErrBusy) {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"id": id})
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"id": id})
 }
 
 func (s *Server) handleListTasks(w http.ResponseWriter, _ *http.Request) {

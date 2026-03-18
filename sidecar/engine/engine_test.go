@@ -264,7 +264,7 @@ func TestSubmitScheduled(t *testing.T) {
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 
-	id, err := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, Schedule{Cron: "*/5 * * * *"})
+	id, err := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, ScheduleConfig{Cron: "*/5 * * * *"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,8 +276,8 @@ func TestSubmitScheduled(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected result for scheduled task")
 	}
-	if result.Schedule == nil || result.Schedule.Cron != "*/5 * * * *" {
-		t.Fatalf("expected cron expression in schedule, got %+v", result.Schedule)
+	if result.Async == nil || result.Async.Schedule == nil || result.Async.Schedule.Cron != "*/5 * * * *" {
+		t.Fatalf("expected cron expression in async.schedule, got %+v", result.Async)
 	}
 	if result.NextRunAt == nil {
 		t.Fatal("expected NextRunAt to be set")
@@ -289,7 +289,7 @@ func TestSubmitScheduledEmptyCron(t *testing.T) {
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 
-	_, err := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, Schedule{})
+	_, err := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, ScheduleConfig{})
 	if err == nil {
 		t.Fatal("expected error for empty schedule")
 	}
@@ -300,7 +300,7 @@ func TestRemoveScheduledTask(t *testing.T) {
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 
-	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, Schedule{Cron: "*/5 * * * *"})
+	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, ScheduleConfig{Cron: "*/5 * * * *"})
 
 	if !eng.RemoveResult(id) {
 		t.Fatal("expected remove to return true")
@@ -321,7 +321,7 @@ func TestEvalSchedulesFiresDueTasks(t *testing.T) {
 		},
 	})
 
-	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, Schedule{Cron: "* * * * *"})
+	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, ScheduleConfig{Cron: "* * * * *"})
 
 	eng.mu.Lock()
 	past := time.Now().Add(-1 * time.Minute)
@@ -352,7 +352,7 @@ func TestEvalSchedulesSkipsAlreadyRunning(t *testing.T) {
 		},
 	})
 
-	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, Schedule{Cron: "* * * * *"})
+	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, ScheduleConfig{Cron: "* * * * *"})
 
 	eng.mu.Lock()
 	past := time.Now().Add(-1 * time.Minute)
@@ -379,6 +379,179 @@ func TestEvalSchedulesSkipsAlreadyRunning(t *testing.T) {
 	}
 
 	close(blocked)
+}
+
+// --- Daemon task tests ---
+
+func TestSubmitDaemon(t *testing.T) {
+	started := make(chan struct{})
+	blocked := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
+			close(started)
+			<-blocked
+			return nil
+		},
+	})
+
+	id, err := eng.SubmitDaemon(Task{Type: TaskConfigPatch}, DaemonConfig{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id == "" {
+		t.Fatal("expected non-empty ID")
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for daemon task to start")
+	}
+
+	result := eng.GetResult(id)
+	if result == nil {
+		t.Fatal("expected result for daemon task")
+	}
+	if result.Status != TaskStatusRunning {
+		t.Fatalf("expected status %q, got %q", TaskStatusRunning, result.Status)
+	}
+	if result.Async == nil || result.Async.Daemon == nil {
+		t.Fatal("expected async.daemon to be set")
+	}
+
+	close(blocked)
+}
+
+func TestSubmitDaemonRejectsUnknownType(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{})
+
+	_, err := eng.SubmitDaemon(Task{Type: "nonexistent"}, DaemonConfig{})
+	if err == nil {
+		t.Fatal("expected error for unknown task type")
+	}
+}
+
+func TestDaemonTaskFailure(t *testing.T) {
+	handlerErr := errors.New("fatal crash")
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return handlerErr },
+	})
+
+	id, _ := eng.SubmitDaemon(Task{Type: TaskConfigPatch}, DaemonConfig{})
+	result := waitForResult(t, eng, id)
+
+	if result.Status != TaskStatusFailed {
+		t.Fatalf("expected status %q, got %q", TaskStatusFailed, result.Status)
+	}
+	if result.Error != handlerErr.Error() {
+		t.Fatalf("expected error %q, got %q", handlerErr.Error(), result.Error)
+	}
+}
+
+func TestDaemonTaskUnexpectedReturn(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	id, _ := eng.SubmitDaemon(Task{Type: TaskConfigPatch}, DaemonConfig{})
+	result := waitForResult(t, eng, id)
+
+	if result.Status != TaskStatusCompleted {
+		t.Fatalf("expected status %q, got %q", TaskStatusCompleted, result.Status)
+	}
+}
+
+func TestRemoveDaemonTaskCancels(t *testing.T) {
+	started := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
+
+	id, _ := eng.SubmitDaemon(Task{Type: TaskConfigPatch}, DaemonConfig{})
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for daemon task to start")
+	}
+
+	if !eng.RemoveResult(id) {
+		t.Fatal("expected remove to return true")
+	}
+	if eng.GetResult(id) != nil {
+		t.Fatal("expected nil after removal")
+	}
+}
+
+func TestDaemonDoesNotBlockOneShot(t *testing.T) {
+	bgStarted := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
+			close(bgStarted)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+		TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	_, _ = eng.SubmitDaemon(Task{Type: TaskConfigPatch}, DaemonConfig{})
+
+	select {
+	case <-bgStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for daemon task to start")
+	}
+
+	id, err := eng.Submit(Task{Type: TaskMarkReady})
+	if err != nil {
+		t.Fatalf("one-shot should not be blocked by daemon task: %v", err)
+	}
+	waitForResult(t, eng, id)
+}
+
+func TestRecentResultsIncludesDaemon(t *testing.T) {
+	started := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
+
+	id, _ := eng.SubmitDaemon(Task{Type: TaskConfigPatch}, DaemonConfig{})
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for daemon task to start")
+	}
+
+	results := eng.RecentResults()
+	found := false
+	for _, r := range results {
+		if r.ID == id {
+			found = true
+			if r.Async == nil || r.Async.Daemon == nil {
+				t.Fatal("expected async.daemon in recent results")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected daemon task in recent results")
+	}
 }
 
 func TestContextCancellationStopsEngine(t *testing.T) {
