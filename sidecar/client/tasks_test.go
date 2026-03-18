@@ -644,3 +644,96 @@ func TestResultExportTask_WithSchedule(t *testing.T) {
 		t.Errorf("schedule.cron = %q, want %q", *req.Schedule.Cron, cron)
 	}
 }
+
+func TestAwaitConditionValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		task AwaitConditionTask
+		ok   bool
+	}{
+		{"valid height", AwaitConditionTask{Condition: ConditionHeight, TargetHeight: 1000}, true},
+		{"valid height with action", AwaitConditionTask{Condition: ConditionHeight, TargetHeight: 1000, Action: ActionSIGTERM}, true},
+		{"zero height", AwaitConditionTask{Condition: ConditionHeight, TargetHeight: 0}, false},
+		{"negative height", AwaitConditionTask{Condition: ConditionHeight, TargetHeight: -1}, false},
+		{"unknown condition", AwaitConditionTask{Condition: "foo", TargetHeight: 1000}, false},
+		{"empty condition", AwaitConditionTask{TargetHeight: 1000}, false},
+		{"unknown action", AwaitConditionTask{Condition: ConditionHeight, TargetHeight: 1000, Action: "BAD"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.task.Validate()
+			if tc.ok && err != nil {
+				t.Errorf("expected no error, got %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Error("expected validation error, got nil")
+			}
+		})
+	}
+}
+
+func TestAwaitConditionToTaskRequest(t *testing.T) {
+	task := AwaitConditionTask{
+		Condition:    ConditionHeight,
+		TargetHeight: 5000,
+		Action:       ActionSIGTERM,
+	}
+	req := task.ToTaskRequest()
+	if req.Type != TaskTypeAwaitCondition {
+		t.Errorf("Type = %q, want %q", req.Type, TaskTypeAwaitCondition)
+	}
+	if req.Params == nil {
+		t.Fatal("expected non-nil Params")
+	}
+	p := *req.Params
+	if p["condition"] != ConditionHeight {
+		t.Errorf("condition = %v, want %q", p["condition"], ConditionHeight)
+	}
+	if p["targetHeight"] != int64(5000) {
+		t.Errorf("targetHeight = %v, want 5000", p["targetHeight"])
+	}
+	if p["action"] != ActionSIGTERM {
+		t.Errorf("action = %v, want %q", p["action"], ActionSIGTERM)
+	}
+}
+
+func TestAwaitConditionToTaskRequest_NoAction(t *testing.T) {
+	task := AwaitConditionTask{
+		Condition:    ConditionHeight,
+		TargetHeight: 100,
+	}
+	req := task.ToTaskRequest()
+	p := *req.Params
+	if _, ok := p["action"]; ok {
+		t.Errorf("expected action to be absent, got %v", p["action"])
+	}
+}
+
+func TestAwaitConditionJSONRoundTrip(t *testing.T) {
+	task := AwaitConditionTask{
+		Condition:    ConditionHeight,
+		TargetHeight: 8000,
+		Action:       ActionSIGTERM,
+	}
+	req := task.ToTaskRequest()
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded TaskRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Type != TaskTypeAwaitCondition {
+		t.Errorf("decoded Type = %q, want %q", decoded.Type, TaskTypeAwaitCondition)
+	}
+	p := *decoded.Params
+	if p["condition"] != ConditionHeight {
+		t.Errorf("condition = %v, want %q", p["condition"], ConditionHeight)
+	}
+	// JSON numbers decode as float64.
+	if p["targetHeight"] != float64(8000) {
+		t.Errorf("targetHeight = %v (type %T), want 8000", p["targetHeight"], p["targetHeight"])
+	}
+}

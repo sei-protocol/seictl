@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
@@ -27,6 +29,9 @@ var serveCmd = cli.Command{
 	},
 	Action: func(ctx context.Context, cmd *cli.Command) error {
 		defer func() { _ = seilog.Close() }()
+
+		ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
+		defer stop()
 
 		homeDir := destinations.home
 		if homeDir == "" {
@@ -51,6 +56,7 @@ var serveCmd = cli.Command{
 			engine.TaskConfigureStateSync: tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
 			engine.TaskSnapshotUpload:     tasks.NewSnapshotUploader(homeDir, nil).Handler(),
 			engine.TaskResultExport:       tasks.NewResultExporter(homeDir, nil).Handler(),
+			engine.TaskAwaitCondition:     tasks.NewConditionWaiter(nil).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers)
