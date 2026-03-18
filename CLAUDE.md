@@ -6,7 +6,7 @@ Dual-purpose tool: CLI for Sei node operators and HTTP sidecar server for the se
 
 - **CLI commands**: `config patch`, `genesis patch`, `patch`, `serve`, `await` (top-level files: `config.go`, `genesis.go`, `patch.go`, `serve.go`, `await.go`)
 - **Sidecar server**: `sidecar/server/` — HTTP API on `127.0.0.1:7777`
-- **Task engine**: `sidecar/engine/` — serial one-shot executor + cron scheduler
+- **Task engine**: `sidecar/engine/` — concurrent task executor + cron scheduler
 - **Task handlers**: `sidecar/tasks/` — snapshot, peers, genesis, config, state-sync, upload
 - **Generated client**: `sidecar/client/` — OpenAPI-generated HTTP client for the sidecar API, consumed by sei-k8s-controller
 - **OpenAPI spec**: `sidecar/api/openapi.yaml` — source of truth for the sidecar HTTP contract

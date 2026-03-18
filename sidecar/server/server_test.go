@@ -116,8 +116,8 @@ func TestPostTaskReturnsID(t *testing.T) {
 
 	body := `{"type":"config-patch","params":{"peers":["a@1.2.3.4:26656"]}}`
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d", rec.Code)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", rec.Code)
 	}
 
 	var resp map[string]string
@@ -129,39 +129,13 @@ func TestPostTaskReturnsID(t *testing.T) {
 	}
 }
 
-func TestPostTaskBusy(t *testing.T) {
-	blocked := make(chan struct{})
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	eng := engine.NewEngine(ctx, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
-			<-blocked
-			return nil
-		},
-	})
-	srv := NewServer(":0", eng)
-
-	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d", rec.Code)
-	}
-	time.Sleep(20 * time.Millisecond)
-
-	rec = serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	close(blocked)
-}
-
 func TestPostTaskScheduled(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 	srv := NewServer(":0", eng)
 
-	body := `{"type":"config-patch","async":{"schedule":{"cron":"*/5 * * * *"}}}`
+	body := `{"type":"config-patch","schedule":{"cron":"*/5 * * * *"}}`
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
@@ -208,7 +182,7 @@ func TestPostTaskInvalidSchedule(t *testing.T) {
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
 	srv := NewServer(":0", eng)
-	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","async":{"schedule":{"cron":"not a cron"}}}`)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","schedule":{"cron":"not a cron"}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
@@ -288,8 +262,8 @@ func TestGetTaskInProgress(t *testing.T) {
 	srv := NewServer(":0", eng)
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d", rec.Code)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", rec.Code)
 	}
 	var resp map[string]string
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
@@ -366,7 +340,7 @@ func TestDeleteScheduledTask(t *testing.T) {
 	})
 	srv := NewServer(":0", eng)
 
-	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","async":{"schedule":{"cron":"*/5 * * * *"}}}`)
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","schedule":{"cron":"*/5 * * * *"}}`)
 	var resp map[string]string
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
 	id := resp["id"]

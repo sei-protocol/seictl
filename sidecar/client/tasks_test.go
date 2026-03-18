@@ -152,27 +152,27 @@ func TestSnapshotUploadRoundTrip(t *testing.T) {
 	properties.TestingRun(t)
 }
 
-func TestSnapshotUploadTask_NoAsync(t *testing.T) {
+func TestSnapshotUploadTask_NoSchedule(t *testing.T) {
 	task := SnapshotUploadTask{Bucket: "b", Region: "r"}
 	req := task.ToTaskRequest()
-	if req.Async != nil {
-		t.Errorf("expected nil Async, got %v", req.Async)
+	if req.Schedule != nil {
+		t.Errorf("expected nil Schedule, got %v", req.Schedule)
 	}
 }
 
-func TestSnapshotUploadTask_WithAsync(t *testing.T) {
+func TestSnapshotUploadTask_WithSchedule(t *testing.T) {
 	cron := "0 0 * * *"
 	task := SnapshotUploadTask{
-		Bucket: "b",
-		Region: "r",
-		Async:  &AsyncConfig{Schedule: &ScheduleConfig{Cron: &cron}},
+		Bucket:   "b",
+		Region:   "r",
+		Schedule: &ScheduleConfig{Cron: &cron},
 	}
 	req := task.ToTaskRequest()
-	if req.Async == nil || req.Async.Schedule == nil || req.Async.Schedule.Cron == nil {
-		t.Fatal("expected async.schedule.cron to be set")
+	if req.Schedule == nil || req.Schedule.Cron == nil {
+		t.Fatal("expected schedule.cron to be set")
 	}
-	if *req.Async.Schedule.Cron != cron {
-		t.Errorf("async.schedule.cron = %q, want %q", *req.Async.Schedule.Cron, cron)
+	if *req.Schedule.Cron != cron {
+		t.Errorf("schedule.cron = %q, want %q", *req.Schedule.Cron, cron)
 	}
 }
 
@@ -501,7 +501,7 @@ func TestStatusResponseJSONRoundTrip(t *testing.T) {
 			}
 			return decoded.Status == sr.Status
 		},
-		gen.OneConstOf(StatusResponseStatusInitializing, StatusResponseStatusRunning, StatusResponseStatusReady),
+		gen.OneConstOf(Initializing, Ready),
 	))
 	properties.TestingRun(t)
 }
@@ -572,36 +572,6 @@ func TestScheduleConfigJSONRoundTrip(t *testing.T) {
 	}
 }
 
-func TestAsyncConfigJSONRoundTrip(t *testing.T) {
-	cron := "*/5 * * * *"
-	cases := []struct {
-		name string
-		cfg  AsyncConfig
-	}{
-		{"schedule", AsyncConfig{Schedule: &ScheduleConfig{Cron: &cron}}},
-		{"daemon", AsyncConfig{Daemon: &DaemonConfig{}}},
-		{"empty", AsyncConfig{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			data, err := json.Marshal(tc.cfg)
-			if err != nil {
-				t.Fatalf("Marshal: %v", err)
-			}
-			var decoded AsyncConfig
-			if err := json.Unmarshal(data, &decoded); err != nil {
-				t.Fatalf("Unmarshal: %v", err)
-			}
-			if (tc.cfg.Schedule == nil) != (decoded.Schedule == nil) {
-				t.Errorf("Schedule nil mismatch")
-			}
-			if (tc.cfg.Daemon == nil) != (decoded.Daemon == nil) {
-				t.Errorf("Daemon nil mismatch")
-			}
-		})
-	}
-}
-
 func TestResultExportRoundTrip(t *testing.T) {
 	properties := gopter.NewProperties(gopter.DefaultTestParameters())
 	properties.Property("ResultExportTask round-trips through TaskRequest", prop.ForAll(
@@ -614,7 +584,7 @@ func TestResultExportRoundTrip(t *testing.T) {
 			if req.Type != TaskTypeResultExport {
 				return false
 			}
-			if req.Async != nil {
+			if req.Schedule != nil {
 				return false
 			}
 			rebuilt := ResultExportTaskFromParams(*req.Params)
@@ -651,26 +621,26 @@ func TestResultExportValidation(t *testing.T) {
 	}
 }
 
-func TestResultExportTask_NoAsync(t *testing.T) {
+func TestResultExportTask_NoSchedule(t *testing.T) {
 	task := ResultExportTask{Bucket: "b", Region: "r"}
 	req := task.ToTaskRequest()
-	if req.Async != nil {
-		t.Errorf("expected nil Async, got %v", req.Async)
+	if req.Schedule != nil {
+		t.Errorf("expected nil Schedule, got %v", req.Schedule)
 	}
 }
 
-func TestResultExportTask_WithAsync(t *testing.T) {
+func TestResultExportTask_WithSchedule(t *testing.T) {
 	cron := "*/10 * * * *"
 	task := ResultExportTask{
-		Bucket: "b",
-		Region: "r",
-		Async:  &AsyncConfig{Schedule: &ScheduleConfig{Cron: &cron}},
+		Bucket:   "b",
+		Region:   "r",
+		Schedule: &ScheduleConfig{Cron: &cron},
 	}
 	req := task.ToTaskRequest()
-	if req.Async == nil || req.Async.Schedule == nil || req.Async.Schedule.Cron == nil {
-		t.Fatal("expected async.schedule.cron to be set")
+	if req.Schedule == nil || req.Schedule.Cron == nil {
+		t.Fatal("expected schedule.cron to be set")
 	}
-	if *req.Async.Schedule.Cron != cron {
-		t.Errorf("async.schedule.cron = %q, want %q", *req.Async.Schedule.Cron, cron)
+	if *req.Schedule.Cron != cron {
+		t.Errorf("schedule.cron = %q, want %q", *req.Schedule.Cron, cron)
 	}
 }

@@ -40,41 +40,25 @@ const (
 	TaskStatusFailed    TaskStatus = "failed"
 )
 
-// AsyncConfig describes asynchronous task execution. When set on a
-// TaskResult the caller did not poll for completion — the engine owns
-// the lifecycle. Exactly one field should be set.
-type AsyncConfig struct {
-	Schedule *ScheduleConfig `json:"schedule,omitempty"`
-	Daemon   *DaemonConfig   `json:"daemon,omitempty"`
-}
-
-// ScheduleConfig triggers a task on a recurring basis. Exactly one field
-// should be set. Cron is supported today; BlockHeight is reserved for
-// future use.
+// ScheduleConfig triggers a task on a recurring basis. Cron is supported
+// today; BlockHeight is reserved for future use.
 type ScheduleConfig struct {
 	Cron        string `json:"cron,omitempty"`
 	BlockHeight *int64 `json:"blockHeight,omitempty"`
 }
 
-// DaemonConfig marks a task as long-running. The handler runs
-// indefinitely; only an unrecoverable error produces a terminal status.
-// The struct is intentionally minimal — future fields could include
-// restart policy, health-check interval, etc.
-type DaemonConfig struct{}
-
-// TaskResult records a task and its outcome. Immediate, scheduled, and
-// daemon tasks share this model. The Async field indicates which async
-// execution mode was used (nil = immediate one-shot).
+// TaskResult records a task and its outcome. All tasks share this model.
+// When Schedule is non-nil the engine re-executes the task on its cron.
 type TaskResult struct {
-	ID          string         `json:"id"`
-	Type        string         `json:"type"`
-	Status      TaskStatus     `json:"status"`
-	Params      map[string]any `json:"params,omitempty"`
-	Async       *AsyncConfig   `json:"async,omitempty"`
-	Error       string         `json:"error,omitempty"`
-	SubmittedAt time.Time      `json:"submittedAt"`
-	CompletedAt *time.Time     `json:"completedAt,omitempty"`
-	NextRunAt   *time.Time     `json:"nextRunAt,omitempty"`
+	ID          string          `json:"id"`
+	Type        string          `json:"type"`
+	Status      TaskStatus      `json:"status"`
+	Params      map[string]any  `json:"params,omitempty"`
+	Schedule    *ScheduleConfig `json:"schedule,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	SubmittedAt time.Time       `json:"submittedAt"`
+	CompletedAt *time.Time      `json:"completedAt,omitempty"`
+	NextRunAt   *time.Time      `json:"nextRunAt,omitempty"`
 }
 
 // StatusResponse is the shape returned by the status endpoint.
