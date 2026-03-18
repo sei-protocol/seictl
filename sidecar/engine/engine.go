@@ -22,18 +22,16 @@ type taskEntry struct {
 
 // Engine is the task executor. Every submitted task runs in its own
 // goroutine. Scheduled tasks are re-fired by EvalSchedules on their cron.
-// There is no serial pipeline — concurrency control is the caller's
-// responsibility (the controller sequences bootstrap tasks via its plan).
 type Engine struct {
 	handlers map[TaskType]TaskHandler
 	ctx      context.Context
 	mu       sync.RWMutex
 	ready    bool
 
-	// Currently running tasks (one-shot and long-running).
+	// Currently running tasks.
 	active map[string]*taskEntry
 
-	// Completed one-shot results (ring buffer, newest last).
+	// Completed task results (ring buffer, newest last).
 	results []*TaskResult
 
 	// Registered scheduled tasks and overlap guard.
@@ -84,6 +82,7 @@ func (e *Engine) Submit(task Task) (string, error) {
 		defer e.mu.Unlock()
 		entry, ok := e.active[id]
 		if !ok {
+			log.Error("task completed but was removed while running", "type", task.Type, "id", id)
 			return
 		}
 		t := time.Now()
@@ -115,7 +114,10 @@ func (e *Engine) SubmitScheduled(task Task, sched ScheduleConfig) (string, error
 	}
 
 	now := time.Now()
-	next, _ := nextCronTime(sched.Cron, now)
+	next, err := nextCronTime(sched.Cron, now)
+	if err != nil {
+		return "", fmt.Errorf("invalid cron %q: %w", sched.Cron, err)
+	}
 	id := uuid.New().String()
 
 	tr := &TaskResult{
@@ -239,8 +241,8 @@ func (e *Engine) RecentResults() []TaskResult {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	cap := len(e.active) + len(e.results) + len(e.scheduled)
-	all := make([]TaskResult, 0, cap)
+	total := len(e.active) + len(e.results) + len(e.scheduled)
+	all := make([]TaskResult, 0, total)
 	for _, a := range e.active {
 		all = append(all, *a.result)
 	}
@@ -293,6 +295,7 @@ func (e *Engine) RemoveResult(id string) bool {
 	}
 	if _, ok := e.scheduled[id]; ok {
 		delete(e.scheduled, id)
+		delete(e.runningTasks, id)
 		return true
 	}
 	for i, r := range e.results {
