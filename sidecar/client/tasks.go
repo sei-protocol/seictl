@@ -30,6 +30,13 @@ const (
 	TaskTypeConfigureStateSync = string(engine.TaskConfigureStateSync)
 	TaskTypeSnapshotUpload     = string(engine.TaskSnapshotUpload)
 	TaskTypeResultExport       = string(engine.TaskResultExport)
+	TaskTypeAwaitCondition     = string(engine.TaskAwaitCondition)
+)
+
+// Known condition and action values for AwaitConditionTask.
+const (
+	ConditionHeight = "height"
+	ActionSIGTERM   = "SIGTERM_SEID"
 )
 
 // SnapshotRestoreTask downloads and extracts a snapshot archive from S3.
@@ -511,4 +518,41 @@ func ResultExportTaskFromParams(params map[string]interface{}) ResultExportTask 
 		Prefix: s("prefix"),
 		Region: s("region"),
 	}
+}
+
+// AwaitConditionTask blocks until a condition is met, then optionally
+// executes a post-condition action. Currently supports the "height"
+// condition and the "SIGTERM_SEID" action.
+type AwaitConditionTask struct {
+	Condition    string
+	TargetHeight int64
+	Action       string
+}
+
+func (t AwaitConditionTask) TaskType() string { return TaskTypeAwaitCondition }
+
+func (t AwaitConditionTask) Validate() error {
+	switch t.Condition {
+	case ConditionHeight:
+		if t.TargetHeight <= 0 {
+			return fmt.Errorf("await-condition: height condition requires TargetHeight > 0")
+		}
+	default:
+		return fmt.Errorf("await-condition: unknown condition %q", t.Condition)
+	}
+	if t.Action != "" && t.Action != ActionSIGTERM {
+		return fmt.Errorf("await-condition: unknown action %q", t.Action)
+	}
+	return nil
+}
+
+func (t AwaitConditionTask) ToTaskRequest() TaskRequest {
+	p := map[string]interface{}{
+		"condition":    t.Condition,
+		"targetHeight": t.TargetHeight,
+	}
+	if t.Action != "" {
+		p["action"] = t.Action
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
