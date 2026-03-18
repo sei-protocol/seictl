@@ -92,19 +92,11 @@ func (c *SidecarClient) Status(ctx context.Context) (*StatusResponse, error) {
 	return resp.JSON200, nil
 }
 
-// SubmitTask validates and sends a typed task to the sidecar. Returns the
-// assigned task UUID on success, ErrBusy on 409, and a descriptive error
-// otherwise.
-func (c *SidecarClient) SubmitTask(ctx context.Context, task TaskBuilder) (uuid.UUID, error) {
-	if err := task.Validate(); err != nil {
-		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
-	}
-	return c.SubmitRawTask(ctx, task.ToTaskRequest())
-}
-
-// SubmitRawTask sends a pre-built TaskRequest without validation. Use
-// SubmitTask for the typed, validated path.
-func (c *SidecarClient) SubmitRawTask(ctx context.Context, task TaskRequest) (uuid.UUID, error) {
+// SubmitTask sends a TaskRequest to the sidecar. This is the generic
+// submission path used internally by the typed Submit*Task methods and
+// by the controller for dynamic dispatch. Prefer the typed methods for
+// compile-time validation of task parameters.
+func (c *SidecarClient) SubmitTask(ctx context.Context, task TaskRequest) (uuid.UUID, error) {
 	resp, err := c.inner.SubmitTaskWithResponse(ctx, task)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("submitting task to sidecar: %w", err)
@@ -198,4 +190,86 @@ func (c *SidecarClient) Healthz(ctx context.Context) (bool, error) {
 	default:
 		return false, fmt.Errorf("sidecar healthz returned %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Typed submit methods -- primary public API for task submission.
+// Each validates the typed struct and delegates to SubmitTask.
+// ---------------------------------------------------------------------------
+
+func (c *SidecarClient) SubmitSnapshotRestoreTask(ctx context.Context, task SnapshotRestoreTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitSnapshotUploadTask(ctx context.Context, task SnapshotUploadTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitConfigureGenesisTask(ctx context.Context, task ConfigureGenesisTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitDiscoverPeersTask(ctx context.Context, task DiscoverPeersTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitConfigPatchTask(ctx context.Context, task ConfigPatchTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitConfigApplyTask(ctx context.Context, task ConfigApplyTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitConfigValidateTask(ctx context.Context, task ConfigValidateTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitConfigReloadTask(ctx context.Context, task ConfigReloadTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitMarkReadyTask(ctx context.Context, task MarkReadyTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitConfigureStateSyncTask(ctx context.Context, task ConfigureStateSyncTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitResultExportTask(ctx context.Context, task ResultExportTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
 }

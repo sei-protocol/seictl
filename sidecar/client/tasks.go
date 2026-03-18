@@ -3,9 +3,7 @@ package client
 import (
 	"fmt"
 	"net/url"
-	"time"
 
-	"github.com/robfig/cron/v3"
 	seiconfig "github.com/sei-protocol/sei-config"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 )
@@ -32,8 +30,6 @@ const (
 	TaskTypeConfigureStateSync = string(engine.TaskConfigureStateSync)
 	TaskTypeSnapshotUpload     = string(engine.TaskSnapshotUpload)
 	TaskTypeResultExport       = string(engine.TaskResultExport)
-
-	defaultResultExportCron = "*/10 * * * *"
 )
 
 // SnapshotRestoreTask downloads and extracts a snapshot archive from S3.
@@ -85,11 +81,12 @@ func SnapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestor
 }
 
 // SnapshotUploadTask archives and streams a local snapshot to S3.
+// Async may be set to run this task on a cron schedule or as a daemon.
 type SnapshotUploadTask struct {
 	Bucket string
 	Prefix string
 	Region string
-	Cron   string
+	Async  *AsyncConfig
 }
 
 func (t SnapshotUploadTask) TaskType() string { return TaskTypeSnapshotUpload }
@@ -100,27 +97,6 @@ func (t SnapshotUploadTask) Validate() error {
 	}
 	if t.Region == "" {
 		return fmt.Errorf("snapshot-upload: missing required field Region")
-	}
-	if t.Cron != "" {
-		if err := validateMinCronInterval(t.Cron, 24*time.Hour); err != nil {
-			return fmt.Errorf("snapshot-upload: %w", err)
-		}
-	}
-	return nil
-}
-
-// validateMinCronInterval parses a standard 5-field cron expression and
-// checks that the gap between the first two scheduled firings is at least min.
-func validateMinCronInterval(expr string, min time.Duration) error {
-	sched, err := cron.ParseStandard(expr)
-	if err != nil {
-		return fmt.Errorf("invalid cron expression %q: %w", expr, err)
-	}
-	t0 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	first := sched.Next(t0)
-	second := sched.Next(first)
-	if gap := second.Sub(first); gap < min {
-		return fmt.Errorf("cron %q fires every %v, minimum allowed interval is %v", expr, gap, min)
 	}
 	return nil
 }
@@ -134,8 +110,8 @@ func (t SnapshotUploadTask) ToTaskRequest() TaskRequest {
 		p["prefix"] = t.Prefix
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
-	if t.Cron != "" {
-		req.Schedule = &Schedule{Cron: &t.Cron}
+	if t.Async != nil {
+		req.Async = t.Async
 	}
 	return req
 }
@@ -491,10 +467,12 @@ func ConfigReloadTaskFromParams(params map[string]interface{}) ConfigReloadTask 
 
 // ResultExportTask queries the local seid RPC for block results and uploads
 // them in paginated NDJSON files to S3.
+// Async may be set to run this task on a cron schedule or as a daemon.
 type ResultExportTask struct {
 	Bucket string
 	Prefix string
 	Region string
+	Async  *AsyncConfig
 }
 
 func (t ResultExportTask) TaskType() string { return TaskTypeResultExport }
@@ -517,12 +495,11 @@ func (t ResultExportTask) ToTaskRequest() TaskRequest {
 	if t.Prefix != "" {
 		p["prefix"] = t.Prefix
 	}
-	cron := defaultResultExportCron
-	return TaskRequest{
-		Type:     t.TaskType(),
-		Params:   &p,
-		Schedule: &Schedule{Cron: &cron},
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	if t.Async != nil {
+		req.Async = t.Async
 	}
+	return req
 }
 
 // ResultExportTaskFromParams reconstructs a ResultExportTask from

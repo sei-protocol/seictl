@@ -37,8 +37,20 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// Schedule Defines when a task should recur. Currently only cron is supported; blockHeight is reserved for future use.
-type Schedule struct {
+// AsyncConfig Describes asynchronous task execution. Omit for immediate one-shot. Set exactly one field.
+type AsyncConfig struct {
+	// Daemon Marks a task as long-running.
+	Daemon *DaemonConfig `json:"daemon,omitempty"`
+
+	// Schedule Triggers a task on a recurring basis.
+	Schedule *ScheduleConfig `json:"schedule,omitempty"`
+}
+
+// DaemonConfig Marks a task as long-running. The handler runs indefinitely; only an unrecoverable error produces a terminal status.
+type DaemonConfig struct{}
+
+// ScheduleConfig Triggers a task on a recurring basis.
+type ScheduleConfig struct {
 	// BlockHeight Reserved for future block-height-based scheduling.
 	BlockHeight *int64 `json:"blockHeight,omitempty"`
 
@@ -56,10 +68,10 @@ type StatusResponseStatus string
 
 // TaskRequest defines model for TaskRequest.
 type TaskRequest struct {
-	Params *map[string]interface{} `json:"params,omitempty"`
+	// Async Describes asynchronous task execution. Omit for immediate one-shot.
+	Async *AsyncConfig `json:"async,omitempty"`
 
-	// Schedule Defines when a task should recur. Currently only cron is supported; blockHeight is reserved for future use.
-	Schedule *Schedule `json:"schedule,omitempty"`
+	Params *map[string]interface{} `json:"params,omitempty"`
 
 	// Type Task type identifier.
 	Type string `json:"type"`
@@ -75,8 +87,8 @@ type TaskResult struct {
 	NextRunAt *time.Time              `json:"nextRunAt,omitempty"`
 	Params    *map[string]interface{} `json:"params,omitempty"`
 
-	// Schedule Defines when a task should recur. Currently only cron is supported; blockHeight is reserved for future use.
-	Schedule *Schedule `json:"schedule,omitempty"`
+	// Async Describes asynchronous task execution.
+	Async *AsyncConfig `json:"async,omitempty"`
 
 	// Status Current task lifecycle state.
 	Status      TaskResultStatus `json:"status"`

@@ -152,22 +152,27 @@ func TestSnapshotUploadRoundTrip(t *testing.T) {
 	properties.TestingRun(t)
 }
 
-func TestSnapshotUploadTask_CronSchedule(t *testing.T) {
-	task := SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "0 0 * * *"}
+func TestSnapshotUploadTask_NoAsync(t *testing.T) {
+	task := SnapshotUploadTask{Bucket: "b", Region: "r"}
 	req := task.ToTaskRequest()
-	if req.Schedule == nil {
-		t.Fatal("expected Schedule to be set")
-	}
-	if req.Schedule.Cron == nil || *req.Schedule.Cron != "0 0 * * *" {
-		t.Errorf("Schedule.Cron = %v, want %q", req.Schedule.Cron, "0 0 * * *")
+	if req.Async != nil {
+		t.Errorf("expected nil Async, got %v", req.Async)
 	}
 }
 
-func TestSnapshotUploadTask_NoCron(t *testing.T) {
-	task := SnapshotUploadTask{Bucket: "b", Region: "r"}
+func TestSnapshotUploadTask_WithAsync(t *testing.T) {
+	cron := "0 0 * * *"
+	task := SnapshotUploadTask{
+		Bucket: "b",
+		Region: "r",
+		Async:  &AsyncConfig{Schedule: &ScheduleConfig{Cron: &cron}},
+	}
 	req := task.ToTaskRequest()
-	if req.Schedule != nil {
-		t.Errorf("expected nil Schedule when Cron is empty, got %v", req.Schedule)
+	if req.Async == nil || req.Async.Schedule == nil || req.Async.Schedule.Cron == nil {
+		t.Fatal("expected async.schedule.cron to be set")
+	}
+	if *req.Async.Schedule.Cron != cron {
+		t.Errorf("async.schedule.cron = %q, want %q", *req.Async.Schedule.Cron, cron)
 	}
 }
 
@@ -341,12 +346,8 @@ func TestSnapshotUploadValidation(t *testing.T) {
 		task SnapshotUploadTask
 		ok   bool
 	}{
-		{"valid no cron", SnapshotUploadTask{Bucket: "b", Region: "r"}, true},
-		{"valid daily cron", SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "0 0 * * *"}, true},
-		{"valid weekly cron", SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "0 0 * * 0"}, true},
-		{"rejects hourly cron", SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "0 * * * *"}, false},
-		{"rejects every-minute cron", SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "* * * * *"}, false},
-		{"rejects invalid cron", SnapshotUploadTask{Bucket: "b", Region: "r", Cron: "not-a-cron"}, false},
+		{"valid", SnapshotUploadTask{Bucket: "b", Region: "r"}, true},
+		{"valid with prefix", SnapshotUploadTask{Bucket: "b", Prefix: "p", Region: "r"}, true},
 		{"missing bucket", SnapshotUploadTask{Region: "r"}, false},
 		{"missing region", SnapshotUploadTask{Bucket: "b"}, false},
 		{"all empty", SnapshotUploadTask{}, false},
@@ -533,17 +534,17 @@ func TestTaskRequestJSONRoundTrip(t *testing.T) {
 	properties.TestingRun(t)
 }
 
-func TestScheduleJSONRoundTrip(t *testing.T) {
+func TestScheduleConfigJSONRoundTrip(t *testing.T) {
 	cron := "*/5 * * * *"
 	height := int64(12345)
 	cases := []struct {
 		name  string
-		sched Schedule
+		sched ScheduleConfig
 	}{
-		{"cron only", Schedule{Cron: &cron}},
-		{"block height only", Schedule{BlockHeight: &height}},
-		{"both", Schedule{Cron: &cron, BlockHeight: &height}},
-		{"empty", Schedule{}},
+		{"cron only", ScheduleConfig{Cron: &cron}},
+		{"block height only", ScheduleConfig{BlockHeight: &height}},
+		{"both", ScheduleConfig{Cron: &cron, BlockHeight: &height}},
+		{"empty", ScheduleConfig{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -551,7 +552,7 @@ func TestScheduleJSONRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Marshal: %v", err)
 			}
-			var decoded Schedule
+			var decoded ScheduleConfig
 			if err := json.Unmarshal(data, &decoded); err != nil {
 				t.Fatalf("Unmarshal: %v", err)
 			}
@@ -571,6 +572,36 @@ func TestScheduleJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAsyncConfigJSONRoundTrip(t *testing.T) {
+	cron := "*/5 * * * *"
+	cases := []struct {
+		name string
+		cfg  AsyncConfig
+	}{
+		{"schedule", AsyncConfig{Schedule: &ScheduleConfig{Cron: &cron}}},
+		{"daemon", AsyncConfig{Daemon: &DaemonConfig{}}},
+		{"empty", AsyncConfig{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.cfg)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var decoded AsyncConfig
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if (tc.cfg.Schedule == nil) != (decoded.Schedule == nil) {
+				t.Errorf("Schedule nil mismatch")
+			}
+			if (tc.cfg.Daemon == nil) != (decoded.Daemon == nil) {
+				t.Errorf("Daemon nil mismatch")
+			}
+		})
+	}
+}
+
 func TestResultExportRoundTrip(t *testing.T) {
 	properties := gopter.NewProperties(gopter.DefaultTestParameters())
 	properties.Property("ResultExportTask round-trips through TaskRequest", prop.ForAll(
@@ -583,7 +614,7 @@ func TestResultExportRoundTrip(t *testing.T) {
 			if req.Type != TaskTypeResultExport {
 				return false
 			}
-			if req.Schedule == nil {
+			if req.Async != nil {
 				return false
 			}
 			rebuilt := ResultExportTaskFromParams(*req.Params)
@@ -620,13 +651,26 @@ func TestResultExportValidation(t *testing.T) {
 	}
 }
 
-func TestResultExportTask_HasCronSchedule(t *testing.T) {
+func TestResultExportTask_NoAsync(t *testing.T) {
 	task := ResultExportTask{Bucket: "b", Region: "r"}
 	req := task.ToTaskRequest()
-	if req.Schedule == nil {
-		t.Fatal("expected Schedule to be set")
+	if req.Async != nil {
+		t.Errorf("expected nil Async, got %v", req.Async)
 	}
-	if req.Schedule.Cron == nil {
-		t.Fatal("expected Schedule.Cron to be set")
+}
+
+func TestResultExportTask_WithAsync(t *testing.T) {
+	cron := "*/10 * * * *"
+	task := ResultExportTask{
+		Bucket: "b",
+		Region: "r",
+		Async:  &AsyncConfig{Schedule: &ScheduleConfig{Cron: &cron}},
+	}
+	req := task.ToTaskRequest()
+	if req.Async == nil || req.Async.Schedule == nil || req.Async.Schedule.Cron == nil {
+		t.Fatal("expected async.schedule.cron to be set")
+	}
+	if *req.Async.Schedule.Cron != cron {
+		t.Errorf("async.schedule.cron = %q, want %q", *req.Async.Schedule.Cron, cron)
 	}
 }
