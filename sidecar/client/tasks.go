@@ -81,12 +81,12 @@ func SnapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestor
 }
 
 // SnapshotUploadTask archives and streams a local snapshot to S3.
-// Async may be set to run this task on a cron schedule or as a daemon.
+// Schedule may be set to run this task on a recurring cron.
 type SnapshotUploadTask struct {
-	Bucket string
-	Prefix string
-	Region string
-	Async  *AsyncConfig
+	Bucket   string
+	Prefix   string
+	Region   string
+	Schedule *ScheduleConfig
 }
 
 func (t SnapshotUploadTask) TaskType() string { return TaskTypeSnapshotUpload }
@@ -110,8 +110,8 @@ func (t SnapshotUploadTask) ToTaskRequest() TaskRequest {
 		p["prefix"] = t.Prefix
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
-	if t.Async != nil {
-		req.Async = t.Async
+	if t.Schedule != nil {
+		req.Schedule = t.Schedule
 	}
 	return req
 }
@@ -467,12 +467,12 @@ func ConfigReloadTaskFromParams(params map[string]interface{}) ConfigReloadTask 
 
 // ResultExportTask queries the local seid RPC for block results and uploads
 // them in paginated NDJSON files to S3.
-// Async may be set to run this task on a cron schedule or as a daemon.
+// Schedule may be set to run this task on a recurring cron.
 type ResultExportTask struct {
-	Bucket string
-	Prefix string
-	Region string
-	Async  *AsyncConfig
+	Bucket   string
+	Prefix   string
+	Region   string
+	Schedule *ScheduleConfig
 }
 
 func (t ResultExportTask) TaskType() string { return TaskTypeResultExport }
@@ -496,8 +496,8 @@ func (t ResultExportTask) ToTaskRequest() TaskRequest {
 		p["prefix"] = t.Prefix
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
-	if t.Async != nil {
-		req.Async = t.Async
+	if t.Schedule != nil {
+		req.Schedule = t.Schedule
 	}
 	return req
 }

@@ -13,10 +13,6 @@ import (
 
 const DefaultPort int32 = 7777
 
-// ErrBusy is returned when the sidecar rejects a task because another
-// non-scheduled task is already running (HTTP 409).
-var ErrBusy = errors.New("sidecar: task already running")
-
 // ErrNotFound is returned when the requested task does not exist (HTTP 404).
 var ErrNotFound = errors.New("sidecar: task not found")
 
@@ -102,18 +98,11 @@ func (c *SidecarClient) SubmitTask(ctx context.Context, task TaskRequest) (uuid.
 		return uuid.Nil, fmt.Errorf("submitting task to sidecar: %w", err)
 	}
 	switch resp.StatusCode() {
-	case http.StatusAccepted:
-		if resp.JSON202 == nil {
-			return uuid.Nil, fmt.Errorf("sidecar returned 202 but no task ID in response body")
-		}
-		return resp.JSON202.Id, nil
 	case http.StatusCreated:
 		if resp.JSON201 == nil {
 			return uuid.Nil, fmt.Errorf("sidecar returned 201 but no task ID in response body")
 		}
 		return resp.JSON201.Id, nil
-	case http.StatusConflict:
-		return uuid.Nil, ErrBusy
 	case http.StatusBadRequest:
 		if resp.JSON400 != nil {
 			return uuid.Nil, fmt.Errorf("sidecar rejected task: %s", resp.JSON400.Error)

@@ -29,15 +29,15 @@ func TestStatus_OK(t *testing.T) {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(StatusResponse{Status: StatusResponseStatusReady})
+		_ = json.NewEncoder(w).Encode(StatusResponse{Status: Ready})
 	}))
 
 	resp, err := c.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if resp.Status != StatusResponseStatusReady {
-		t.Errorf("Status = %q, want %q", resp.Status, StatusResponseStatusReady)
+	if resp.Status != Ready {
+		t.Errorf("Status = %q, want %q", resp.Status, Ready)
 	}
 }
 
@@ -73,7 +73,7 @@ func TestSubmitTask_Accepted(t *testing.T) {
 			t.Errorf("bucket = %v, want my-bucket", params["bucket"])
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
+		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(TaskSubmitResponse{Id: taskID})
 	}))
 
@@ -100,11 +100,11 @@ func TestSubmitTask_Scheduled(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		if req.Async == nil || req.Async.Schedule == nil || req.Async.Schedule.Cron == nil {
-			t.Fatal("expected async.schedule.cron to be set")
+		if req.Schedule == nil || req.Schedule.Cron == nil {
+			t.Fatal("expected schedule.cron to be set")
 		}
-		if *req.Async.Schedule.Cron != cron {
-			t.Errorf("async.schedule.cron = %q, want %q", *req.Async.Schedule.Cron, cron)
+		if *req.Schedule.Cron != cron {
+			t.Errorf("schedule.cron = %q, want %q", *req.Schedule.Cron, cron)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -112,27 +112,14 @@ func TestSubmitTask_Scheduled(t *testing.T) {
 	}))
 
 	id, err := c.SubmitTask(context.Background(), TaskRequest{
-		Type:  TaskTypeDiscoverPeers,
-		Async: &AsyncConfig{Schedule: &ScheduleConfig{Cron: &cron}},
+		Type:     TaskTypeDiscoverPeers,
+		Schedule: &ScheduleConfig{Cron: &cron},
 	})
 	if err != nil {
 		t.Fatalf("SubmitTask() error = %v", err)
 	}
 	if id != taskID {
 		t.Errorf("returned id = %s, want %s", id, taskID)
-	}
-}
-
-func TestSubmitTask_Busy(t *testing.T) {
-	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(ErrorResponse{Error: "task already running"})
-	}))
-
-	_, err := c.SubmitMarkReadyTask(context.Background(), MarkReadyTask{})
-	if !errors.Is(err, ErrBusy) {
-		t.Errorf("error = %v, want ErrBusy", err)
 	}
 }
 

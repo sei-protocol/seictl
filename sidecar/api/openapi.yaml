@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: sei-sidecar API
   description: HTTP API for the sei-sidecar task executor.
-  version: 0.4.0
+  version: 0.5.0
   license:
     name: Apache-2.0
 
@@ -38,11 +38,8 @@ paths:
       operationId: submitTask
       summary: Submit a task
       description: |
-        The `async` field selects the execution mode:
-        - Omitted: immediate one-shot (202).
-        - `async.schedule`: recurring cron-triggered task (201).
-        - `async.daemon`: long-running daemon task (201).
-        Returns 409 if an immediate task is already running.
+        Submit a task for execution. When `schedule` is provided the task
+        recurs on the given cron (201). Otherwise the task runs once (201).
       requestBody:
         required: true
         content:
@@ -51,13 +48,7 @@ paths:
               $ref: "#/components/schemas/TaskRequest"
       responses:
         "201":
-          description: Scheduled or daemon task created.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TaskSubmitResponse"
-        "202":
-          description: Task submitted for immediate execution.
+          description: Task created.
           content:
             application/json:
               schema:
@@ -68,16 +59,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-        "409":
-          description: A task is already running.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
     get:
       operationId: listTasks
       summary: List recent task results
-      description: Returns the most recent completed task results, active scheduled tasks, and daemon tasks.
+      description: Returns the most recent task results, active tasks, and scheduled tasks.
       responses:
         "200":
           description: Task results.
@@ -116,8 +101,8 @@ paths:
       operationId: deleteTask
       summary: Remove a task
       description: |
-        Removes a completed task result, stops and removes a scheduled task,
-        or cancels and removes a daemon task.
+        Removes a completed task result, cancels an active task, or stops
+        and removes a scheduled task.
       parameters:
         - name: id
           in: path
@@ -147,19 +132,8 @@ components:
         params:
           type: object
           additionalProperties: true
-        async:
-          $ref: "#/components/schemas/AsyncConfig"
-
-    AsyncConfig:
-      type: object
-      description: >
-        Describes asynchronous task execution. Omit for immediate one-shot.
-        Set exactly one field.
-      properties:
         schedule:
           $ref: "#/components/schemas/ScheduleConfig"
-        daemon:
-          $ref: "#/components/schemas/DaemonConfig"
 
     ScheduleConfig:
       type: object
@@ -173,20 +147,13 @@ components:
           format: int64
           description: Reserved for future block-height-based scheduling.
 
-    DaemonConfig:
-      type: object
-      description: >
-        Marks a task as long-running. The handler runs indefinitely; only an
-        unrecoverable error produces a terminal status.
-      additionalProperties: false
-
     StatusResponse:
       type: object
       required: [status]
       properties:
         status:
           type: string
-          enum: [Initializing, Running, Ready]
+          enum: [Initializing, Ready]
 
     TaskSubmitResponse:
       type: object
@@ -214,8 +181,8 @@ components:
         params:
           type: object
           additionalProperties: true
-        async:
-          $ref: "#/components/schemas/AsyncConfig"
+        schedule:
+          $ref: "#/components/schemas/ScheduleConfig"
         error:
           type: string
           description: Error message if the task failed.

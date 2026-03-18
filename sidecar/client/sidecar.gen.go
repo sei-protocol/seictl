@@ -20,29 +20,16 @@ import (
 
 // Defines values for StatusResponseStatus.
 const (
-	StatusResponseStatusInitializing StatusResponseStatus = "Initializing"
-	StatusResponseStatusReady        StatusResponseStatus = "Ready"
-	StatusResponseStatusRunning      StatusResponseStatus = "Running"
+	Initializing StatusResponseStatus = "Initializing"
+	Ready        StatusResponseStatus = "Ready"
 )
 
 // Defines values for TaskResultStatus.
 const (
-	TaskResultStatusCompleted TaskResultStatus = "completed"
-	TaskResultStatusFailed    TaskResultStatus = "failed"
-	TaskResultStatusRunning   TaskResultStatus = "running"
+	Completed TaskResultStatus = "completed"
+	Failed    TaskResultStatus = "failed"
+	Running   TaskResultStatus = "running"
 )
-
-// AsyncConfig Describes asynchronous task execution. Omit for immediate one-shot. Set exactly one field.
-type AsyncConfig struct {
-	// Daemon Marks a task as long-running. The handler runs indefinitely; only an unrecoverable error produces a terminal status.
-	Daemon *DaemonConfig `json:"daemon,omitempty"`
-
-	// Schedule Triggers a task on a recurring basis.
-	Schedule *ScheduleConfig `json:"schedule,omitempty"`
-}
-
-// DaemonConfig Marks a task as long-running. The handler runs indefinitely; only an unrecoverable error produces a terminal status.
-type DaemonConfig = map[string]interface{}
 
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
@@ -68,9 +55,10 @@ type StatusResponseStatus string
 
 // TaskRequest defines model for TaskRequest.
 type TaskRequest struct {
-	// Async Describes asynchronous task execution. Omit for immediate one-shot. Set exactly one field.
-	Async  *AsyncConfig            `json:"async,omitempty"`
 	Params *map[string]interface{} `json:"params,omitempty"`
+
+	// Schedule Triggers a task on a recurring basis.
+	Schedule *ScheduleConfig `json:"schedule,omitempty"`
 
 	// Type Task type identifier.
 	Type string `json:"type"`
@@ -78,15 +66,16 @@ type TaskRequest struct {
 
 // TaskResult defines model for TaskResult.
 type TaskResult struct {
-	// Async Describes asynchronous task execution. Omit for immediate one-shot. Set exactly one field.
-	Async       *AsyncConfig `json:"async,omitempty"`
-	CompletedAt *time.Time   `json:"completedAt,omitempty"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
 
 	// Error Error message if the task failed.
 	Error     *string                 `json:"error,omitempty"`
 	Id        openapi_types.UUID      `json:"id"`
 	NextRunAt *time.Time              `json:"nextRunAt,omitempty"`
 	Params    *map[string]interface{} `json:"params,omitempty"`
+
+	// Schedule Triggers a task on a recurring basis.
+	Schedule *ScheduleConfig `json:"schedule,omitempty"`
 
 	// Status Current task lifecycle state.
 	Status      TaskResultStatus `json:"status"`
@@ -608,9 +597,7 @@ type SubmitTaskResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON201      *TaskSubmitResponse
-	JSON202      *TaskSubmitResponse
 	JSON400      *ErrorResponse
-	JSON409      *ErrorResponse
 }
 
 // Status returns HTTPResponse.Status
@@ -825,26 +812,12 @@ func ParseSubmitTaskResponse(rsp *http.Response) (*SubmitTaskResponse, error) {
 		}
 		response.JSON201 = &dest
 
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest TaskSubmitResponse
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON202 = &dest
-
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ErrorResponse
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON409 = &dest
 
 	}
 
