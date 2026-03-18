@@ -32,14 +32,9 @@ const (
 	TaskResultStatusRunning   TaskResultStatus = "running"
 )
 
-// ErrorResponse defines model for ErrorResponse.
-type ErrorResponse struct {
-	Error string `json:"error"`
-}
-
 // AsyncConfig Describes asynchronous task execution. Omit for immediate one-shot. Set exactly one field.
 type AsyncConfig struct {
-	// Daemon Marks a task as long-running.
+	// Daemon Marks a task as long-running. The handler runs indefinitely; only an unrecoverable error produces a terminal status.
 	Daemon *DaemonConfig `json:"daemon,omitempty"`
 
 	// Schedule Triggers a task on a recurring basis.
@@ -47,7 +42,12 @@ type AsyncConfig struct {
 }
 
 // DaemonConfig Marks a task as long-running. The handler runs indefinitely; only an unrecoverable error produces a terminal status.
-type DaemonConfig struct{}
+type DaemonConfig = map[string]interface{}
+
+// ErrorResponse defines model for ErrorResponse.
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
 
 // ScheduleConfig Triggers a task on a recurring basis.
 type ScheduleConfig struct {
@@ -68,9 +68,8 @@ type StatusResponseStatus string
 
 // TaskRequest defines model for TaskRequest.
 type TaskRequest struct {
-	// Async Describes asynchronous task execution. Omit for immediate one-shot.
-	Async *AsyncConfig `json:"async,omitempty"`
-
+	// Async Describes asynchronous task execution. Omit for immediate one-shot. Set exactly one field.
+	Async  *AsyncConfig            `json:"async,omitempty"`
 	Params *map[string]interface{} `json:"params,omitempty"`
 
 	// Type Task type identifier.
@@ -79,16 +78,15 @@ type TaskRequest struct {
 
 // TaskResult defines model for TaskResult.
 type TaskResult struct {
-	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	// Async Describes asynchronous task execution. Omit for immediate one-shot. Set exactly one field.
+	Async       *AsyncConfig `json:"async,omitempty"`
+	CompletedAt *time.Time   `json:"completedAt,omitempty"`
 
 	// Error Error message if the task failed.
 	Error     *string                 `json:"error,omitempty"`
 	Id        openapi_types.UUID      `json:"id"`
 	NextRunAt *time.Time              `json:"nextRunAt,omitempty"`
 	Params    *map[string]interface{} `json:"params,omitempty"`
-
-	// Async Describes asynchronous task execution.
-	Async *AsyncConfig `json:"async,omitempty"`
 
 	// Status Current task lifecycle state.
 	Status      TaskResultStatus `json:"status"`

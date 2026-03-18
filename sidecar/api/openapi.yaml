@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: sei-sidecar API
   description: HTTP API for the sei-sidecar task executor.
-  version: 0.5.0
+  version: 0.4.0
   license:
     name: Apache-2.0
 
@@ -178,6 +178,7 @@ components:
       description: >
         Marks a task as long-running. The handler runs indefinitely; only an
         unrecoverable error produces a terminal status.
+      additionalProperties: false
 
     StatusResponse:
       type: object
