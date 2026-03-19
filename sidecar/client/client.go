@@ -95,21 +95,38 @@ func (c *SidecarClient) Status(ctx context.Context) (*StatusResponse, error) {
 func (c *SidecarClient) SubmitTask(ctx context.Context, task TaskRequest) (uuid.UUID, error) {
 	resp, err := c.inner.SubmitTaskWithResponse(ctx, task)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("submitting task to sidecar: %w", err)
+		return uuid.Nil, fmt.Errorf("submitting %s task to sidecar: %w", task.Type, err)
 	}
+
 	switch resp.StatusCode() {
 	case http.StatusCreated:
 		if resp.JSON201 == nil {
 			return uuid.Nil, fmt.Errorf("sidecar returned 201 but no task ID in response body")
 		}
-		return resp.JSON201.Id, nil
+		id := resp.JSON201.Id
+		if id == uuid.Nil {
+			return uuid.Nil, fmt.Errorf("sidecar returned 201 with nil task ID")
+		}
+		return id, nil
+
+	case http.StatusAccepted:
+		if resp.JSON202 == nil {
+			return uuid.Nil, fmt.Errorf("sidecar returned 202 but no task ID in response body")
+		}
+		id := resp.JSON202.Id
+		if id == uuid.Nil {
+			return uuid.Nil, fmt.Errorf("sidecar returned 202 with nil task ID")
+		}
+		return id, nil
+
 	case http.StatusBadRequest:
 		if resp.JSON400 != nil {
-			return uuid.Nil, fmt.Errorf("sidecar rejected task: %s", resp.JSON400.Error)
+			return uuid.Nil, fmt.Errorf("sidecar rejected %s task: %s", task.Type, resp.JSON400.Error)
 		}
-		return uuid.Nil, fmt.Errorf("sidecar rejected task: %s", bytes.TrimSpace(resp.Body))
+		return uuid.Nil, fmt.Errorf("sidecar rejected %s task: %s", task.Type, bytes.TrimSpace(resp.Body))
+
 	default:
-		return uuid.Nil, fmt.Errorf("sidecar task submission returned %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
+		return uuid.Nil, fmt.Errorf("sidecar %s task submission returned %d: %s", task.Type, resp.StatusCode(), bytes.TrimSpace(resp.Body))
 	}
 }
 
@@ -123,7 +140,7 @@ func (c *SidecarClient) ListTasks(ctx context.Context) ([]TaskResult, error) {
 		return nil, fmt.Errorf("sidecar list tasks returned %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
 	}
 	if resp.JSON200 == nil {
-		return nil, nil
+		return []TaskResult{}, nil
 	}
 	return *resp.JSON200, nil
 }
@@ -257,6 +274,13 @@ func (c *SidecarClient) SubmitConfigureStateSyncTask(ctx context.Context, task C
 }
 
 func (c *SidecarClient) SubmitResultExportTask(ctx context.Context, task ResultExportTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitAwaitConditionTask(ctx context.Context, task AwaitConditionTask) (uuid.UUID, error) {
 	if err := task.Validate(); err != nil {
 		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
 	}

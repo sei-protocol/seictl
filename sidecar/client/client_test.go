@@ -52,7 +52,7 @@ func TestStatus_ServerError(t *testing.T) {
 	}
 }
 
-func TestSubmitTask_Accepted(t *testing.T) {
+func TestSubmitTask_HTTP201(t *testing.T) {
 	taskID := uuid.New()
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v0/tasks" || r.Method != http.MethodPost {
@@ -89,6 +89,96 @@ func TestSubmitTask_Accepted(t *testing.T) {
 	}
 	if id != taskID {
 		t.Errorf("returned id = %s, want %s", id, taskID)
+	}
+}
+
+func TestSubmitTask_HTTP202(t *testing.T) {
+	taskID := uuid.New()
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(TaskSubmitResponse{Id: taskID})
+	}))
+
+	id, err := c.SubmitTask(context.Background(), TaskRequest{Type: TaskTypeMarkReady})
+	if err != nil {
+		t.Fatalf("SubmitTask() error = %v", err)
+	}
+	if id != taskID {
+		t.Errorf("returned id = %s, want %s", id, taskID)
+	}
+}
+
+func TestSubmitTask_HTTP202_MalformedBody(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`not json`))
+	}))
+
+	_, err := c.SubmitTask(context.Background(), TaskRequest{Type: TaskTypeMarkReady})
+	if err == nil {
+		t.Fatal("expected error for malformed 202 body")
+	}
+}
+
+func TestSubmitTask_HTTP202_NilUUID(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(TaskSubmitResponse{Id: uuid.Nil})
+	}))
+
+	_, err := c.SubmitTask(context.Background(), TaskRequest{Type: TaskTypeMarkReady})
+	if err == nil {
+		t.Fatal("expected error for nil UUID in 202 response")
+	}
+	if !strings.Contains(err.Error(), "nil task ID") {
+		t.Errorf("error = %v, expected to contain 'nil task ID'", err)
+	}
+}
+
+func TestSubmitTask_HTTP201_NilUUID(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(TaskSubmitResponse{Id: uuid.Nil})
+	}))
+
+	_, err := c.SubmitTask(context.Background(), TaskRequest{Type: TaskTypeMarkReady})
+	if err == nil {
+		t.Fatal("expected error for nil UUID in 201 response")
+	}
+	if !strings.Contains(err.Error(), "nil task ID") {
+		t.Errorf("error = %v, expected to contain 'nil task ID'", err)
+	}
+}
+
+func TestSubmitTask_ServerError(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}))
+
+	_, err := c.SubmitTask(context.Background(), TaskRequest{Type: TaskTypeMarkReady})
+	if err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error = %v, expected to contain '500'", err)
+	}
+}
+
+func TestSubmitTask_Conflict(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "conflict", http.StatusConflict)
+	}))
+
+	_, err := c.SubmitTask(context.Background(), TaskRequest{Type: TaskTypeMarkReady})
+	if err == nil {
+		t.Fatal("expected error for 409 response")
+	}
+	if !strings.Contains(err.Error(), "409") {
+		t.Errorf("error = %v, expected to contain '409'", err)
 	}
 }
 
@@ -136,6 +226,9 @@ func TestSubmitTask_BadRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown task type") {
 		t.Errorf("error = %v, expected to contain 'unknown task type'", err)
+	}
+	if !strings.Contains(err.Error(), "invalid") {
+		t.Errorf("error = %v, expected to contain the task type 'invalid'", err)
 	}
 }
 
@@ -297,5 +390,86 @@ func TestNewSidecarClientFromPodDNS_DefaultPort(t *testing.T) {
 	want := "http://mynode-0.mynode.prod.svc.cluster.local:7777/"
 	if inner.Server != want {
 		t.Errorf("Server = %q, want %q", inner.Server, want)
+	}
+}
+
+func TestSubmitAwaitConditionTask(t *testing.T) {
+	taskID := uuid.New()
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req TaskRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if req.Type != TaskTypeAwaitCondition {
+			t.Errorf("Type = %q, want %q", req.Type, TaskTypeAwaitCondition)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(TaskSubmitResponse{Id: taskID})
+	}))
+
+	id, err := c.SubmitAwaitConditionTask(context.Background(), AwaitConditionTask{
+		Condition:    ConditionHeight,
+		TargetHeight: 1000,
+		Action:       ActionSIGTERM,
+	})
+	if err != nil {
+		t.Fatalf("SubmitAwaitConditionTask() error = %v", err)
+	}
+	if id != taskID {
+		t.Errorf("returned id = %s, want %s", id, taskID)
+	}
+}
+
+func TestSubmitAwaitConditionTask_ValidationError(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("server should not be called when validation fails")
+	}))
+
+	_, err := c.SubmitAwaitConditionTask(context.Background(), AwaitConditionTask{
+		Condition:    ConditionHeight,
+		TargetHeight: -1,
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "validation failed") {
+		t.Errorf("error = %v, expected to contain 'validation failed'", err)
+	}
+}
+
+func TestListTasks_EmptyArray(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+
+	results, err := c.ListTasks(context.Background())
+	if err != nil {
+		t.Fatalf("ListTasks() error = %v", err)
+	}
+	if results == nil {
+		t.Fatal("ListTasks() returned nil, want empty slice")
+	}
+	if len(results) != 0 {
+		t.Errorf("got %d results, want 0", len(results))
+	}
+}
+
+func TestConfigPatchTask_Validate_Empty(t *testing.T) {
+	task := ConfigPatchTask{}
+	if err := task.Validate(); err == nil {
+		t.Fatal("expected validation error for empty ConfigPatchTask")
+	}
+}
+
+func TestConfigPatchTask_Validate_OK(t *testing.T) {
+	task := ConfigPatchTask{
+		Files: map[string]map[string]any{
+			"config.toml": {"p2p": map[string]any{"seeds": "foo"}},
+		},
+	}
+	if err := task.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }

@@ -479,10 +479,10 @@ func TestConfigPatchToTaskRequest_NestedValuesPreserved(t *testing.T) {
 	}
 }
 
-func TestConfigPatchValidationAcceptsEmpty(t *testing.T) {
+func TestConfigPatchValidationRejectsEmpty(t *testing.T) {
 	task := ConfigPatchTask{}
-	if err := task.Validate(); err != nil {
-		t.Errorf("expected nil error for empty ConfigPatchTask, got %v", err)
+	if err := task.Validate(); err == nil {
+		t.Error("expected error for empty ConfigPatchTask")
 	}
 }
 

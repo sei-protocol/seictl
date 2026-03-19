@@ -597,6 +597,7 @@ type SubmitTaskResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON201      *TaskSubmitResponse
+	JSON202      *TaskSubmitResponse
 	JSON400      *ErrorResponse
 }
 
@@ -811,6 +812,13 @@ func ParseSubmitTaskResponse(rsp *http.Response) (*SubmitTaskResponse, error) {
 			return nil, err
 		}
 		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest TaskSubmitResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest ErrorResponse

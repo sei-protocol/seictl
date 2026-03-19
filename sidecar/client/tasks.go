@@ -315,6 +315,9 @@ type ConfigPatchTask struct {
 func (t ConfigPatchTask) TaskType() string { return TaskTypeConfigPatch }
 
 func (t ConfigPatchTask) Validate() error {
+	if len(t.Files) == 0 {
+		return fmt.Errorf("config-patch: at least one file is required")
+	}
 	return nil
 }
 
