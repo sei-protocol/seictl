@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	seiconfig "github.com/sei-protocol/sei-config"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -47,12 +48,12 @@ type exportState struct {
 // them in compressed NDJSON pages to S3.
 type ResultExporter struct {
 	homeDir           string
-	s3UploaderFactory S3UploaderFactory
+	s3UploaderFactory seis3.UploaderFactory
 }
 
-func NewResultExporter(homeDir string, factory S3UploaderFactory) *ResultExporter {
+func NewResultExporter(homeDir string, factory seis3.UploaderFactory) *ResultExporter {
 	if factory == nil {
-		factory = DefaultS3UploaderFactory
+		factory = seis3.DefaultUploaderFactory
 	}
 	return &ResultExporter{homeDir: homeDir, s3UploaderFactory: factory}
 }
@@ -141,7 +142,7 @@ func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportConfig) err
 func (e *ResultExporter) exportPage(
 	ctx context.Context,
 	rpcEndpoint string,
-	uploader S3Uploader,
+	uploader seis3.Uploader,
 	bucket, prefix string,
 	start, end int64,
 ) error {
@@ -357,5 +358,3 @@ func (e *ResultExporter) writeExportState(state exportState) error {
 	}
 	return nil
 }
-
-// normalizePrefix is defined in snapshot_upload.go in this package.

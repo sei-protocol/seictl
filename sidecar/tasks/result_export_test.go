@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 )
 
 type mockResultUploader struct{}
@@ -23,14 +24,14 @@ func (m *mockResultUploader) UploadObject(_ context.Context, in *transfermanager
 	return &transfermanager.UploadObjectOutput{}, nil
 }
 
-func mockResultUploaderFactory() S3UploaderFactory {
-	return func(_ context.Context, _ string) (S3Uploader, error) {
+func mockResultUploaderFactory() seis3.UploaderFactory {
+	return func(_ context.Context, _ string) (seis3.Uploader, error) {
 		return &mockResultUploader{}, nil
 	}
 }
 
-func failingUploaderFactory(errMsg string) S3UploaderFactory {
-	return func(_ context.Context, _ string) (S3Uploader, error) {
+func failingUploaderFactory(errMsg string) seis3.UploaderFactory {
+	return func(_ context.Context, _ string) (seis3.Uploader, error) {
 		return nil, fmt.Errorf("%s", errMsg)
 	}
 }
