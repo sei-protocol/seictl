@@ -53,6 +53,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TaskSubmitResponse"
+        "202":
+          description: Task accepted (completed synchronously or deduplicated).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskSubmitResponse"
         "400":
           description: Invalid request.
           content:
