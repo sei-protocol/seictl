@@ -11,13 +11,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -29,24 +27,8 @@ const snapshotMarkerFile = ".sei-sidecar-snapshot-done"
 // downstream tasks (e.g. result export) can auto-discover their start point.
 const SnapshotHeightFile = ".sei-sidecar-snapshot-height"
 
-// S3TransferClient abstracts S3 downloads. DownloadObject uses the transfer
-// manager's io.WriterAt path for parallel byte-range downloads.
-type S3TransferClient interface {
-	DownloadObject(ctx context.Context, input *transfermanager.DownloadObjectInput, opts ...func(*transfermanager.Options)) (*transfermanager.DownloadObjectOutput, error)
-}
-
-// S3TransferClientFactory builds an S3TransferClient for a given region.
-type S3TransferClientFactory func(ctx context.Context, region string) (S3TransferClient, error)
-
-// DefaultS3TransferClientFactory creates a transfer manager backed by a real
-// S3 service client.
-func DefaultS3TransferClientFactory(ctx context.Context, region string) (S3TransferClient, error) {
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return nil, fmt.Errorf("loading AWS config: %w", err)
-	}
-	return transfermanager.New(s3.NewFromConfig(cfg)), nil
-}
+// snapshotHeightRe extracts heights from S3 keys like snapshot_198030000_pacific-1_eu-central-1.tar.gz.
+var snapshotHeightRe = regexp.MustCompile(`snapshot_(\d+)_`)
 
 // SnapshotConfig holds S3 coordinates for snapshot download.
 type SnapshotConfig struct {
@@ -59,14 +41,14 @@ type SnapshotConfig struct {
 // SnapshotRestorer downloads and extracts a snapshot archive from S3.
 type SnapshotRestorer struct {
 	homeDir       string
-	clientFactory S3TransferClientFactory
+	clientFactory seis3.TransferClientFactory
 }
 
 // NewSnapshotRestorer creates a restorer targeting the given home directory.
 // Pass nil to use the default AWS transfer manager.
-func NewSnapshotRestorer(homeDir string, factory S3TransferClientFactory) *SnapshotRestorer {
+func NewSnapshotRestorer(homeDir string, factory seis3.TransferClientFactory) *SnapshotRestorer {
 	if factory == nil {
-		factory = DefaultS3TransferClientFactory
+		factory = seis3.DefaultTransferClientFactory
 	}
 	return &SnapshotRestorer{
 		homeDir:       homeDir,
@@ -160,8 +142,8 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 }
 
 // resolveSnapshotKey reads <prefix>latest.txt to find the current snapshot object key.
-func resolveSnapshotKey(ctx context.Context, client S3TransferClient, cfg SnapshotConfig) (string, error) {
-	var buf writeAtBuffer
+func resolveSnapshotKey(ctx context.Context, client seis3.TransferClient, cfg SnapshotConfig) (string, error) {
+	var buf seis3.WriteAtBuffer
 	_, err := client.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
 		Bucket:   aws.String(cfg.Bucket),
 		Key:      aws.String(cfg.Prefix + "latest.txt"),
@@ -202,9 +184,6 @@ func parseSnapshotConfig(params map[string]any) (SnapshotConfig, error) {
 	return SnapshotConfig{Bucket: bucket, Prefix: prefix, Region: region, ChainID: chainID}, nil
 }
 
-// snapshotHeightRe extracts heights from S3 keys like snapshot_198030000_pacific-1_eu-central-1.tar.gz.
-var snapshotHeightRe = regexp.MustCompile(`snapshot_(\d+)_`)
-
 func parseHeightFromKey(key string) int64 {
 	m := snapshotHeightRe.FindStringSubmatch(key)
 	if len(m) < 2 {
@@ -212,32 +191,6 @@ func parseHeightFromKey(key string) int64 {
 	}
 	h, _ := strconv.ParseInt(m[1], 10, 64)
 	return h
-}
-
-// writeAtBuffer is a goroutine-safe in-memory io.WriterAt, used for
-// downloading small S3 objects (e.g. latest.txt) via DownloadObject.
-type writeAtBuffer struct {
-	mu  sync.Mutex
-	buf []byte
-}
-
-func (w *writeAtBuffer) WriteAt(p []byte, off int64) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	end := int(off) + len(p)
-	if end > len(w.buf) {
-		grown := make([]byte, end)
-		copy(grown, w.buf)
-		w.buf = grown
-	}
-	copy(w.buf[off:], p)
-	return len(p), nil
-}
-
-func (w *writeAtBuffer) Bytes() []byte {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.buf
 }
 
 // extractTarStream reads a gzip-compressed tar archive from r and extracts

@@ -11,9 +11,10 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 )
 
-// mockTransferClient implements S3TransferClient via DownloadObject.
+// mockTransferClient implements seis3.TransferClient for testing.
 // It maps S3 object keys to their body bytes and writes them to the
 // provided WriterAt.
 type mockTransferClient struct {
@@ -38,8 +39,8 @@ func (m *mockTransferClient) DownloadObject(_ context.Context, in *transfermanag
 	return nil, fmt.Errorf("unexpected key: %s", key)
 }
 
-func mockFactory(client S3TransferClient) S3TransferClientFactory {
-	return func(_ context.Context, _ string) (S3TransferClient, error) {
+func mockFactory(client seis3.TransferClient) seis3.TransferClientFactory {
+	return func(_ context.Context, _ string) (seis3.TransferClient, error) {
 		return client, nil
 	}
 }

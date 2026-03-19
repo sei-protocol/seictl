@@ -15,33 +15,15 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 	"github.com/sei-protocol/seilog"
 )
 
 var uploadLog = seilog.NewLogger("seictl", "task", "snapshot-upload")
 
 const uploadStateFile = ".sei-sidecar-last-upload.json"
-
-// S3Uploader abstracts the transfermanager upload call for testing.
-type S3Uploader interface {
-	UploadObject(ctx context.Context, input *transfermanager.UploadObjectInput, opts ...func(*transfermanager.Options)) (*transfermanager.UploadObjectOutput, error)
-}
-
-// S3UploaderFactory builds an S3Uploader for a given region.
-type S3UploaderFactory func(ctx context.Context, region string) (S3Uploader, error)
-
-// DefaultS3UploaderFactory creates a transfermanager.Client backed by a real S3 client.
-func DefaultS3UploaderFactory(ctx context.Context, region string) (S3Uploader, error) {
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return nil, fmt.Errorf("loading AWS config: %w", err)
-	}
-	return transfermanager.New(s3.NewFromConfig(cfg)), nil
-}
 
 // SnapshotUploadConfig holds the parameters for the snapshot upload task.
 type SnapshotUploadConfig struct {
@@ -59,13 +41,13 @@ type uploadState struct {
 // and uploads new ones to S3.
 type SnapshotUploader struct {
 	homeDir           string
-	s3UploaderFactory S3UploaderFactory
+	s3UploaderFactory seis3.UploaderFactory
 }
 
 // NewSnapshotUploader creates an uploader targeting the given home directory.
-func NewSnapshotUploader(homeDir string, factory S3UploaderFactory) *SnapshotUploader {
+func NewSnapshotUploader(homeDir string, factory seis3.UploaderFactory) *SnapshotUploader {
 	if factory == nil {
-		factory = DefaultS3UploaderFactory
+		factory = seis3.DefaultUploaderFactory
 	}
 	return &SnapshotUploader{
 		homeDir:           homeDir,
@@ -141,7 +123,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context, cfg SnapshotUploadConfig)
 
 // streamUpload pipes a tar.gz archive directly into the transfermanager,
 // avoiding in-memory buffering of the full archive.
-func (u *SnapshotUploader) streamUpload(ctx context.Context, uploader S3Uploader, bucket, key, snapshotsDir string, height int64) error {
+func (u *SnapshotUploader) streamUpload(ctx context.Context, uploader seis3.Uploader, bucket, key, snapshotsDir string, height int64) error {
 	pr, pw := io.Pipe()
 
 	archiveErr := make(chan error, 1)
