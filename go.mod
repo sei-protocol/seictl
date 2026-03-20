@@ -13,7 +13,7 @@ require (
 	github.com/oapi-codegen/runtime v1.2.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/sei-protocol/sei-config v0.0.8
+	github.com/sei-protocol/sei-config v0.0.9-0.20260320200746-12deb0b30196
 	github.com/sei-protocol/seilog v0.0.2
 	github.com/urfave/cli/v3 v3.6.1
 )
