@@ -41,9 +41,9 @@ func fakeRPCServer(latestHeight int64) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/status":
-			fmt.Fprintf(w, `{"result":{"sync_info":{"latest_block_height":"%d"}}}`, latestHeight)
+			fmt.Fprintf(w, `{"sync_info":{"latest_block_height":"%d"}}`, latestHeight)
 		case r.URL.Path == "/block_results":
-			fmt.Fprint(w, `{"result":{}}`)
+			fmt.Fprint(w, `{}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -134,7 +134,7 @@ func TestExportRPCNon200Status(t *testing.T) {
 
 func TestQueryLatestHeight_ZeroHeight(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"result":{"sync_info":{"latest_block_height":"0"}}}`)
+		fmt.Fprint(w, `{"sync_info":{"latest_block_height":"0"}}`)
 	}))
 	defer srv.Close()
 
