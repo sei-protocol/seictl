@@ -33,12 +33,10 @@ type NodeStatus struct {
 func (c *StatusClient) Endpoint() string { return c.endpoint }
 
 type statusResponse struct {
-	Result struct {
-		SyncInfo struct {
-			LatestBlockHeight string `json:"latest_block_height"`
-			CatchingUp        bool   `json:"catching_up"`
-		} `json:"sync_info"`
-	} `json:"result"`
+	SyncInfo struct {
+		LatestBlockHeight string `json:"latest_block_height"`
+		CatchingUp        bool   `json:"catching_up"`
+	} `json:"sync_info"`
 }
 
 // NewStatusClient creates a client targeting the given RPC endpoint.
@@ -79,14 +77,14 @@ func (c *StatusClient) Status(ctx context.Context) (*NodeStatus, error) {
 		return nil, fmt.Errorf("decoding /status: %w", err)
 	}
 
-	h, err := strconv.ParseInt(rpcResp.Result.SyncInfo.LatestBlockHeight, 10, 64)
+	h, err := strconv.ParseInt(rpcResp.SyncInfo.LatestBlockHeight, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("parsing latest_block_height %q: %w", rpcResp.Result.SyncInfo.LatestBlockHeight, err)
+		return nil, fmt.Errorf("parsing latest_block_height %q: %w", rpcResp.SyncInfo.LatestBlockHeight, err)
 	}
 
 	return &NodeStatus{
 		LatestBlockHeight: h,
-		CatchingUp:        rpcResp.Result.SyncInfo.CatchingUp,
+		CatchingUp:        rpcResp.SyncInfo.CatchingUp,
 	}, nil
 }
 

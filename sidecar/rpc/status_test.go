@@ -9,7 +9,7 @@ import (
 
 func TestStatusClient_LatestHeight(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"result":{"sync_info":{"latest_block_height":"12345","catching_up":false}}}`))
+		_, _ = w.Write([]byte(`{"sync_info":{"latest_block_height":"12345","catching_up":false}}`))
 	}))
 	defer srv.Close()
 
@@ -25,7 +25,7 @@ func TestStatusClient_LatestHeight(t *testing.T) {
 
 func TestStatusClient_CatchingUp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"result":{"sync_info":{"latest_block_height":"100","catching_up":true}}}`))
+		_, _ = w.Write([]byte(`{"sync_info":{"latest_block_height":"100","catching_up":true}}`))
 	}))
 	defer srv.Close()
 
@@ -79,8 +79,8 @@ func TestStatusClient_InvalidBlockHeight(t *testing.T) {
 		name    string
 		payload string
 	}{
-		{"empty height", `{"result":{"sync_info":{"latest_block_height":"","catching_up":false}}}`},
-		{"non-numeric height", `{"result":{"sync_info":{"latest_block_height":"abc","catching_up":false}}}`},
+		{"empty height", `{"sync_info":{"latest_block_height":"","catching_up":false}}`},
+		{"non-numeric height", `{"sync_info":{"latest_block_height":"abc","catching_up":false}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

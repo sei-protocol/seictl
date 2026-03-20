@@ -244,19 +244,17 @@ func queryLatestHeight(ctx context.Context, rpcEndpoint string) (int64, error) {
 	}
 
 	var rpcResp struct {
-		Result struct {
-			SyncInfo struct {
-				LatestBlockHeight string `json:"latest_block_height"`
-			} `json:"sync_info"`
-		} `json:"result"`
+		SyncInfo struct {
+			LatestBlockHeight string `json:"latest_block_height"`
+		} `json:"sync_info"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
 		return 0, fmt.Errorf("decoding /status response: %w", err)
 	}
 
-	h, err := strconv.ParseInt(rpcResp.Result.SyncInfo.LatestBlockHeight, 10, 64)
+	h, err := strconv.ParseInt(rpcResp.SyncInfo.LatestBlockHeight, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("parsing latest_block_height %q: %w", rpcResp.Result.SyncInfo.LatestBlockHeight, err)
+		return 0, fmt.Errorf("parsing latest_block_height %q: %w", rpcResp.SyncInfo.LatestBlockHeight, err)
 	}
 	if h <= 0 {
 		return 0, fmt.Errorf("latest_block_height is %d, node may still be syncing", h)
@@ -285,14 +283,12 @@ func queryBlockResults(ctx context.Context, rpcEndpoint string, height int64) (j
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(body))
 	}
 
-	var rpcResp struct {
-		Result json.RawMessage `json:"result"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %w", err)
 	}
 
-	return rpcResp.Result, nil
+	return json.RawMessage(body), nil
 }
 
 func parseExportConfig(params map[string]any) (ResultExportConfig, error) {

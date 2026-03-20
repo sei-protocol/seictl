@@ -25,7 +25,7 @@ func heightServer(heights ...int64) *httptest.Server {
 			idx++
 		}
 		mu.Unlock()
-		fmt.Fprintf(w, `{"result":{"sync_info":{"latest_block_height":"%d","catching_up":false}}}`, heights[i])
+		fmt.Fprintf(w, `{"sync_info":{"latest_block_height":"%d","catching_up":false}}`, heights[i])
 	}))
 }
 
