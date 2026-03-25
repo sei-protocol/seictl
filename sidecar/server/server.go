@@ -2,9 +2,14 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
@@ -12,9 +17,10 @@ import (
 
 // Server is the HTTP API for the sidecar.
 type Server struct {
-	addr   string
-	engine *engine.Engine
-	mux    *http.ServeMux
+	addr    string
+	homeDir string
+	engine  *engine.Engine
+	mux     *http.ServeMux
 }
 
 // TaskRequest is the JSON body for POST /v0/tasks. When Schedule is set
@@ -31,14 +37,17 @@ type ErrorResponse struct {
 }
 
 // NewServer creates a Server wired to the given engine.
-func NewServer(addr string, eng *engine.Engine) *Server {
+// homeDir is the seid home directory (e.g. /sei) used by the node-id endpoint.
+func NewServer(addr string, eng *engine.Engine, homeDir string) *Server {
 	s := &Server{
-		addr:   addr,
-		engine: eng,
-		mux:    http.NewServeMux(),
+		addr:    addr,
+		homeDir: homeDir,
+		engine:  eng,
+		mux:     http.NewServeMux(),
 	}
 	s.mux.HandleFunc("GET /v0/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /v0/status", s.handleStatus)
+	s.mux.HandleFunc("GET /v0/node-id", s.handleNodeID)
 	s.mux.HandleFunc("POST /v0/tasks", s.handlePostTask)
 	s.mux.HandleFunc("GET /v0/tasks", s.handleListTasks)
 	s.mux.HandleFunc("GET /v0/tasks/{id}", s.handleGetTask)
@@ -138,6 +147,41 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleNodeID reads node_key.json from the home directory and returns the
+// Tendermint node ID. The node ID is hex(SHA256(ed25519_pubkey)[:20]), matching
+// CometBFT's p2p.PubKeyToID derivation.
+func (s *Server) handleNodeID(w http.ResponseWriter, _ *http.Request) {
+	keyPath := filepath.Join(s.homeDir, "config", "node_key.json")
+	data, err := os.ReadFile(keyPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError,
+			"node_key.json not found — generate-identity may not have run yet")
+		return
+	}
+
+	var keyFile struct {
+		PrivKey struct {
+			Value string `json:"value"`
+		} `json:"priv_key"`
+	}
+	if err := json.Unmarshal(data, &keyFile); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to parse node_key.json")
+		return
+	}
+
+	keyBytes, err := base64.StdEncoding.DecodeString(keyFile.PrivKey.Value)
+	if err != nil || len(keyBytes) != 64 {
+		writeError(w, http.StatusInternalServerError, "invalid Ed25519 key in node_key.json")
+		return
+	}
+
+	pubKey := keyBytes[32:]
+	hash := sha256.Sum256(pubKey)
+	nodeID := hex.EncodeToString(hash[:20])
+
+	writeJSON(w, http.StatusOK, map[string]string{"nodeId": nodeID})
 }
 
 // ListenAndServe starts the HTTP server and blocks until ctx is cancelled.
