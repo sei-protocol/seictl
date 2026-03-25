@@ -2,9 +2,15 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -54,7 +60,7 @@ func waitForTaskResult(eng *engine.Engine, id string) *engine.TaskResult {
 
 func TestHealthzReturns503BeforeReady(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 	rec := serveHTTP(srv, http.MethodGet, "/v0/healthz", "")
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -66,7 +72,7 @@ func TestHealthzReturns200AfterMarkReady(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 
 	_, _ = eng.Submit(engine.Task{Type: engine.TaskMarkReady})
 	waitForReady(eng)
@@ -81,7 +87,7 @@ func TestStatusResponse(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 
 	rec := serveHTTP(srv, http.MethodGet, "/v0/status", "")
 	if rec.Code != http.StatusOK {
@@ -112,7 +118,7 @@ func TestPostTaskReturnsID(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 
 	body := `{"type":"config-patch","params":{"peers":["a@1.2.3.4:26656"]}}`
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
@@ -133,7 +139,7 @@ func TestPostTaskScheduled(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 
 	body := `{"type":"config-patch","schedule":{"cron":"*/5 * * * *"}}`
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
@@ -152,7 +158,7 @@ func TestPostTaskScheduled(t *testing.T) {
 
 func TestPostTaskInvalidJSON(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{not json}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -161,7 +167,7 @@ func TestPostTaskInvalidJSON(t *testing.T) {
 
 func TestPostTaskMissingType(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"params":{}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -170,7 +176,7 @@ func TestPostTaskMissingType(t *testing.T) {
 
 func TestPostTaskUnknownType(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"nonexistent"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -181,7 +187,7 @@ func TestPostTaskInvalidSchedule(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","schedule":{"cron":"not a cron"}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -190,7 +196,7 @@ func TestPostTaskInvalidSchedule(t *testing.T) {
 
 func TestListTasksEmpty(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 	rec := serveHTTP(srv, http.MethodGet, "/v0/tasks", "")
 
 	var results []engine.TaskResult
@@ -206,7 +212,7 @@ func TestListTasksAfterSubmit(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	var resp map[string]string
@@ -227,7 +233,7 @@ func TestGetTask(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	var resp map[string]string
@@ -259,7 +265,7 @@ func TestGetTaskInProgress(t *testing.T) {
 			return nil
 		},
 	})
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	if rec.Code != http.StatusCreated {
@@ -304,7 +310,7 @@ func TestGetTaskInProgress(t *testing.T) {
 
 func TestGetTaskNotFound(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 	rec := serveHTTP(srv, http.MethodGet, "/v0/tasks/nonexistent", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rec.Code)
@@ -315,7 +321,7 @@ func TestDeleteTask(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	var resp map[string]string
@@ -338,7 +344,7 @@ func TestDeleteScheduledTask(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng)
+	srv := NewServer(":0", eng, t.TempDir())
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","schedule":{"cron":"*/5 * * * *"}}`)
 	var resp map[string]string
@@ -353,5 +359,80 @@ func TestDeleteScheduledTask(t *testing.T) {
 	rec = serveHTTP(srv, http.MethodGet, "/v0/tasks/"+id, "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 after delete, got %d", rec.Code)
+	}
+}
+
+// writeTestNodeKey generates a real Ed25519 keypair, writes it as a CometBFT
+// node_key.json, and returns the expected node ID (hex(SHA256(pubkey)[:20])).
+func writeTestNodeKey(t *testing.T, homeDir string) string {
+	t.Helper()
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// CometBFT stores the full 64-byte key (seed || pubkey) base64-encoded.
+	keyFile := struct {
+		PrivKey struct {
+			Type  string `json:"type"`
+			Value string `json:"value"`
+		} `json:"priv_key"`
+	}{
+		PrivKey: struct {
+			Type  string `json:"type"`
+			Value string `json:"value"`
+		}{
+			Type:  "tendermint/PrivKeyEd25519",
+			Value: base64.StdEncoding.EncodeToString(priv),
+		},
+	}
+	data, err := json.Marshal(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	configDir := filepath.Join(homeDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "node_key.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hash := sha256.Sum256(pub)
+	return hex.EncodeToString(hash[:20])
+}
+
+func TestNodeID_ReturnsCorrectID(t *testing.T) {
+	homeDir := t.TempDir()
+	want := writeTestNodeKey(t, homeDir)
+
+	eng := newTestEngine(t, nil)
+	srv := NewServer(":0", eng, homeDir)
+
+	rec := serveHTTP(srv, http.MethodGet, "/v0/node-id", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result struct {
+		NodeID string `json:"nodeId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if result.NodeID != want {
+		t.Errorf("nodeId = %q, want %q", result.NodeID, want)
+	}
+}
+
+func TestNodeID_MissingKeyFile(t *testing.T) {
+	eng := newTestEngine(t, nil)
+	srv := NewServer(":0", eng, t.TempDir())
+
+	rec := serveHTTP(srv, http.MethodGet, "/v0/node-id", "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
 	}
 }

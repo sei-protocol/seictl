@@ -3,8 +3,10 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -19,7 +21,9 @@ var ErrNotFound = errors.New("sidecar: task not found")
 // SidecarClient wraps the generated ClientWithResponses with a simpler,
 // error-oriented API.
 type SidecarClient struct {
-	inner *ClientWithResponses
+	inner   *ClientWithResponses
+	baseURL string
+	doer    HttpRequestDoer
 }
 
 // Option configures optional SidecarClient parameters.
@@ -47,18 +51,16 @@ func NewSidecarClient(baseURL string, opts ...Option) (*SidecarClient, error) {
 		fn(&o)
 	}
 
-	var clientOpts []ClientOption
-	if o.httpClient != nil {
-		clientOpts = append(clientOpts, WithHTTPClient(o.httpClient))
-	} else {
-		clientOpts = append(clientOpts, WithHTTPClient(&http.Client{Timeout: o.timeout}))
+	httpClient := o.httpClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: o.timeout}
 	}
 
-	inner, err := NewClientWithResponses(baseURL, clientOpts...)
+	inner, err := NewClientWithResponses(baseURL, WithHTTPClient(httpClient))
 	if err != nil {
 		return nil, err
 	}
-	return &SidecarClient{inner: inner}, nil
+	return &SidecarClient{inner: inner, baseURL: baseURL, doer: httpClient}, nil
 }
 
 // NewSidecarClientFromPodDNS builds a client targeting the sidecar via
@@ -196,6 +198,41 @@ func (c *SidecarClient) Healthz(ctx context.Context) (bool, error) {
 	default:
 		return false, fmt.Errorf("sidecar healthz returned %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
 	}
+}
+
+// GetNodeID queries the sidecar's /v0/node-id endpoint and returns the
+// Tendermint node ID (hex-encoded). This is a direct HTTP call rather than
+// using the generated client, since /v0/node-id is outside the OpenAPI spec.
+func (c *SidecarClient) GetNodeID(ctx context.Context) (string, error) {
+	url := c.baseURL + "/v0/node-id"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("building node-id request: %w", err)
+	}
+	resp, err := c.doer.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("querying node-id: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading node-id response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("node-id returned %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+	}
+
+	var result struct {
+		NodeID string `json:"nodeId"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("parsing node-id response: %w", err)
+	}
+	if result.NodeID == "" {
+		return "", fmt.Errorf("node-id response missing nodeId field")
+	}
+	return result.NodeID, nil
 }
 
 // ---------------------------------------------------------------------------

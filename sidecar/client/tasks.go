@@ -31,6 +31,11 @@ const (
 	TaskTypeSnapshotUpload     = string(engine.TaskSnapshotUpload)
 	TaskTypeResultExport       = string(engine.TaskResultExport)
 	TaskTypeAwaitCondition     = string(engine.TaskAwaitCondition)
+
+	TaskTypeGenerateIdentity       = "generate-identity"
+	TaskTypeGenerateGentx          = "generate-gentx"
+	TaskTypeUploadGenesisArtifacts = "upload-genesis-artifacts"
+	TaskTypeAssembleGenesis        = "assemble-and-upload-genesis"
 )
 
 // Known condition and action values for AwaitConditionTask.
@@ -521,6 +526,149 @@ func ResultExportTaskFromParams(params map[string]interface{}) ResultExportTask 
 		Prefix: s("prefix"),
 		Region: s("region"),
 	}
+}
+
+// GenerateIdentityTask creates validator identity (keys, node ID).
+type GenerateIdentityTask struct {
+	ChainID string
+	Moniker string
+}
+
+func (t GenerateIdentityTask) TaskType() string { return TaskTypeGenerateIdentity }
+
+func (t GenerateIdentityTask) Validate() error {
+	if t.ChainID == "" {
+		return fmt.Errorf("generate-identity: missing required field ChainID")
+	}
+	if t.Moniker == "" {
+		return fmt.Errorf("generate-identity: missing required field Moniker")
+	}
+	return nil
+}
+
+func (t GenerateIdentityTask) ToTaskRequest() TaskRequest {
+	p := map[string]interface{}{
+		"chainId": t.ChainID,
+		"moniker": t.Moniker,
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// GenerateGentxTask creates a gentx for the validator. The handler discovers
+// the node's own account address from the keys generated during identity
+// creation and funds it with AccountBalance before generating the gentx.
+type GenerateGentxTask struct {
+	ChainID        string
+	StakingAmount  string
+	AccountBalance string
+	GenesisParams  string
+}
+
+func (t GenerateGentxTask) TaskType() string { return TaskTypeGenerateGentx }
+
+func (t GenerateGentxTask) Validate() error {
+	if t.ChainID == "" {
+		return fmt.Errorf("generate-gentx: missing required field ChainID")
+	}
+	if t.StakingAmount == "" {
+		return fmt.Errorf("generate-gentx: missing required field StakingAmount")
+	}
+	if t.AccountBalance == "" {
+		return fmt.Errorf("generate-gentx: missing required field AccountBalance")
+	}
+	return nil
+}
+
+func (t GenerateGentxTask) ToTaskRequest() TaskRequest {
+	p := map[string]interface{}{
+		"chainId":        t.ChainID,
+		"stakingAmount":  t.StakingAmount,
+		"accountBalance": t.AccountBalance,
+	}
+	if t.GenesisParams != "" {
+		p["genesisParams"] = t.GenesisParams
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// UploadGenesisArtifactsTask uploads identity.json and gentx.json to S3.
+type UploadGenesisArtifactsTask struct {
+	S3Bucket string
+	S3Prefix string
+	S3Region string
+	NodeName string
+}
+
+func (t UploadGenesisArtifactsTask) TaskType() string { return TaskTypeUploadGenesisArtifacts }
+
+func (t UploadGenesisArtifactsTask) Validate() error {
+	if t.S3Bucket == "" {
+		return fmt.Errorf("upload-genesis-artifacts: missing required field S3Bucket")
+	}
+	if t.S3Region == "" {
+		return fmt.Errorf("upload-genesis-artifacts: missing required field S3Region")
+	}
+	if t.NodeName == "" {
+		return fmt.Errorf("upload-genesis-artifacts: missing required field NodeName")
+	}
+	return nil
+}
+
+func (t UploadGenesisArtifactsTask) ToTaskRequest() TaskRequest {
+	p := map[string]interface{}{
+		"s3Bucket": t.S3Bucket,
+		"s3Prefix": t.S3Prefix,
+		"s3Region": t.S3Region,
+		"nodeName": t.NodeName,
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// GenesisNodeParam is the wire format for nodes[] in assemble-and-upload-genesis.
+type GenesisNodeParam struct {
+	Name string `json:"name"`
+}
+
+// AssembleAndUploadGenesisTask collects per-node artifacts and produces final genesis.json.
+type AssembleAndUploadGenesisTask struct {
+	S3Bucket string
+	S3Prefix string
+	S3Region string
+	ChainID  string
+	Nodes    []GenesisNodeParam
+}
+
+func (t AssembleAndUploadGenesisTask) TaskType() string { return TaskTypeAssembleGenesis }
+
+func (t AssembleAndUploadGenesisTask) Validate() error {
+	if t.S3Bucket == "" {
+		return fmt.Errorf("assemble-and-upload-genesis: missing required field S3Bucket")
+	}
+	if t.S3Region == "" {
+		return fmt.Errorf("assemble-and-upload-genesis: missing required field S3Region")
+	}
+	if t.ChainID == "" {
+		return fmt.Errorf("assemble-and-upload-genesis: missing required field ChainID")
+	}
+	if len(t.Nodes) == 0 {
+		return fmt.Errorf("assemble-and-upload-genesis: at least one node is required")
+	}
+	return nil
+}
+
+func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
+	nodes := make([]interface{}, len(t.Nodes))
+	for i, n := range t.Nodes {
+		nodes[i] = map[string]interface{}{"name": n.Name}
+	}
+	p := map[string]interface{}{
+		"s3Bucket": t.S3Bucket,
+		"s3Prefix": t.S3Prefix,
+		"s3Region": t.S3Region,
+		"chainId":  t.ChainID,
+		"nodes":    nodes,
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
 
 // AwaitConditionTask blocks until a condition is met, then optionally
