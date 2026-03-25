@@ -473,3 +473,51 @@ func TestConfigPatchTask_Validate_OK(t *testing.T) {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
+
+func TestGetNodeID_OK(t *testing.T) {
+	want := "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v0/node-id" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"nodeId": want})
+	}))
+
+	got, err := c.GetNodeID(context.Background())
+	if err != nil {
+		t.Fatalf("GetNodeID() error = %v", err)
+	}
+	if got != want {
+		t.Errorf("GetNodeID() = %q, want %q", got, want)
+	}
+}
+
+func TestGetNodeID_ServerError(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not ready", http.StatusInternalServerError)
+	}))
+
+	_, err := c.GetNodeID(context.Background())
+	if err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error = %v, expected to contain '500'", err)
+	}
+}
+
+func TestGetNodeID_EmptyNodeID(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"nodeId": ""})
+	}))
+
+	_, err := c.GetNodeID(context.Background())
+	if err == nil {
+		t.Fatal("expected error for empty nodeId")
+	}
+	if !strings.Contains(err.Error(), "missing nodeId") {
+		t.Errorf("error = %v, expected to contain 'missing nodeId'", err)
+	}
+}

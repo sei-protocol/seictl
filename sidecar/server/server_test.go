@@ -2,9 +2,15 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -353,5 +359,80 @@ func TestDeleteScheduledTask(t *testing.T) {
 	rec = serveHTTP(srv, http.MethodGet, "/v0/tasks/"+id, "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 after delete, got %d", rec.Code)
+	}
+}
+
+// writeTestNodeKey generates a real Ed25519 keypair, writes it as a CometBFT
+// node_key.json, and returns the expected node ID (hex(SHA256(pubkey)[:20])).
+func writeTestNodeKey(t *testing.T, homeDir string) string {
+	t.Helper()
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// CometBFT stores the full 64-byte key (seed || pubkey) base64-encoded.
+	keyFile := struct {
+		PrivKey struct {
+			Type  string `json:"type"`
+			Value string `json:"value"`
+		} `json:"priv_key"`
+	}{
+		PrivKey: struct {
+			Type  string `json:"type"`
+			Value string `json:"value"`
+		}{
+			Type:  "tendermint/PrivKeyEd25519",
+			Value: base64.StdEncoding.EncodeToString(priv),
+		},
+	}
+	data, err := json.Marshal(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	configDir := filepath.Join(homeDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "node_key.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hash := sha256.Sum256(pub)
+	return hex.EncodeToString(hash[:20])
+}
+
+func TestNodeID_ReturnsCorrectID(t *testing.T) {
+	homeDir := t.TempDir()
+	want := writeTestNodeKey(t, homeDir)
+
+	eng := newTestEngine(t, nil)
+	srv := NewServer(":0", eng, homeDir)
+
+	rec := serveHTTP(srv, http.MethodGet, "/v0/node-id", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result struct {
+		NodeID string `json:"nodeId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if result.NodeID != want {
+		t.Errorf("nodeId = %q, want %q", result.NodeID, want)
+	}
+}
+
+func TestNodeID_MissingKeyFile(t *testing.T) {
+	eng := newTestEngine(t, nil)
+	srv := NewServer(":0", eng, t.TempDir())
+
+	rec := serveHTTP(srv, http.MethodGet, "/v0/node-id", "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
 	}
 }
