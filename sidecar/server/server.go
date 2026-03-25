@@ -15,6 +15,12 @@ import (
 	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
+const (
+	ed25519PrivKeyLen   = 64 // seed (32) + public key (32)
+	ed25519PubKeyOffset = 32
+	cometbftAddressLen  = 20 // hex(SHA256(pubkey)[:20])
+)
+
 // Server is the HTTP API for the sidecar.
 type Server struct {
 	addr    string
@@ -172,14 +178,14 @@ func (s *Server) handleNodeID(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	keyBytes, err := base64.StdEncoding.DecodeString(keyFile.PrivKey.Value)
-	if err != nil || len(keyBytes) != 64 {
+	if err != nil || len(keyBytes) != ed25519PrivKeyLen {
 		writeError(w, http.StatusInternalServerError, "invalid Ed25519 key in node_key.json")
 		return
 	}
 
-	pubKey := keyBytes[32:]
+	pubKey := keyBytes[ed25519PubKeyOffset:]
 	hash := sha256.Sum256(pubKey)
-	nodeID := hex.EncodeToString(hash[:20])
+	nodeID := hex.EncodeToString(hash[:cometbftAddressLen])
 
 	writeJSON(w, http.StatusOK, map[string]string{"nodeId": nodeID})
 }

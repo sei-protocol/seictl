@@ -31,6 +31,11 @@ const (
 	TaskTypeSnapshotUpload     = string(engine.TaskSnapshotUpload)
 	TaskTypeResultExport       = string(engine.TaskResultExport)
 	TaskTypeAwaitCondition     = string(engine.TaskAwaitCondition)
+
+	TaskTypeGenerateIdentity       = "generate-identity"
+	TaskTypeGenerateGentx          = "generate-gentx"
+	TaskTypeUploadGenesisArtifacts = "upload-genesis-artifacts"
+	TaskTypeAssembleGenesis        = "assemble-and-upload-genesis"
 )
 
 // Known condition and action values for AwaitConditionTask.
@@ -523,15 +528,13 @@ func ResultExportTaskFromParams(params map[string]interface{}) ResultExportTask 
 	}
 }
 
-// --- Genesis ceremony task types ---
-
 // GenerateIdentityTask creates validator identity (keys, node ID).
 type GenerateIdentityTask struct {
 	ChainID string
 	Moniker string
 }
 
-func (t GenerateIdentityTask) TaskType() string { return "generate-identity" }
+func (t GenerateIdentityTask) TaskType() string { return TaskTypeGenerateIdentity }
 
 func (t GenerateIdentityTask) Validate() error {
 	if t.ChainID == "" {
@@ -561,7 +564,7 @@ type GenerateGentxTask struct {
 	GenesisParams  string
 }
 
-func (t GenerateGentxTask) TaskType() string { return "generate-gentx" }
+func (t GenerateGentxTask) TaskType() string { return TaskTypeGenerateGentx }
 
 func (t GenerateGentxTask) Validate() error {
 	if t.ChainID == "" {
@@ -596,7 +599,7 @@ type UploadGenesisArtifactsTask struct {
 	NodeName string
 }
 
-func (t UploadGenesisArtifactsTask) TaskType() string { return "upload-genesis-artifacts" }
+func (t UploadGenesisArtifactsTask) TaskType() string { return TaskTypeUploadGenesisArtifacts }
 
 func (t UploadGenesisArtifactsTask) Validate() error {
 	if t.S3Bucket == "" {
@@ -635,7 +638,7 @@ type AssembleAndUploadGenesisTask struct {
 	Nodes    []GenesisNodeParam
 }
 
-func (t AssembleAndUploadGenesisTask) TaskType() string { return "assemble-and-upload-genesis" }
+func (t AssembleAndUploadGenesisTask) TaskType() string { return TaskTypeAssembleGenesis }
 
 func (t AssembleAndUploadGenesisTask) Validate() error {
 	if t.S3Bucket == "" {
