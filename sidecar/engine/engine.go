@@ -14,6 +14,20 @@ var log = seilog.NewLogger("seictl", "engine")
 
 const maxResults = 10
 
+// ErrInvalidTaskID is returned when a caller-provided task ID is not a valid UUID.
+var ErrInvalidTaskID = fmt.Errorf("task ID must be a valid UUID")
+
+// validateTaskID checks that a non-empty ID string is a valid UUID.
+func validateTaskID(id string) error {
+	if id == "" {
+		return nil
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		return fmt.Errorf("%w: %q", ErrInvalidTaskID, id)
+	}
+	return nil
+}
+
 // taskEntry tracks a running task and its cancel func.
 type taskEntry struct {
 	result *TaskResult
@@ -50,14 +64,32 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler) *Engine {
 	}
 }
 
-// Submit starts a task in its own goroutine and returns the assigned UUID.
+// Submit starts a task in its own goroutine and returns its ID. When
+// task.ID is set, it becomes the canonical identifier (enabling
+// deterministic IDs from the controller). When empty, a random UUID is
+// generated. If a task with the same ID already exists (active or
+// completed), the existing ID is returned without re-submitting.
 func (e *Engine) Submit(task Task) (string, error) {
 	handler, ok := e.handlers[task.Type]
 	if !ok {
 		return "", fmt.Errorf("unknown task type: %s", task.Type)
 	}
 
-	id := uuid.New().String()
+	if err := validateTaskID(task.ID); err != nil {
+		return "", err
+	}
+
+	id := task.ID
+	if id == "" {
+		id = uuid.New().String()
+	}
+
+	e.mu.Lock()
+	if existing := e.getResultLocked(id); existing != nil {
+		e.mu.Unlock()
+		return id, nil
+	}
+
 	now := time.Now()
 	taskCtx, cancel := context.WithCancel(e.ctx)
 
@@ -69,7 +101,6 @@ func (e *Engine) Submit(task Task) (string, error) {
 		SubmittedAt: now,
 	}
 
-	e.mu.Lock()
 	e.active[id] = &taskEntry{result: tr, cancel: cancel}
 	e.mu.Unlock()
 
@@ -104,7 +135,9 @@ func (e *Engine) Submit(task Task) (string, error) {
 }
 
 // SubmitScheduled creates a scheduled task. The schedule is evaluated by
-// EvalSchedules. Only cron schedules are supported today.
+// EvalSchedules. Only cron schedules are supported today. When task.ID is
+// set, it becomes the canonical identifier. If a task with the same ID
+// already exists, the existing ID is returned without re-registering.
 func (e *Engine) SubmitScheduled(task Task, sched ScheduleConfig) (string, error) {
 	if _, ok := e.handlers[task.Type]; !ok {
 		return "", fmt.Errorf("unknown task type: %s", task.Type)
@@ -113,12 +146,26 @@ func (e *Engine) SubmitScheduled(task Task, sched ScheduleConfig) (string, error
 		return "", fmt.Errorf("schedule must specify a cron expression")
 	}
 
+	if err := validateTaskID(task.ID); err != nil {
+		return "", err
+	}
+
 	now := time.Now()
 	next, err := nextCronTime(sched.Cron, now)
 	if err != nil {
 		return "", fmt.Errorf("invalid cron %q: %w", sched.Cron, err)
 	}
-	id := uuid.New().String()
+
+	id := task.ID
+	if id == "" {
+		id = uuid.New().String()
+	}
+
+	e.mu.Lock()
+	if existing := e.getResultLocked(id); existing != nil {
+		e.mu.Unlock()
+		return id, nil
+	}
 
 	tr := &TaskResult{
 		ID:          id,
@@ -130,7 +177,6 @@ func (e *Engine) SubmitScheduled(task Task, sched ScheduleConfig) (string, error
 		NextRunAt:   &next,
 	}
 
-	e.mu.Lock()
 	e.scheduled[id] = tr
 	e.mu.Unlock()
 
@@ -263,7 +309,12 @@ func (e *Engine) RecentResults() []TaskResult {
 func (e *Engine) GetResult(id string) *TaskResult {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	return e.getResultLocked(id)
+}
 
+// getResultLocked returns a task by ID without acquiring the lock.
+// Caller must hold at least a read lock.
+func (e *Engine) getResultLocked(id string) *TaskResult {
 	if a, ok := e.active[id]; ok {
 		cp := *a.result
 		return &cp

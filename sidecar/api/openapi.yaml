@@ -132,6 +132,14 @@ components:
       type: object
       required: [type]
       properties:
+        id:
+          type: string
+          format: uuid
+          description: >
+            Caller-provided task identifier. When set, the engine uses this
+            as the canonical ID (enabling deterministic IDs from the controller).
+            If a task with this ID already exists, the request is idempotent
+            and returns the existing ID. When omitted, a random UUID is generated.
         type:
           type: string
           description: Task type identifier.

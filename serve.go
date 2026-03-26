@@ -45,18 +45,22 @@ var serveCmd = cli.Command{
 		}
 
 		handlers := map[engine.TaskType]engine.TaskHandler{
-			engine.TaskSnapshotRestore:    tasks.NewSnapshotRestorer(homeDir, nil).Handler(),
-			engine.TaskDiscoverPeers:      tasks.NewPeerDiscoverer(homeDir, nil, nil).Handler(),
-			engine.TaskConfigPatch:        tasks.NewConfigPatcher(homeDir).Handler(),
-			engine.TaskConfigApply:        tasks.NewConfigApplier(homeDir).Handler(),
-			engine.TaskConfigValidate:     tasks.NewConfigValidator(homeDir).Handler(),
-			engine.TaskConfigReload:       tasks.NewConfigReloader(homeDir).Handler(),
-			engine.TaskMarkReady:          tasks.MarkReadyHandler(),
-			engine.TaskConfigureGenesis:   tasks.NewGenesisFetcher(homeDir, chainID, nil).Handler(),
-			engine.TaskConfigureStateSync: tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
-			engine.TaskSnapshotUpload:     tasks.NewSnapshotUploader(homeDir, nil).Handler(),
-			engine.TaskResultExport:       tasks.NewResultExporter(homeDir, nil).Handler(),
-			engine.TaskAwaitCondition:     tasks.NewConditionWaiter(nil).Handler(),
+			engine.TaskSnapshotRestore:          tasks.NewSnapshotRestorer(homeDir, nil).Handler(),
+			engine.TaskDiscoverPeers:            tasks.NewPeerDiscoverer(homeDir, nil, nil).Handler(),
+			engine.TaskConfigPatch:              tasks.NewConfigPatcher(homeDir).Handler(),
+			engine.TaskConfigApply:              tasks.NewConfigApplier(homeDir).Handler(),
+			engine.TaskConfigValidate:           tasks.NewConfigValidator(homeDir).Handler(),
+			engine.TaskConfigReload:             tasks.NewConfigReloader(homeDir).Handler(),
+			engine.TaskMarkReady:                tasks.MarkReadyHandler(),
+			engine.TaskConfigureGenesis:         tasks.NewGenesisFetcher(homeDir, chainID, nil).Handler(),
+			engine.TaskConfigureStateSync:       tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
+			engine.TaskSnapshotUpload:           tasks.NewSnapshotUploader(homeDir, nil).Handler(),
+			engine.TaskResultExport:             tasks.NewResultExporter(homeDir, nil).Handler(),
+			engine.TaskAwaitCondition:           tasks.NewConditionWaiter(nil).Handler(),
+			engine.TaskGenerateIdentity:         tasks.NewIdentityGenerator(homeDir, nil).Handler(),
+			engine.TaskGenerateGentx:            tasks.NewGentxGenerator(homeDir, nil).Handler(),
+			engine.TaskUploadGenesisArtifacts:   tasks.NewGenesisArtifactUploader(homeDir, nil).Handler(),
+			engine.TaskAssembleAndUploadGenesis: tasks.NewGenesisAssembler(homeDir, nil, nil, nil).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers)

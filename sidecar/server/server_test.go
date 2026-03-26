@@ -156,6 +156,89 @@ func TestPostTaskScheduled(t *testing.T) {
 	}
 }
 
+func TestPostTaskWithCallerID(t *testing.T) {
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+	srv := NewServer(":0", eng, t.TempDir())
+
+	body := `{"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","type":"config-patch"}`
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+	if resp["id"] != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+		t.Fatalf("expected caller-provided ID, got %q", resp["id"])
+	}
+}
+
+func TestPostTaskDedupReturnsExistingID(t *testing.T) {
+	started := make(chan struct{})
+	blocked := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := engine.NewEngine(ctx, map[engine.TaskType]engine.TaskHandler{
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			close(started)
+			<-blocked
+			return nil
+		},
+	})
+	srv := NewServer(":0", eng, t.TempDir())
+
+	body := `{"id":"ffffffff-1111-2222-3333-444444444444","type":"config-patch"}`
+	rec1 := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("first submit: expected 201, got %d: %s", rec1.Code, rec1.Body.String())
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for task to start")
+	}
+
+	rec2 := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
+	if rec2.Code != http.StatusCreated {
+		t.Fatalf("second submit: expected 201, got %d", rec2.Code)
+	}
+
+	var resp1, resp2 map[string]string
+	_ = json.NewDecoder(rec1.Body).Decode(&resp1)
+	_ = json.NewDecoder(rec2.Body).Decode(&resp2)
+	if resp1["id"] != resp2["id"] {
+		t.Fatalf("dedup should return same ID: %q vs %q", resp1["id"], resp2["id"])
+	}
+
+	close(blocked)
+}
+
+func TestPostTaskInvalidIDReturns400(t *testing.T) {
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+	srv := NewServer(":0", eng, t.TempDir())
+
+	body := `{"id":"not-a-valid-uuid","type":"config-patch"}`
+	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp ErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode error: %v", err)
+	}
+	if resp.Error == "" {
+		t.Fatal("expected non-empty error message")
+	}
+}
+
 func TestPostTaskInvalidJSON(t *testing.T) {
 	eng := newTestEngine(t, nil)
 	srv := NewServer(":0", eng, t.TempDir())

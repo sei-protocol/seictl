@@ -31,7 +31,10 @@ type Server struct {
 
 // TaskRequest is the JSON body for POST /v0/tasks. When Schedule is set
 // the task recurs on the given cron; otherwise it runs once immediately.
+// When ID is provided, the engine uses it as the task's canonical
+// identifier; otherwise a random UUID is generated.
 type TaskRequest struct {
+	ID       string                 `json:"id,omitempty"`
 	Type     string                 `json:"type"`
 	Params   map[string]any         `json:"params,omitempty"`
 	Schedule *engine.ScheduleConfig `json:"schedule,omitempty"`
@@ -94,7 +97,7 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task := engine.Task{Type: engine.TaskType(req.Type), Params: req.Params}
+	task := engine.Task{ID: req.ID, Type: engine.TaskType(req.Type), Params: req.Params}
 
 	if req.Schedule != nil {
 		if req.Schedule.Cron != "" {

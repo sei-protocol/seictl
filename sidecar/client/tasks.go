@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/google/uuid"
 	seiconfig "github.com/sei-protocol/sei-config"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 )
@@ -15,6 +16,21 @@ type TaskBuilder interface {
 	TaskType() string
 	Validate() error
 	ToTaskRequest() TaskRequest
+}
+
+// TaskMeta carries optional metadata that applies to all task types.
+// Embed this in any typed task struct. When ID is non-nil, the sidecar
+// uses it as the canonical task identifier (enabling deterministic IDs
+// from the controller). When nil, the engine generates a random UUID.
+type TaskMeta struct {
+	ID *uuid.UUID
+}
+
+// applyMeta sets the ID on a TaskRequest if the meta carries one.
+func (m TaskMeta) applyMeta(req *TaskRequest) {
+	if m.ID != nil {
+		req.Id = m.ID
+	}
 }
 
 // Task type constants re-exported from engine for external consumers.
@@ -46,6 +62,7 @@ const (
 
 // SnapshotRestoreTask downloads and extracts a snapshot archive from S3.
 type SnapshotRestoreTask struct {
+	TaskMeta
 	Bucket  string
 	Prefix  string
 	Region  string
@@ -77,7 +94,9 @@ func (t SnapshotRestoreTask) ToTaskRequest() TaskRequest {
 		"region":  t.Region,
 		"chainId": t.ChainID,
 	}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
 
 // SnapshotRestoreTaskFromParams reconstructs a SnapshotRestoreTask from
@@ -95,6 +114,7 @@ func SnapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestor
 // SnapshotUploadTask archives and streams a local snapshot to S3.
 // Schedule may be set to run this task on a recurring cron.
 type SnapshotUploadTask struct {
+	TaskMeta
 	Bucket   string
 	Prefix   string
 	Region   string
@@ -125,6 +145,7 @@ func (t SnapshotUploadTask) ToTaskRequest() TaskRequest {
 	if t.Schedule != nil {
 		req.Schedule = t.Schedule
 	}
+	t.applyMeta(&req)
 	return req
 }
 
@@ -144,6 +165,7 @@ func SnapshotUploadTaskFromParams(params map[string]interface{}) SnapshotUploadT
 // falls back to writing the embedded genesis for the chain ID it was started
 // with (set via SEI_CHAIN_ID environment variable).
 type ConfigureGenesisTask struct {
+	TaskMeta
 	URI    string
 	Region string
 }
@@ -171,14 +193,18 @@ func (t ConfigureGenesisTask) Validate() error {
 }
 
 func (t ConfigureGenesisTask) ToTaskRequest() TaskRequest {
+	var req TaskRequest
 	if t.URI == "" {
-		return TaskRequest{Type: t.TaskType()}
+		req = TaskRequest{Type: t.TaskType()}
+	} else {
+		p := map[string]interface{}{
+			"uri":    t.URI,
+			"region": t.Region,
+		}
+		req = TaskRequest{Type: t.TaskType(), Params: &p}
 	}
-	p := map[string]interface{}{
-		"uri":    t.URI,
-		"region": t.Region,
-	}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
 
 // ConfigureGenesisTaskFromParams reconstructs a ConfigureGenesisTask from
@@ -209,6 +235,7 @@ type PeerSource struct {
 
 // DiscoverPeersTask resolves peers from one or more sources.
 type DiscoverPeersTask struct {
+	TaskMeta
 	Sources []PeerSource
 }
 
@@ -260,7 +287,9 @@ func (t DiscoverPeersTask) ToTaskRequest() TaskRequest {
 		sources[i] = m
 	}
 	p := map[string]interface{}{"sources": sources}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
 
 // DiscoverPeersTaskFromParams reconstructs a DiscoverPeersTask from
@@ -314,6 +343,7 @@ func DiscoverPeersTaskFromParams(params map[string]interface{}) (DiscoverPeersTa
 // Files maps a filename (e.g. "config.toml", "app.toml") to a nested patch
 // that will be recursively merged into the existing file.
 type ConfigPatchTask struct {
+	TaskMeta
 	Files map[string]map[string]any
 }
 
@@ -332,13 +362,16 @@ func (t ConfigPatchTask) ToTaskRequest() TaskRequest {
 		files[k] = v
 	}
 	p := map[string]interface{}{"files": files}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
 
 // ConfigureStateSyncTask discovers a trust point and configures state sync.
 // When UseLocalSnapshot is true, the task uses the locally-restored snapshot
 // height as the trust height and sets use-local-snapshot = true in config.toml.
 type ConfigureStateSyncTask struct {
+	TaskMeta
 	UseLocalSnapshot bool
 	TrustPeriod      string
 	BackfillBlocks   int64
@@ -358,26 +391,33 @@ func (t ConfigureStateSyncTask) ToTaskRequest() TaskRequest {
 	if t.BackfillBlocks > 0 {
 		p["backfillBlocks"] = t.BackfillBlocks
 	}
+	var req TaskRequest
 	if len(p) == 0 {
-		return TaskRequest{Type: t.TaskType()}
+		req = TaskRequest{Type: t.TaskType()}
+	} else {
+		req = TaskRequest{Type: t.TaskType(), Params: &p}
 	}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
 
 // MarkReadyTask signals that bootstrap is complete.
-type MarkReadyTask struct{}
+type MarkReadyTask struct{ TaskMeta }
 
 func (t MarkReadyTask) TaskType() string { return TaskTypeMarkReady }
 func (t MarkReadyTask) Validate() error  { return nil }
 
 func (t MarkReadyTask) ToTaskRequest() TaskRequest {
-	return TaskRequest{Type: t.TaskType()}
+	req := TaskRequest{Type: t.TaskType()}
+	t.applyMeta(&req)
+	return req
 }
 
 // ConfigApplyTask generates or patches node config using sei-config's
 // intent resolution pipeline. The caller builds a ConfigIntent describing
 // the desired state; the sidecar resolves it via sei-config.
 type ConfigApplyTask struct {
+	TaskMeta
 	Intent seiconfig.ConfigIntent
 }
 
@@ -404,7 +444,9 @@ func (t ConfigApplyTask) ToTaskRequest() TaskRequest {
 		}
 		p["overrides"] = overrides
 	}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
 
 // ConfigApplyTaskFromParams reconstructs a ConfigApplyTask from a generic
@@ -434,18 +476,21 @@ func ConfigApplyTaskFromParams(params map[string]interface{}) ConfigApplyTask {
 }
 
 // ConfigValidateTask reads on-disk config and returns validation diagnostics.
-type ConfigValidateTask struct{}
+type ConfigValidateTask struct{ TaskMeta }
 
 func (t ConfigValidateTask) TaskType() string { return TaskTypeConfigValidate }
 func (t ConfigValidateTask) Validate() error  { return nil }
 
 func (t ConfigValidateTask) ToTaskRequest() TaskRequest {
-	return TaskRequest{Type: t.TaskType()}
+	req := TaskRequest{Type: t.TaskType()}
+	t.applyMeta(&req)
+	return req
 }
 
 // ConfigReloadTask patches hot-reloadable fields on disk and signals seid
 // to re-read its configuration.
 type ConfigReloadTask struct {
+	TaskMeta
 	Fields map[string]string
 }
 
@@ -464,7 +509,9 @@ func (t ConfigReloadTask) ToTaskRequest() TaskRequest {
 		fields[k] = v
 	}
 	p := map[string]interface{}{"fields": fields}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
 
 // ConfigReloadTaskFromParams reconstructs a ConfigReloadTask from a generic
@@ -484,6 +531,7 @@ func ConfigReloadTaskFromParams(params map[string]interface{}) ConfigReloadTask 
 // them in paginated NDJSON files to S3.
 // Schedule may be set to run this task on a recurring cron.
 type ResultExportTask struct {
+	TaskMeta
 	Bucket   string
 	Prefix   string
 	Region   string
@@ -514,6 +562,7 @@ func (t ResultExportTask) ToTaskRequest() TaskRequest {
 	if t.Schedule != nil {
 		req.Schedule = t.Schedule
 	}
+	t.applyMeta(&req)
 	return req
 }
 
@@ -530,6 +579,7 @@ func ResultExportTaskFromParams(params map[string]interface{}) ResultExportTask 
 
 // GenerateIdentityTask creates validator identity (keys, node ID).
 type GenerateIdentityTask struct {
+	TaskMeta
 	ChainID string
 	Moniker string
 }
@@ -551,13 +601,16 @@ func (t GenerateIdentityTask) ToTaskRequest() TaskRequest {
 		"chainId": t.ChainID,
 		"moniker": t.Moniker,
 	}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
 
 // GenerateGentxTask creates a gentx for the validator. The handler discovers
 // the node's own account address from the keys generated during identity
 // creation and funds it with AccountBalance before generating the gentx.
 type GenerateGentxTask struct {
+	TaskMeta
 	ChainID        string
 	StakingAmount  string
 	AccountBalance string
@@ -588,11 +641,14 @@ func (t GenerateGentxTask) ToTaskRequest() TaskRequest {
 	if t.GenesisParams != "" {
 		p["genesisParams"] = t.GenesisParams
 	}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
 
 // UploadGenesisArtifactsTask uploads identity.json and gentx.json to S3.
 type UploadGenesisArtifactsTask struct {
+	TaskMeta
 	S3Bucket string
 	S3Prefix string
 	S3Region string
@@ -621,7 +677,9 @@ func (t UploadGenesisArtifactsTask) ToTaskRequest() TaskRequest {
 		"s3Region": t.S3Region,
 		"nodeName": t.NodeName,
 	}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
 
 // GenesisNodeParam is the wire format for nodes[] in assemble-and-upload-genesis.
@@ -631,6 +689,7 @@ type GenesisNodeParam struct {
 
 // AssembleAndUploadGenesisTask collects per-node artifacts and produces final genesis.json.
 type AssembleAndUploadGenesisTask struct {
+	TaskMeta
 	S3Bucket string
 	S3Prefix string
 	S3Region string
@@ -668,13 +727,16 @@ func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
 		"chainId":  t.ChainID,
 		"nodes":    nodes,
 	}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
 
 // AwaitConditionTask blocks until a condition is met, then optionally
 // executes a post-condition action. Currently supports the "height"
 // condition and the "SIGTERM_SEID" action.
 type AwaitConditionTask struct {
+	TaskMeta
 	Condition    string
 	TargetHeight int64
 	Action       string
@@ -705,5 +767,7 @@ func (t AwaitConditionTask) ToTaskRequest() TaskRequest {
 	if t.Action != "" {
 		p["action"] = t.Action
 	}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
 }
