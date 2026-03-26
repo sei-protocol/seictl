@@ -323,3 +323,31 @@ func (c *SidecarClient) SubmitAwaitConditionTask(ctx context.Context, task Await
 	}
 	return c.SubmitTask(ctx, task.ToTaskRequest())
 }
+
+func (c *SidecarClient) SubmitGenerateIdentityTask(ctx context.Context, task GenerateIdentityTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitGenerateGentxTask(ctx context.Context, task GenerateGentxTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitUploadGenesisArtifactsTask(ctx context.Context, task UploadGenesisArtifactsTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitAssembleAndUploadGenesisTask(ctx context.Context, task AssembleAndUploadGenesisTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}

@@ -78,6 +78,124 @@ func TestSubmitRejectsUnknownType(t *testing.T) {
 	}
 }
 
+func TestSubmitCallerProvidedID(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	const customID = "aaaaaaaa-1111-2222-3333-444444444444"
+	id, err := eng.Submit(Task{ID: customID, Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if id != customID {
+		t.Fatalf("expected ID %q, got %q", customID, id)
+	}
+
+	result := waitForResult(t, eng, id)
+	if result.ID != customID {
+		t.Fatalf("result ID = %q, want %q", result.ID, customID)
+	}
+}
+
+func TestSubmitInvalidIDReturnsTypedError(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	_, err := eng.Submit(Task{ID: "not-a-uuid", Type: TaskConfigPatch})
+	if err == nil {
+		t.Fatal("expected error for non-UUID ID")
+	}
+	if !errors.Is(err, ErrInvalidTaskID) {
+		t.Fatalf("expected ErrInvalidTaskID, got: %v", err)
+	}
+}
+
+func TestSubmitScheduledInvalidIDReturnsTypedError(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	_, err := eng.SubmitScheduled(Task{ID: "also-bad", Type: TaskConfigPatch}, ScheduleConfig{Cron: "*/5 * * * *"})
+	if err == nil {
+		t.Fatal("expected error for non-UUID ID")
+	}
+	if !errors.Is(err, ErrInvalidTaskID) {
+		t.Fatalf("expected ErrInvalidTaskID, got: %v", err)
+	}
+}
+
+func TestSubmitDedupExistingActive(t *testing.T) {
+	started := make(chan struct{})
+	blocked := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			close(started)
+			<-blocked
+			return nil
+		},
+	})
+
+	const dedupID = "bbbbbbbb-1111-2222-3333-444444444444"
+	id1, err := eng.Submit(Task{ID: dedupID, Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for task to start")
+	}
+
+	id2, err := eng.Submit(Task{ID: dedupID, Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("second submit: %v", err)
+	}
+	if id2 != id1 {
+		t.Fatalf("dedup should return same ID: got %q and %q", id1, id2)
+	}
+
+	close(blocked)
+}
+
+func TestSubmitDedupExistingCompleted(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	const dedupID = "cccccccc-1111-2222-3333-444444444444"
+	id1, _ := eng.Submit(Task{ID: dedupID, Type: TaskConfigPatch})
+	waitForResult(t, eng, id1)
+
+	id2, err := eng.Submit(Task{ID: dedupID, Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("dedup submit: %v", err)
+	}
+	if id2 != id1 {
+		t.Fatalf("dedup should return same ID: got %q and %q", id1, id2)
+	}
+}
+
+func TestSubmitNoIDGeneratesUUID(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	id1, _ := eng.Submit(Task{Type: TaskConfigPatch})
+	id2, _ := eng.Submit(Task{Type: TaskConfigPatch})
+
+	if id1 == "" || id2 == "" {
+		t.Fatal("expected non-empty generated IDs")
+	}
+	if id1 == id2 {
+		t.Fatal("generated IDs should be unique")
+	}
+}
+
 func TestSubmitConcurrent(t *testing.T) {
 	var callCount atomic.Int32
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
@@ -389,6 +507,43 @@ func TestSubmitScheduled(t *testing.T) {
 	}
 	if result.NextRunAt == nil {
 		t.Fatal("expected NextRunAt to be set")
+	}
+}
+
+func TestSubmitScheduledCallerProvidedID(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	const schedID = "dddddddd-1111-2222-3333-444444444444"
+	id, err := eng.SubmitScheduled(Task{ID: schedID, Type: TaskConfigPatch}, ScheduleConfig{Cron: "*/5 * * * *"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != schedID {
+		t.Fatalf("expected ID %q, got %q", schedID, id)
+	}
+
+	result := eng.GetResult(id)
+	if result == nil {
+		t.Fatal("expected result for scheduled task")
+	}
+	if result.ID != schedID {
+		t.Fatalf("result ID = %q, want %q", result.ID, schedID)
+	}
+}
+
+func TestSubmitScheduledDedup(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	const schedDedupID = "eeeeeeee-1111-2222-3333-444444444444"
+	id1, _ := eng.SubmitScheduled(Task{ID: schedDedupID, Type: TaskConfigPatch}, ScheduleConfig{Cron: "*/5 * * * *"})
+	id2, _ := eng.SubmitScheduled(Task{ID: schedDedupID, Type: TaskConfigPatch}, ScheduleConfig{Cron: "*/10 * * * *"})
+
+	if id1 != id2 {
+		t.Fatalf("dedup should return same ID: got %q and %q", id1, id2)
 	}
 }
 

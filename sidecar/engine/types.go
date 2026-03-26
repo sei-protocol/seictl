@@ -9,22 +9,29 @@ import (
 type TaskType string
 
 const (
-	TaskSnapshotRestore    TaskType = "snapshot-restore"
-	TaskDiscoverPeers      TaskType = "discover-peers"
-	TaskConfigPatch        TaskType = "config-patch"
-	TaskConfigApply        TaskType = "config-apply"
-	TaskConfigValidate     TaskType = "config-validate"
-	TaskConfigReload       TaskType = "config-reload"
-	TaskMarkReady          TaskType = "mark-ready"
-	TaskConfigureGenesis   TaskType = "configure-genesis"
-	TaskConfigureStateSync TaskType = "configure-state-sync"
-	TaskSnapshotUpload     TaskType = "snapshot-upload"
-	TaskResultExport       TaskType = "result-export"
-	TaskAwaitCondition     TaskType = "await-condition"
+	TaskSnapshotRestore          TaskType = "snapshot-restore"
+	TaskDiscoverPeers            TaskType = "discover-peers"
+	TaskConfigPatch              TaskType = "config-patch"
+	TaskConfigApply              TaskType = "config-apply"
+	TaskConfigValidate           TaskType = "config-validate"
+	TaskConfigReload             TaskType = "config-reload"
+	TaskMarkReady                TaskType = "mark-ready"
+	TaskConfigureGenesis         TaskType = "configure-genesis"
+	TaskConfigureStateSync       TaskType = "configure-state-sync"
+	TaskSnapshotUpload           TaskType = "snapshot-upload"
+	TaskResultExport             TaskType = "result-export"
+	TaskAwaitCondition           TaskType = "await-condition"
+	TaskGenerateIdentity         TaskType = "generate-identity"
+	TaskGenerateGentx            TaskType = "generate-gentx"
+	TaskUploadGenesisArtifacts   TaskType = "upload-genesis-artifacts"
+	TaskAssembleAndUploadGenesis TaskType = "assemble-and-upload-genesis"
 )
 
-// Task is a unit of work submitted by the controller.
+// Task is a unit of work submitted by the controller. When ID is set, the
+// engine uses it as the canonical task identifier (enabling deterministic
+// IDs from the controller). When empty, the engine generates a random UUID.
 type Task struct {
+	ID     string         `json:"id,omitempty"`
 	Type   TaskType       `json:"type"`
 	Params map[string]any `json:"params,omitempty"`
 }
