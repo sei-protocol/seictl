@@ -3,6 +3,12 @@ package tasks
 import (
 	"context"
 	"fmt"
+	"os"
+
+	tmcfg "github.com/sei-protocol/sei-chain/sei-tendermint/config"
+	tmtypes "github.com/sei-protocol/sei-chain/sei-tendermint/types"
+
+	"github.com/sei-protocol/sei-chain/sei-cosmos/x/genutil"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seilog"
@@ -12,19 +18,17 @@ var identityLog = seilog.NewLogger("seictl", "task", "generate-identity")
 
 const identityMarkerFile = ".sei-sidecar-identity-done"
 
-// IdentityGenerator runs `seid init` to create the validator identity
-// (node_key.json, priv_validator_key.json, initial genesis.json).
+// IdentityGenerator creates the validator identity by calling the same
+// SDK functions as seid init: genutil.InitializeNodeValidatorFilesFromMnemonic
+// for keys, tmcfg.WriteConfigFile for config.toml, and genutil.ExportGenesisFile
+// for genesis.json.
 type IdentityGenerator struct {
 	homeDir string
-	run     CommandRunner
 }
 
 // NewIdentityGenerator creates a generator targeting the given home directory.
-func NewIdentityGenerator(homeDir string, runner CommandRunner) *IdentityGenerator {
-	if runner == nil {
-		runner = DefaultCommandRunner
-	}
-	return &IdentityGenerator{homeDir: homeDir, run: runner}
+func NewIdentityGenerator(homeDir string, _ CommandRunner) *IdentityGenerator {
+	return &IdentityGenerator{homeDir: homeDir}
 }
 
 // Handler returns an engine.TaskHandler for the generate-identity task type.
@@ -46,17 +50,42 @@ func (g *IdentityGenerator) Handler() engine.TaskHandler {
 			return fmt.Errorf("generate-identity: missing required param 'moniker'")
 		}
 
-		identityLog.Info("running seid init", "chainId", chainID, "moniker", moniker)
+		identityLog.Info("generating identity", "chainId", chainID, "moniker", moniker)
 
-		_, err := g.run(ctx, "seid", "init", moniker,
-			"--chain-id", chainID,
-			"--home", g.homeDir,
-		)
+		cfg := tmcfg.DefaultConfig()
+		cfg.SetRoot(g.homeDir)
+		tmcfg.EnsureRoot(g.homeDir)
+
+		// Same call as seid init — generates node_key.json,
+		// priv_validator_key.json, priv_validator_state.json.
+		nodeID, _, err := genutil.InitializeNodeValidatorFilesFromMnemonic(cfg, "")
 		if err != nil {
-			return fmt.Errorf("generate-identity: seid init: %w", err)
+			return fmt.Errorf("generate-identity: initializing validator files: %w", err)
 		}
 
-		identityLog.Info("identity generated", "moniker", moniker)
+		cfg.Moniker = moniker
+
+		if err := tmcfg.WriteConfigFile(cfg.RootDir, cfg); err != nil {
+			return fmt.Errorf("generate-identity: writing config.toml: %w", err)
+		}
+
+		// If no genesis.json exists yet (seid-init container didn't run
+		// or this is a standalone invocation), write a minimal one.
+		// The seid-init container normally creates the full genesis with
+		// all module defaults; this fallback produces a bare genesis that
+		// will be populated by subsequent ceremony steps.
+		genFile := cfg.GenesisFile()
+		if _, err := os.Stat(genFile); os.IsNotExist(err) {
+			genDoc := &tmtypes.GenesisDoc{
+				ChainID:  chainID,
+				AppState: []byte("{}"),
+			}
+			if err := genutil.ExportGenesisFile(genDoc, genFile); err != nil {
+				return fmt.Errorf("generate-identity: writing genesis: %w", err)
+			}
+		}
+
+		identityLog.Info("identity generated", "nodeId", nodeID, "moniker", moniker)
 		return writeMarker(g.homeDir, identityMarkerFile)
 	}
 }
