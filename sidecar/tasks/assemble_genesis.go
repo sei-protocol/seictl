@@ -8,6 +8,13 @@ import (
 	"os"
 	"path/filepath"
 
+	tmcfg "github.com/sei-protocol/sei-chain/sei-tendermint/config"
+	tmtypes "github.com/sei-protocol/sei-chain/sei-tendermint/types"
+
+	banktypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/bank/types"
+	"github.com/sei-protocol/sei-chain/sei-cosmos/x/genutil"
+	genutiltypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/genutil/types"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -20,21 +27,19 @@ var assembleLog = seilog.NewLogger("seictl", "task", "assemble-genesis")
 
 const assembleMarkerFile = ".sei-sidecar-assemble-done"
 
-// GenesisAssembler downloads per-node gentx files from S3, runs
-// `seid collect-gentxs` to produce the final genesis.json, and uploads
-// it back to S3 for all validators to download.
+// GenesisAssembler downloads per-node gentx files from S3, calls
+// genutil.GenAppStateFromConfig (the same function as seid collect-gentxs)
+// to produce the final genesis.json, and uploads it back to S3 for all
+// validators to download.
 type GenesisAssembler struct {
 	homeDir           string
-	run               CommandRunner
 	s3ClientFactory   S3ClientFactory
 	s3UploaderFactory seis3.UploaderFactory
 }
 
 // NewGenesisAssembler creates an assembler targeting the given home directory.
-func NewGenesisAssembler(homeDir string, runner CommandRunner, s3Factory S3ClientFactory, uploaderFactory seis3.UploaderFactory) *GenesisAssembler {
-	if runner == nil {
-		runner = DefaultCommandRunner
-	}
+// The CommandRunner parameter is ignored (kept for call-site compatibility).
+func NewGenesisAssembler(homeDir string, _ CommandRunner, s3Factory S3ClientFactory, uploaderFactory seis3.UploaderFactory) *GenesisAssembler {
 	if s3Factory == nil {
 		s3Factory = DefaultS3ClientFactory
 	}
@@ -43,7 +48,6 @@ func NewGenesisAssembler(homeDir string, runner CommandRunner, s3Factory S3Clien
 	}
 	return &GenesisAssembler{
 		homeDir:           homeDir,
-		run:               runner,
 		s3ClientFactory:   s3Factory,
 		s3UploaderFactory: uploaderFactory,
 	}
@@ -76,7 +80,7 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return err
 		}
 
-		if err := a.collectGentxs(ctx); err != nil {
+		if err := a.collectGentxs(); err != nil {
 			return err
 		}
 
@@ -132,13 +136,39 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg assembleC
 	return nil
 }
 
-func (a *GenesisAssembler) collectGentxs(ctx context.Context) error {
-	assembleLog.Info("running collect-gentxs")
+// collectGentxs calls genutil.GenAppStateFromConfig — the exact same
+// function behind seid collect-gentxs. It decodes each gentx through
+// the proto codec, validates balances, extracts persistent peers,
+// and writes the final genesis.json.
+func (a *GenesisAssembler) collectGentxs() error {
+	assembleLog.Info("running collect-gentxs via SDK")
 
-	_, err := a.run(ctx, "seid", "collect-gentxs", "--home", a.homeDir)
+	cdc, txCfg := makeCodec()
+	ensureBech32()
+
+	cfg := tmcfg.DefaultConfig()
+	cfg.SetRoot(a.homeDir)
+
+	nodeID, valPubKey, err := genutil.InitializeNodeValidatorFiles(cfg)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: loading validator files: %w", err)
+	}
+
+	genDoc, err := tmtypes.GenesisDocFromFile(cfg.GenesisFile())
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: reading genesis: %w", err)
+	}
+
+	gentxsDir := filepath.Join(a.homeDir, "config", "gentx")
+	initCfg := genutiltypes.NewInitConfig(genDoc.ChainID, gentxsDir, nodeID, valPubKey)
+
+	genBalIterator := banktypes.GenesisBalancesIterator{}
+
+	_, err = genutil.GenAppStateFromConfig(cdc, txCfg, cfg, initCfg, *genDoc, genBalIterator)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: collect-gentxs: %w", err)
 	}
+
 	return nil
 }
 
