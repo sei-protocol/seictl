@@ -12,7 +12,7 @@ import (
 var gentxLog = seilog.NewLogger("seictl", "task", "generate-gentx")
 
 const (
-	gentxMarkerFile = ".sei-sidecar-gentx-done"
+	gentxMarkerFile  = ".sei-sidecar-gentx-done"
 	validatorKeyName = "validator"
 )
 

@@ -23,7 +23,7 @@ const artifactUploadMarkerFile = ".sei-sidecar-artifact-upload-done"
 // GenesisArtifactUploader uploads the gentx file and a node identity
 // manifest to S3 so the assembler can collect them.
 type GenesisArtifactUploader struct {
-	homeDir         string
+	homeDir           string
 	s3UploaderFactory seis3.UploaderFactory
 }
 
