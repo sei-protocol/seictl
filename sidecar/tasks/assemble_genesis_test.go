@@ -43,10 +43,11 @@ func TestAssembler_DownloadsGentxFiles(t *testing.T) {
 	assembler := NewGenesisAssembler(homeDir, nil, s3Factory, mockUploaderFactory(newMockS3Uploader()))
 
 	cfg := assembleConfig{
-		bucket: "my-bucket",
-		prefix: "genesis/",
-		region: "us-west-2",
-		nodes:  []string{"val-0", "val-1"},
+		bucket:         "my-bucket",
+		prefix:         "genesis/",
+		region:         "us-west-2",
+		accountBalance: "10000000usei",
+		nodes:          []string{"val-0", "val-1"},
 	}
 
 	if err := assembler.downloadGentxFiles(context.Background(), cfg); err != nil {
@@ -69,10 +70,11 @@ func TestAssembler_MissingParams(t *testing.T) {
 		name   string
 		params map[string]any
 	}{
-		{"missing bucket", map[string]any{"s3Region": "r", "nodes": []any{map[string]any{"name": "n"}}}},
-		{"missing region", map[string]any{"s3Bucket": "b", "nodes": []any{map[string]any{"name": "n"}}}},
-		{"missing nodes", map[string]any{"s3Bucket": "b", "s3Region": "r"}},
-		{"empty nodes", map[string]any{"s3Bucket": "b", "s3Region": "r", "nodes": []any{}}},
+		{"missing bucket", map[string]any{"s3Region": "r", "accountBalance": "10usei", "nodes": []any{map[string]any{"name": "n"}}}},
+		{"missing region", map[string]any{"s3Bucket": "b", "accountBalance": "10usei", "nodes": []any{map[string]any{"name": "n"}}}},
+		{"missing accountBalance", map[string]any{"s3Bucket": "b", "s3Region": "r", "nodes": []any{map[string]any{"name": "n"}}}},
+		{"missing nodes", map[string]any{"s3Bucket": "b", "s3Region": "r", "accountBalance": "10usei"}},
+		{"empty nodes", map[string]any{"s3Bucket": "b", "s3Region": "r", "accountBalance": "10usei", "nodes": []any{}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -92,7 +94,8 @@ func TestAssembler_S3DownloadFailure(t *testing.T) {
 	handler := NewGenesisAssembler(homeDir, nil, s3Factory, nil).Handler()
 	err := handler(context.Background(), map[string]any{
 		"s3Bucket": "b", "s3Prefix": "p/", "s3Region": "r", "chainId": "c",
-		"nodes": []any{map[string]any{"name": "missing-node"}},
+		"accountBalance": "10000000usei",
+		"nodes":          []any{map[string]any{"name": "missing-node"}},
 	})
 	if err == nil {
 		t.Fatal("expected error when S3 download fails")
