@@ -190,6 +190,87 @@ func TestCompareBlock_Layer1TxCountMismatch(t *testing.T) {
 	}
 }
 
+func TestCompareResult_Diverged(t *testing.T) {
+	match := CompareResult{Match: true}
+	if match.Diverged() {
+		t.Error("expected Diverged()=false for matching result")
+	}
+
+	mismatch := CompareResult{Match: false}
+	if !mismatch.Diverged() {
+		t.Error("expected Diverged()=true for mismatching result")
+	}
+}
+
+func TestLayer0Result_Match(t *testing.T) {
+	cases := []struct {
+		name string
+		r    Layer0Result
+		want bool
+	}{
+		{"all match", Layer0Result{AppHashMatch: true, LastResultsHashMatch: true, GasUsedMatch: true}, true},
+		{"app hash mismatch", Layer0Result{AppHashMatch: false, LastResultsHashMatch: true, GasUsedMatch: true}, false},
+		{"results hash mismatch", Layer0Result{AppHashMatch: true, LastResultsHashMatch: false, GasUsedMatch: true}, false},
+		{"gas mismatch", Layer0Result{AppHashMatch: true, LastResultsHashMatch: true, GasUsedMatch: false}, false},
+		{"all mismatch", Layer0Result{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.r.Match(); got != tc.want {
+				t.Errorf("Match() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCompareBlock_AllMatch_NoLayer1(t *testing.T) {
+	srv := rpcServer("SAME", "SAME", nil)
+	defer srv.Close()
+
+	comp := NewComparator(srv.URL, srv.URL)
+	result, err := comp.CompareBlock(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("CompareBlock: %v", err)
+	}
+	if !result.Match {
+		t.Error("expected match")
+	}
+	if result.Layer0.ShadowAppHash != "" {
+		t.Error("expected empty ShadowAppHash when matching")
+	}
+	if result.Layer0.CanonicalAppHash != "" {
+		t.Error("expected empty CanonicalAppHash when matching")
+	}
+	if result.Layer1 != nil {
+		t.Error("expected nil Layer1 when all hashes match")
+	}
+}
+
+func TestCompareBlock_LastResultsHashDivergence(t *testing.T) {
+	shadowSrv := rpcServer("SAME_APP", "SHADOW_RES", nil)
+	defer shadowSrv.Close()
+	canonicalSrv := rpcServer("SAME_APP", "CANONICAL_RES", nil)
+	defer canonicalSrv.Close()
+
+	comp := NewComparator(shadowSrv.URL, canonicalSrv.URL)
+	result, err := comp.CompareBlock(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("CompareBlock: %v", err)
+	}
+	if result.Match {
+		t.Error("expected divergence on LastResultsHash mismatch")
+	}
+	if !result.Layer0.AppHashMatch {
+		t.Error("expected AppHash to match")
+	}
+	if result.Layer0.LastResultsHashMatch {
+		t.Error("expected LastResultsHash mismatch")
+	}
+	if result.Layer0.ShadowLastResultsHash != "SHADOW_RES" {
+		t.Errorf("ShadowLastResultsHash = %q, want SHADOW_RES", result.Layer0.ShadowLastResultsHash)
+	}
+}
+
 func TestCompareBlock_RPCError(t *testing.T) {
 	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

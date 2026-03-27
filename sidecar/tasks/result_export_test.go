@@ -195,12 +195,13 @@ func TestExportWritesStateAfterPage(t *testing.T) {
 
 func TestParseExportConfig(t *testing.T) {
 	cases := []struct {
-		name            string
-		params          map[string]any
-		wantErr         bool
-		wantBucket      string
-		wantRegion      string
-		wantRPCEndpoint string
+		name             string
+		params           map[string]any
+		wantErr          bool
+		wantBucket       string
+		wantRegion       string
+		wantRPCEndpoint  string
+		wantCanonicalRPC string
 	}{
 		{
 			name:    "missing bucket",
@@ -226,6 +227,14 @@ func TestParseExportConfig(t *testing.T) {
 			wantRegion:      "r",
 			wantRPCEndpoint: "http://custom:26657",
 		},
+		{
+			name:             "valid with canonicalRpc",
+			params:           map[string]any{"bucket": "b", "region": "r", "canonicalRpc": "http://canonical:26657"},
+			wantBucket:       "b",
+			wantRegion:       "r",
+			wantRPCEndpoint:  defaultRPCEndpoint,
+			wantCanonicalRPC: "http://canonical:26657",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -248,6 +257,198 @@ func TestParseExportConfig(t *testing.T) {
 			if cfg.RPCEndpoint != tc.wantRPCEndpoint {
 				t.Errorf("RPCEndpoint = %q, want %q", cfg.RPCEndpoint, tc.wantRPCEndpoint)
 			}
+			if cfg.CanonicalRPC != tc.wantCanonicalRPC {
+				t.Errorf("CanonicalRPC = %q, want %q", cfg.CanonicalRPC, tc.wantCanonicalRPC)
+			}
 		})
 	}
+}
+
+// --- Handler routing tests ---
+
+func TestHandlerRouting_WithCanonicalRPC_CallsExportAndCompare(t *testing.T) {
+	// Set up matching shadow/canonical RPC servers so CompareBlock returns
+	// a match on every height. Then cancel the context to stop the loop.
+	srv := fakeRPCAndBlockServer(5, "AABB", "CCDD", nil)
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately so ExportAndCompare returns
+
+	err := e.Handler()(ctx, map[string]any{
+		"bucket":       "test-bucket",
+		"region":       "us-east-1",
+		"rpcEndpoint":  srv.URL,
+		"canonicalRpc": srv.URL,
+	})
+	if err == nil {
+		t.Fatal("expected context.Canceled error")
+	}
+}
+
+func TestHandlerRouting_WithoutCanonicalRPC_CallsExport(t *testing.T) {
+	srv := fakeRPCServer(0) // 0 blocks → nothing to export
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+
+	err := e.Handler()(context.Background(), map[string]any{
+		"bucket":      "test-bucket",
+		"region":      "us-east-1",
+		"rpcEndpoint": srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("Handler() error = %v, want nil for empty export", err)
+	}
+}
+
+// --- ExportAndCompare tests ---
+
+func TestExportAndCompare_DivergenceDetected(t *testing.T) {
+	// Shadow returns different app hash than canonical → immediate divergence.
+	shadowSrv := fakeRPCAndBlockServer(5, "SHADOW_HASH", "RESULTS", nil)
+	defer shadowSrv.Close()
+	canonicalSrv := fakeRPCAndBlockServer(5, "CANONICAL_HASH", "RESULTS", nil)
+	defer canonicalSrv.Close()
+
+	tmpDir := t.TempDir()
+	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+
+	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+		Bucket:       "test-bucket",
+		Prefix:       "compare/",
+		Region:       "us-east-1",
+		RPCEndpoint:  shadowSrv.URL,
+		CanonicalRPC: canonicalSrv.URL,
+	})
+	// Divergence detected = task completes successfully (nil error).
+	if err != nil {
+		t.Fatalf("ExportAndCompare() error = %v, want nil (divergence = success)", err)
+	}
+
+	state := e.readExportState()
+	if state.LastExportedHeight != 1 {
+		t.Errorf("LastExportedHeight = %d, want 1 (diverged at first block)", state.LastExportedHeight)
+	}
+}
+
+func TestExportAndCompare_ContextCancelled(t *testing.T) {
+	// Both servers match → loop runs forever until context is cancelled.
+	srv := fakeRPCAndBlockServer(5, "SAME", "SAME", nil)
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel after a short delay to let the loop start.
+	go func() {
+		cancel()
+	}()
+
+	err := e.ExportAndCompare(ctx, ResultExportConfig{
+		Bucket:       "test-bucket",
+		Region:       "us-east-1",
+		RPCEndpoint:  srv.URL,
+		CanonicalRPC: srv.URL,
+	})
+	if err == nil {
+		t.Fatal("expected context.Canceled error")
+	}
+}
+
+func TestExportAndCompare_S3UploaderError(t *testing.T) {
+	srv := fakeRPCAndBlockServer(5, "AA", "BB", nil)
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	e := NewResultExporter(tmpDir, failingUploaderFactory("AWS creds expired"))
+
+	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+		Bucket:       "test-bucket",
+		Region:       "us-east-1",
+		RPCEndpoint:  srv.URL,
+		CanonicalRPC: srv.URL,
+	})
+	if err == nil {
+		t.Fatal("expected error from S3 uploader factory failure")
+	}
+}
+
+func TestExportAndCompare_ResumesFromExportState(t *testing.T) {
+	// Set export state to height 3, shadow serves up to 5.
+	// With matching hashes, it compares blocks 4 and 5 (no divergence).
+	// Set up divergence at block 4 by using different servers.
+	shadowSrv := fakeRPCAndBlockServer(5, "SHADOW", "RES", nil)
+	defer shadowSrv.Close()
+	canonicalSrv := fakeRPCAndBlockServer(5, "CANONICAL", "RES", nil)
+	defer canonicalSrv.Close()
+
+	tmpDir := t.TempDir()
+	stateData, _ := json.Marshal(exportState{LastExportedHeight: 3})
+	if err := os.WriteFile(filepath.Join(tmpDir, exportStateFile), stateData, 0o644); err != nil {
+		t.Fatalf("writing state: %v", err)
+	}
+
+	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+		Bucket:       "test-bucket",
+		Region:       "us-east-1",
+		RPCEndpoint:  shadowSrv.URL,
+		CanonicalRPC: canonicalSrv.URL,
+	})
+	if err != nil {
+		t.Fatalf("ExportAndCompare() error = %v", err)
+	}
+
+	state := e.readExportState()
+	if state.LastExportedHeight != 4 {
+		t.Errorf("LastExportedHeight = %d, want 4 (first block after resume)", state.LastExportedHeight)
+	}
+}
+
+// --- flushComparePage tests ---
+
+func TestFlushComparePage_EmptyResults(t *testing.T) {
+	err := flushComparePage(context.Background(), &mockResultUploader{}, "bucket", "prefix/", nil)
+	if err != nil {
+		t.Errorf("flushComparePage(nil) error = %v, want nil", err)
+	}
+}
+
+// --- Test helpers ---
+
+// fakeRPCAndBlockServer responds to /status, /block, and /block_results.
+func fakeRPCAndBlockServer(latestHeight int64, appHash, lastResultsHash string, txResults []json.RawMessage) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/status":
+			fmt.Fprintf(w, `{"sync_info":{"latest_block_height":"%d"}}`, latestHeight)
+		case r.URL.Path == "/block":
+			resp := map[string]any{
+				"result": map[string]any{
+					"block": map[string]any{
+						"header": map[string]any{
+							"app_hash":          appHash,
+							"last_results_hash": lastResultsHash,
+						},
+					},
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+		case r.URL.Path == "/block_results":
+			resp := map[string]any{
+				"result": map[string]any{
+					"txs_results": txResults,
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
 }
