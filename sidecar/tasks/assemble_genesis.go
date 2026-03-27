@@ -125,6 +125,9 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg assembleC
 	}
 
 	gentxDir := filepath.Join(a.homeDir, "config", "gentx")
+	if err := os.RemoveAll(gentxDir); err != nil {
+		return fmt.Errorf("assemble-genesis: clearing gentx dir: %w", err)
+	}
 	if err := os.MkdirAll(gentxDir, 0o755); err != nil {
 		return fmt.Errorf("assemble-genesis: creating gentx dir: %w", err)
 	}
