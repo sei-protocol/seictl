@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
@@ -267,16 +269,14 @@ func TestParseExportConfig(t *testing.T) {
 // --- Handler routing tests ---
 
 func TestHandlerRouting_WithCanonicalRPC_CallsExportAndCompare(t *testing.T) {
-	// Set up matching shadow/canonical RPC servers so CompareBlock returns
-	// a match on every height. Then cancel the context to stop the loop.
-	srv := fakeRPCAndBlockServer(5, "AABB", "CCDD", nil)
+	srv := fakeRPCAndBlockServer(1, "AABB", "CCDD", nil)
 	defer srv.Close()
 
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately so ExportAndCompare returns
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
 
 	err := e.Handler()(ctx, map[string]any{
 		"bucket":       "test-bucket",
@@ -285,7 +285,7 @@ func TestHandlerRouting_WithCanonicalRPC_CallsExportAndCompare(t *testing.T) {
 		"canonicalRpc": srv.URL,
 	})
 	if err == nil {
-		t.Fatal("expected context.Canceled error")
+		t.Fatal("expected context deadline exceeded error")
 	}
 }
 
@@ -337,18 +337,14 @@ func TestExportAndCompare_DivergenceDetected(t *testing.T) {
 }
 
 func TestExportAndCompare_ContextCancelled(t *testing.T) {
-	// Both servers match → loop runs forever until context is cancelled.
-	srv := fakeRPCAndBlockServer(5, "SAME", "SAME", nil)
+	srv := fakeRPCAndBlockServer(1, "SAME", "SAME", nil)
 	defer srv.Close()
 
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	// Cancel after a short delay to let the loop start.
-	go func() {
-		cancel()
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
 
 	err := e.ExportAndCompare(ctx, ResultExportConfig{
 		Bucket:       "test-bucket",
@@ -357,7 +353,7 @@ func TestExportAndCompare_ContextCancelled(t *testing.T) {
 		CanonicalRPC: srv.URL,
 	})
 	if err == nil {
-		t.Fatal("expected context.Canceled error")
+		t.Fatal("expected context deadline exceeded error")
 	}
 }
 
@@ -411,6 +407,54 @@ func TestExportAndCompare_ResumesFromExportState(t *testing.T) {
 	}
 }
 
+// --- Divergence report tests ---
+
+func TestExportAndCompare_UploadsDivergenceReport(t *testing.T) {
+	shadowSrv := fakeRPCAndBlockServer(5, "SHADOW", "RESULTS", nil)
+	defer shadowSrv.Close()
+	canonicalSrv := fakeRPCAndBlockServer(5, "CANONICAL", "RESULTS", nil)
+	defer canonicalSrv.Close()
+
+	recorder := &recordingUploader{}
+	tmpDir := t.TempDir()
+	e := NewResultExporter(tmpDir, func(_ context.Context, _ string) (seis3.Uploader, error) {
+		return recorder, nil
+	})
+
+	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+		Bucket:       "test-bucket",
+		Prefix:       "shadow/pacific-1/",
+		Region:       "us-east-1",
+		RPCEndpoint:  shadowSrv.URL,
+		CanonicalRPC: canonicalSrv.URL,
+	})
+	if err != nil {
+		t.Fatalf("ExportAndCompare() error = %v", err)
+	}
+
+	var reportKey string
+	var compareKey string
+	for _, key := range recorder.keys {
+		if strings.Contains(key, "divergence-") && strings.Contains(key, ".report.json.gz") {
+			reportKey = key
+		}
+		if strings.Contains(key, ".compare.ndjson.gz") {
+			compareKey = key
+		}
+	}
+
+	if reportKey == "" {
+		t.Errorf("expected divergence report upload, got keys: %v", recorder.keys)
+	}
+	if compareKey == "" {
+		t.Errorf("expected comparison page upload, got keys: %v", recorder.keys)
+	}
+
+	if reportKey != "" && reportKey != "shadow/pacific-1/divergence-1.report.json.gz" {
+		t.Errorf("report key = %q, want %q", reportKey, "shadow/pacific-1/divergence-1.report.json.gz")
+	}
+}
+
 // --- flushComparePage tests ---
 
 func TestFlushComparePage_EmptyResults(t *testing.T) {
@@ -421,6 +465,20 @@ func TestFlushComparePage_EmptyResults(t *testing.T) {
 }
 
 // --- Test helpers ---
+
+type recordingUploader struct {
+	keys []string
+}
+
+func (r *recordingUploader) UploadObject(_ context.Context, in *transfermanager.UploadObjectInput, _ ...func(*transfermanager.Options)) (*transfermanager.UploadObjectOutput, error) {
+	if in.Key != nil {
+		r.keys = append(r.keys, *in.Key)
+	}
+	if in.Body != nil {
+		_, _ = io.Copy(io.Discard, in.Body)
+	}
+	return &transfermanager.UploadObjectOutput{}, nil
+}
 
 // fakeRPCAndBlockServer responds to /status, /block, and /block_results.
 func fakeRPCAndBlockServer(latestHeight int64, appHash, lastResultsHash string, txResults []json.RawMessage) *httptest.Server {

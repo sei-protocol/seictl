@@ -271,6 +271,65 @@ func TestCompareBlock_LastResultsHashDivergence(t *testing.T) {
 	}
 }
 
+// --- DivergenceReport tests ---
+
+func TestBuildDivergenceReport_CapturesBothChains(t *testing.T) {
+	shadowSrv := rpcServer("SHADOW_HASH", "RESULTS", nil)
+	defer shadowSrv.Close()
+	canonicalSrv := rpcServer("CANONICAL_HASH", "RESULTS", nil)
+	defer canonicalSrv.Close()
+
+	comp := NewComparator(shadowSrv.URL, canonicalSrv.URL)
+	comparison, err := comp.CompareBlock(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("CompareBlock: %v", err)
+	}
+
+	report, err := comp.BuildDivergenceReport(context.Background(), 42, *comparison)
+	if err != nil {
+		t.Fatalf("BuildDivergenceReport: %v", err)
+	}
+
+	if report.Height != 42 {
+		t.Errorf("Height = %d, want 42", report.Height)
+	}
+	if report.Timestamp == "" {
+		t.Error("expected non-empty Timestamp")
+	}
+	if report.Comparison.Match {
+		t.Error("expected divergent comparison in report")
+	}
+	if len(report.Shadow.Block) == 0 {
+		t.Error("expected non-empty Shadow.Block")
+	}
+	if len(report.Shadow.BlockResults) == 0 {
+		t.Error("expected non-empty Shadow.BlockResults")
+	}
+	if len(report.Canonical.Block) == 0 {
+		t.Error("expected non-empty Canonical.Block")
+	}
+	if len(report.Canonical.BlockResults) == 0 {
+		t.Error("expected non-empty Canonical.BlockResults")
+	}
+}
+
+func TestBuildDivergenceReport_RPCFailure(t *testing.T) {
+	goodSrv := rpcServer("AA", "BB", nil)
+	defer goodSrv.Close()
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer badSrv.Close()
+
+	comp := NewComparator(badSrv.URL, goodSrv.URL)
+	comparison := CompareResult{Height: 1, Match: false}
+
+	_, err := comp.BuildDivergenceReport(context.Background(), 1, comparison)
+	if err == nil {
+		t.Error("expected error when shadow RPC fails during report capture")
+	}
+}
+
 func TestCompareBlock_RPCError(t *testing.T) {
 	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

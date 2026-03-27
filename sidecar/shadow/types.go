@@ -9,6 +9,8 @@
 //   - Layer 3: Execution trace comparison (future).
 package shadow
 
+import "encoding/json"
+
 // CompareResult holds the comparison output for a single block.
 type CompareResult struct {
 	// Height is the block height that was compared.
@@ -88,4 +90,24 @@ type FieldDivergence struct {
 	Field     string `json:"field"`
 	Shadow    any    `json:"shadow"`
 	Canonical any    `json:"canonical"`
+}
+
+// DivergenceReport is a self-contained investigation artifact for a single
+// app-hash divergence event. It includes the layered comparison result plus
+// the full block and block_results from both chains, giving engineers all
+// the context needed to diagnose why the shadow node diverged without
+// querying external systems.
+type DivergenceReport struct {
+	Height     int64         `json:"height"`
+	Timestamp  string        `json:"timestamp"`
+	Comparison CompareResult `json:"comparison"`
+	Shadow     ChainSnapshot `json:"shadow"`
+	Canonical  ChainSnapshot `json:"canonical"`
+}
+
+// ChainSnapshot captures the raw RPC responses from one chain at a
+// specific height. The JSON is preserved verbatim for offline analysis.
+type ChainSnapshot struct {
+	Block        json.RawMessage `json:"block"`
+	BlockResults json.RawMessage `json:"blockResults"`
 }
