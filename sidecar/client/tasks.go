@@ -529,14 +529,15 @@ func ConfigReloadTaskFromParams(params map[string]interface{}) ConfigReloadTask 
 }
 
 // ResultExportTask queries the local seid RPC for block results and uploads
-// them in paginated NDJSON files to S3.
-// Schedule may be set to run this task on a recurring cron.
+// them in paginated NDJSON files to S3. CanonicalRPC enables comparison mode:
+// the sidecar compares local block results against the canonical chain and
+// the task completes when app-hash divergence is detected.
 type ResultExportTask struct {
 	TaskMeta
-	Bucket   string
-	Prefix   string
-	Region   string
-	Schedule *ScheduleConfig
+	Bucket       string
+	Prefix       string
+	Region       string
+	CanonicalRPC string
 }
 
 func (t ResultExportTask) TaskType() string { return TaskTypeResultExport }
@@ -559,10 +560,10 @@ func (t ResultExportTask) ToTaskRequest() TaskRequest {
 	if t.Prefix != "" {
 		p["prefix"] = t.Prefix
 	}
-	req := TaskRequest{Type: t.TaskType(), Params: &p}
-	if t.Schedule != nil {
-		req.Schedule = t.Schedule
+	if t.CanonicalRPC != "" {
+		p["canonicalRpc"] = t.CanonicalRPC
 	}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	t.applyMeta(&req)
 	return req
 }
@@ -572,9 +573,10 @@ func (t ResultExportTask) ToTaskRequest() TaskRequest {
 func ResultExportTaskFromParams(params map[string]interface{}) ResultExportTask {
 	s := func(k string) string { v, _ := params[k].(string); return v }
 	return ResultExportTask{
-		Bucket: s("bucket"),
-		Prefix: s("prefix"),
-		Region: s("region"),
+		Bucket:       s("bucket"),
+		Prefix:       s("prefix"),
+		Region:       s("region"),
+		CanonicalRPC: s("canonicalRpc"),
 	}
 }
 

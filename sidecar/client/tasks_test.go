@@ -584,9 +584,6 @@ func TestResultExportRoundTrip(t *testing.T) {
 			if req.Type != TaskTypeResultExport {
 				return false
 			}
-			if req.Schedule != nil {
-				return false
-			}
 			rebuilt := ResultExportTaskFromParams(*req.Params)
 			return rebuilt.Bucket == task.Bucket &&
 				rebuilt.Region == task.Region
@@ -621,27 +618,34 @@ func TestResultExportValidation(t *testing.T) {
 	}
 }
 
-func TestResultExportTask_NoSchedule(t *testing.T) {
-	task := ResultExportTask{Bucket: "b", Region: "r"}
+func TestResultExportTask_WithCanonicalRPC(t *testing.T) {
+	task := ResultExportTask{
+		Bucket:       "b",
+		Prefix:       "shadow-results/pacific-1/",
+		Region:       "eu-central-1",
+		CanonicalRPC: "http://canonical-rpc:26657",
+	}
 	req := task.ToTaskRequest()
-	if req.Schedule != nil {
-		t.Errorf("expected nil Schedule, got %v", req.Schedule)
+	p := *req.Params
+	if p["canonicalRpc"] != "http://canonical-rpc:26657" {
+		t.Errorf("canonicalRpc = %v, want %q", p["canonicalRpc"], "http://canonical-rpc:26657")
+	}
+
+	rebuilt := ResultExportTaskFromParams(p)
+	if rebuilt.CanonicalRPC != task.CanonicalRPC {
+		t.Errorf("round-trip CanonicalRPC = %q, want %q", rebuilt.CanonicalRPC, task.CanonicalRPC)
+	}
+	if rebuilt.Bucket != task.Bucket {
+		t.Errorf("round-trip Bucket = %q, want %q", rebuilt.Bucket, task.Bucket)
 	}
 }
 
-func TestResultExportTask_WithSchedule(t *testing.T) {
-	cron := "*/10 * * * *"
-	task := ResultExportTask{
-		Bucket:   "b",
-		Region:   "r",
-		Schedule: &ScheduleConfig{Cron: &cron},
-	}
+func TestResultExportTask_WithoutCanonicalRPC_OmitsParam(t *testing.T) {
+	task := ResultExportTask{Bucket: "b", Region: "r"}
 	req := task.ToTaskRequest()
-	if req.Schedule == nil || req.Schedule.Cron == nil {
-		t.Fatal("expected schedule.cron to be set")
-	}
-	if *req.Schedule.Cron != cron {
-		t.Errorf("schedule.cron = %q, want %q", *req.Schedule.Cron, cron)
+	p := *req.Params
+	if _, ok := p["canonicalRpc"]; ok {
+		t.Errorf("expected canonicalRpc to be absent, got %v", p["canonicalRpc"])
 	}
 }
 
