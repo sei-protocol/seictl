@@ -125,15 +125,13 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg assembleC
 	}
 
 	gentxDir := filepath.Join(a.homeDir, "config", "gentx")
-	if err := os.RemoveAll(gentxDir); err != nil {
-		return fmt.Errorf("assemble-genesis: clearing gentx dir: %w", err)
-	}
 	if err := os.MkdirAll(gentxDir, 0o755); err != nil {
 		return fmt.Errorf("assemble-genesis: creating gentx dir: %w", err)
 	}
 
 	prefix := normalizePrefix(cfg.prefix)
 
+	downloaded := make(map[string]bool, len(cfg.nodes))
 	for _, nodeName := range cfg.nodes {
 		key := fmt.Sprintf("%s%s/gentx.json", prefix, nodeName)
 		assembleLog.Info("downloading gentx", "node", nodeName, "key", key)
@@ -152,9 +150,21 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg assembleC
 			return fmt.Errorf("assemble-genesis: reading %s: %w", key, err)
 		}
 
-		destPath := filepath.Join(gentxDir, fmt.Sprintf("gentx-%s.json", nodeName))
+		filename := fmt.Sprintf("gentx-%s.json", nodeName)
+		destPath := filepath.Join(gentxDir, filename)
 		if err := os.WriteFile(destPath, data, 0o644); err != nil {
 			return fmt.Errorf("assemble-genesis: writing %s: %w", destPath, err)
+		}
+		downloaded[filename] = true
+	}
+
+	entries, err := os.ReadDir(gentxDir)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: reading gentx dir: %w", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() && !downloaded[e.Name()] {
+			_ = os.Remove(filepath.Join(gentxDir, e.Name()))
 		}
 	}
 
