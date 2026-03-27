@@ -38,6 +38,11 @@ type ResultExportConfig struct {
 	Prefix      string
 	Region      string
 	RPCEndpoint string
+
+	// CanonicalRPC enables comparison mode. When set, the exporter compares
+	// local block execution against this canonical RPC endpoint and completes
+	// when app-hash divergence is detected.
+	CanonicalRPC string
 }
 
 type exportState struct {
@@ -63,6 +68,9 @@ func (e *ResultExporter) Handler() engine.TaskHandler {
 		cfg, err := parseExportConfig(params)
 		if err != nil {
 			return err
+		}
+		if cfg.CanonicalRPC != "" {
+			return e.ExportAndCompare(ctx, cfg)
 		}
 		return e.Export(ctx, cfg)
 	}
@@ -296,6 +304,7 @@ func parseExportConfig(params map[string]any) (ResultExportConfig, error) {
 	prefix, _ := params["prefix"].(string)
 	region, _ := params["region"].(string)
 	rpcEndpoint, _ := params["rpcEndpoint"].(string)
+	canonicalRPC, _ := params["canonicalRpc"].(string)
 
 	if bucket == "" {
 		return ResultExportConfig{}, fmt.Errorf("result-export: missing required param 'bucket'")
@@ -308,10 +317,11 @@ func parseExportConfig(params map[string]any) (ResultExportConfig, error) {
 	}
 
 	return ResultExportConfig{
-		Bucket:      bucket,
-		Prefix:      prefix,
-		Region:      region,
-		RPCEndpoint: rpcEndpoint,
+		Bucket:       bucket,
+		Prefix:       prefix,
+		Region:       region,
+		RPCEndpoint:  rpcEndpoint,
+		CanonicalRPC: canonicalRPC,
 	}, nil
 }
 
