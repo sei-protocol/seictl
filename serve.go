@@ -61,6 +61,7 @@ var serveCmd = cli.Command{
 			engine.TaskGenerateGentx:            tasks.NewGentxGenerator(homeDir, nil).Handler(),
 			engine.TaskUploadGenesisArtifacts:   tasks.NewGenesisArtifactUploader(homeDir, nil).Handler(),
 			engine.TaskAssembleAndUploadGenesis: tasks.NewGenesisAssembler(homeDir, nil, nil, nil).Handler(),
+			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, nil).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers)

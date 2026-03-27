@@ -52,6 +52,7 @@ const (
 	TaskTypeGenerateGentx          = "generate-gentx"
 	TaskTypeUploadGenesisArtifacts = "upload-genesis-artifacts"
 	TaskTypeAssembleGenesis        = "assemble-and-upload-genesis"
+	TaskTypeSetGenesisPeers        = "set-genesis-peers"
 )
 
 // Known condition and action values for AwaitConditionTask.

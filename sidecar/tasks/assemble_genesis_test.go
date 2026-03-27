@@ -47,6 +47,7 @@ func TestAssembler_DownloadsGentxFiles(t *testing.T) {
 		prefix:         "genesis/",
 		region:         "us-west-2",
 		accountBalance: "10000000usei",
+		namespace:      "default",
 		nodes:          []string{"val-0", "val-1"},
 	}
 
@@ -70,11 +71,12 @@ func TestAssembler_MissingParams(t *testing.T) {
 		name   string
 		params map[string]any
 	}{
-		{"missing bucket", map[string]any{"s3Region": "r", "accountBalance": "10usei", "nodes": []any{map[string]any{"name": "n"}}}},
-		{"missing region", map[string]any{"s3Bucket": "b", "accountBalance": "10usei", "nodes": []any{map[string]any{"name": "n"}}}},
-		{"missing accountBalance", map[string]any{"s3Bucket": "b", "s3Region": "r", "nodes": []any{map[string]any{"name": "n"}}}},
-		{"missing nodes", map[string]any{"s3Bucket": "b", "s3Region": "r", "accountBalance": "10usei"}},
-		{"empty nodes", map[string]any{"s3Bucket": "b", "s3Region": "r", "accountBalance": "10usei", "nodes": []any{}}},
+		{"missing bucket", map[string]any{"s3Region": "r", "accountBalance": "10usei", "namespace": "ns", "nodes": []any{map[string]any{"name": "n"}}}},
+		{"missing region", map[string]any{"s3Bucket": "b", "accountBalance": "10usei", "namespace": "ns", "nodes": []any{map[string]any{"name": "n"}}}},
+		{"missing accountBalance", map[string]any{"s3Bucket": "b", "s3Region": "r", "namespace": "ns", "nodes": []any{map[string]any{"name": "n"}}}},
+		{"missing namespace", map[string]any{"s3Bucket": "b", "s3Region": "r", "accountBalance": "10usei", "nodes": []any{map[string]any{"name": "n"}}}},
+		{"missing nodes", map[string]any{"s3Bucket": "b", "s3Region": "r", "accountBalance": "10usei", "namespace": "ns"}},
+		{"empty nodes", map[string]any{"s3Bucket": "b", "s3Region": "r", "accountBalance": "10usei", "namespace": "ns", "nodes": []any{}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -94,8 +96,8 @@ func TestAssembler_S3DownloadFailure(t *testing.T) {
 	handler := NewGenesisAssembler(homeDir, nil, s3Factory, nil).Handler()
 	err := handler(context.Background(), map[string]any{
 		"s3Bucket": "b", "s3Prefix": "p/", "s3Region": "r", "chainId": "c",
-		"accountBalance": "10000000usei",
-		"nodes":          []any{map[string]any{"name": "missing-node"}},
+		"accountBalance": "10000000usei", "namespace": "default",
+		"nodes": []any{map[string]any{"name": "missing-node"}},
 	})
 	if err == nil {
 		t.Fatal("expected error when S3 download fails")
