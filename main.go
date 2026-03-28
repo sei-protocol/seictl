@@ -48,6 +48,7 @@ var (
 			&patchCmd,
 			&awaitCmd,
 			&serveCmd,
+			&reportCmd,
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{

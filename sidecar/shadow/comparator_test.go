@@ -330,6 +330,92 @@ func TestBuildDivergenceReport_RPCFailure(t *testing.T) {
 	}
 }
 
+// --- RenderMarkdown tests ---
+
+func TestRenderMarkdown_DivergentReport(t *testing.T) {
+	layer := 0
+	report := &DivergenceReport{
+		Height:    198740042,
+		Timestamp: "2026-03-28T01:00:00Z",
+		Comparison: CompareResult{
+			Height: 198740042, Match: false, DivergenceLayer: &layer,
+			Layer0: Layer0Result{
+				AppHashMatch: false, LastResultsHashMatch: true, GasUsedMatch: true,
+				ShadowAppHash: "AABBCCDD11223344AABBCCDD11223344", CanonicalAppHash: "11223344AABBCCDD11223344AABBCCDD",
+			},
+			Layer1: &Layer1Result{
+				TotalTxs: 4, TxCountMatch: true,
+				Divergences: []TxDivergence{
+					{TxIndex: 3, Fields: []FieldDivergence{
+						{Field: "code", Shadow: float64(0), Canonical: float64(1)},
+						{Field: "gasUsed", Shadow: "142000", Canonical: "154000"},
+					}},
+				},
+			},
+		},
+	}
+
+	md := RenderMarkdown(report)
+
+	checks := []string{
+		"# Divergence Report — Height 198740042",
+		"2026-03-28T01:00:00Z",
+		"AppHash",
+		"AABBCCDD...3344",
+		"11223344...CCDD",
+		"❌",
+		"LastResultsHash",
+		"✅",
+		"## Layer 1",
+		"Transaction 3",
+		"code",
+		"gasUsed",
+		"142000",
+		"154000",
+	}
+
+	for _, want := range checks {
+		found := false
+		for i := 0; i <= len(md)-len(want); i++ {
+			if md[i:i+len(want)] == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("markdown missing %q", want)
+		}
+	}
+}
+
+func TestRenderMarkdown_MatchingReport(t *testing.T) {
+	report := &DivergenceReport{
+		Height:    100,
+		Timestamp: "2026-03-28T00:00:00Z",
+		Comparison: CompareResult{
+			Height: 100, Match: true,
+			Layer0: Layer0Result{AppHashMatch: true, LastResultsHashMatch: true, GasUsedMatch: true},
+		},
+	}
+
+	md := RenderMarkdown(report)
+	if !contains(md, "✅") {
+		t.Error("expected checkmarks for matching report")
+	}
+	if contains(md, "Layer 1") {
+		t.Error("should not include Layer 1 section when Layer0 matches")
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCompareBlock_RPCError(t *testing.T) {
 	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
