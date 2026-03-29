@@ -22,7 +22,12 @@ func newTestEngine(t *testing.T, handlers map[engine.TaskType]engine.TaskHandler
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	return engine.NewEngine(ctx, handlers)
+	store, err := engine.NewMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return engine.NewEngine(ctx, handlers, store)
 }
 
 func serveHTTP(srv *Server, method, path string, body string) *httptest.ResponseRecorder {
@@ -182,13 +187,15 @@ func TestPostTaskDedupReturnsExistingID(t *testing.T) {
 	blocked := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	store, _ := engine.NewMemoryStore()
+	t.Cleanup(func() { store.Close() })
 	eng := engine.NewEngine(ctx, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
 			close(started)
 			<-blocked
 			return nil
 		},
-	})
+	}, store)
 	srv := NewServer(":0", eng, t.TempDir())
 
 	body := `{"id":"ffffffff-1111-2222-3333-444444444444","type":"config-patch"}`
@@ -341,13 +348,15 @@ func TestGetTaskInProgress(t *testing.T) {
 	blocked := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	store, _ := engine.NewMemoryStore()
+	t.Cleanup(func() { store.Close() })
 	eng := engine.NewEngine(ctx, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
 			close(started)
 			<-blocked
 			return nil
 		},
-	})
+	}, store)
 	srv := NewServer(":0", eng, t.TempDir())
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)

@@ -45,8 +45,8 @@ type Engine struct {
 	// Currently running tasks.
 	active map[string]*taskEntry
 
-	// Completed task results (ring buffer, newest last).
-	results []*TaskResult
+	// Persistent store for completed task results.
+	store ResultStore
 
 	// Registered scheduled tasks and overlap guard.
 	scheduled    map[string]*TaskResult
@@ -54,10 +54,12 @@ type Engine struct {
 }
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
-func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler) *Engine {
+// The store is used to persist completed task results.
+func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store ResultStore) *Engine {
 	return &Engine{
 		handlers:     handlers,
 		ctx:          ctx,
+		store:        store,
 		active:       make(map[string]*taskEntry),
 		scheduled:    make(map[string]*TaskResult),
 		runningTasks: make(map[string]struct{}),
@@ -110,9 +112,9 @@ func (e *Engine) Submit(task Task) (string, error) {
 		err := e.execute(taskCtx, task.Type, handler, task.Params)
 
 		e.mu.Lock()
-		defer e.mu.Unlock()
 		entry, ok := e.active[id]
 		if !ok {
+			e.mu.Unlock()
 			log.Error("task completed but was removed while running", "type", task.Type, "id", id)
 			return
 		}
@@ -124,11 +126,13 @@ func (e *Engine) Submit(task Task) (string, error) {
 		} else {
 			entry.result.Status = TaskStatusCompleted
 		}
-		e.results = append(e.results, entry.result)
-		if len(e.results) > maxResults {
-			e.results = e.results[len(e.results)-maxResults:]
-		}
+		result := *entry.result
 		delete(e.active, id)
+		e.mu.Unlock()
+
+		if storeErr := e.store.Save(&result); storeErr != nil {
+			log.Error("failed to persist task result", "id", id, "err", storeErr)
+		}
 	}()
 
 	return id, nil
@@ -282,21 +286,23 @@ func (e *Engine) Status() StatusResponse {
 }
 
 // RecentResults returns the most recent task results, combining active
-// tasks, completed results, and scheduled tasks.
+// tasks, completed results from the store, and scheduled tasks.
 func (e *Engine) RecentResults() []TaskResult {
 	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	total := len(e.active) + len(e.results) + len(e.scheduled)
-	all := make([]TaskResult, 0, total)
+	all := make([]TaskResult, 0, len(e.active)+len(e.scheduled)+maxResults)
 	for _, a := range e.active {
 		all = append(all, *a.result)
 	}
-	for i := len(e.results) - 1; i >= 0; i-- {
-		all = append(all, *e.results[i])
-	}
 	for _, s := range e.scheduled {
 		all = append(all, *s)
+	}
+	e.mu.RUnlock()
+
+	completed, err := e.store.List(maxResults)
+	if err != nil {
+		log.Error("store.List failed", "err", err)
+	} else {
+		all = append(all, completed...)
 	}
 
 	if len(all) > maxResults {
@@ -308,12 +314,29 @@ func (e *Engine) RecentResults() []TaskResult {
 // GetResult returns a task by ID (active, completed, or scheduled), or nil.
 func (e *Engine) GetResult(id string) *TaskResult {
 	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.getResultLocked(id)
+	if a, ok := e.active[id]; ok {
+		cp := *a.result
+		e.mu.RUnlock()
+		return &cp
+	}
+	if s, ok := e.scheduled[id]; ok {
+		cp := *s
+		e.mu.RUnlock()
+		return &cp
+	}
+	e.mu.RUnlock()
+
+	r, err := e.store.Get(id)
+	if err != nil {
+		log.Error("store.Get failed", "id", id, "err", err)
+		return nil
+	}
+	return r
 }
 
 // getResultLocked returns a task by ID without acquiring the lock.
-// Caller must hold at least a read lock.
+// Caller must hold at least a read lock. Falls through to the store
+// for completed results (fast PK lookup, acceptable under lock).
 func (e *Engine) getResultLocked(id string) *TaskResult {
 	if a, ok := e.active[id]; ok {
 		cp := *a.result
@@ -323,13 +346,12 @@ func (e *Engine) getResultLocked(id string) *TaskResult {
 		cp := *s
 		return &cp
 	}
-	for _, r := range e.results {
-		if r.ID == id {
-			cp := *r
-			return &cp
-		}
+	r, err := e.store.Get(id)
+	if err != nil {
+		log.Error("store.Get failed", "id", id, "err", err)
+		return nil
 	}
-	return nil
+	return r
 }
 
 // RemoveResult removes a task by ID. For active tasks this cancels the
@@ -337,23 +359,24 @@ func (e *Engine) getResultLocked(id string) *TaskResult {
 // Returns true if found.
 func (e *Engine) RemoveResult(id string) bool {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if a, ok := e.active[id]; ok {
 		a.cancel()
 		delete(e.active, id)
+		e.mu.Unlock()
 		return true
 	}
 	if _, ok := e.scheduled[id]; ok {
 		delete(e.scheduled, id)
 		delete(e.runningTasks, id)
+		e.mu.Unlock()
 		return true
 	}
-	for i, r := range e.results {
-		if r.ID == id {
-			e.results = append(e.results[:i], e.results[i+1:]...)
-			return true
-		}
+	e.mu.Unlock()
+
+	deleted, err := e.store.Delete(id)
+	if err != nil {
+		log.Error("store.Delete failed", "id", id, "err", err)
+		return false
 	}
-	return false
+	return deleted
 }

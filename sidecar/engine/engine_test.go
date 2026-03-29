@@ -13,7 +13,12 @@ func newTestEngine(t *testing.T, handlers map[TaskType]TaskHandler) *Engine {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	return NewEngine(ctx, handlers)
+	store, err := NewMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return NewEngine(ctx, handlers, store)
 }
 
 func waitForHealthz(t *testing.T, eng *Engine) {
@@ -137,7 +142,7 @@ func TestSubmitDedupExistingActive(t *testing.T) {
 			<-blocked
 			return nil
 		},
-	})
+	}, newTestStore(t))
 
 	const dedupID = "bbbbbbbb-1111-2222-3333-444444444444"
 	id1, err := eng.Submit(Task{ID: dedupID, Type: TaskConfigPatch})
@@ -327,7 +332,7 @@ func TestGetResultReturnsRunning(t *testing.T) {
 			<-blocked
 			return nil
 		},
-	})
+	}, newTestStore(t))
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 
@@ -386,7 +391,7 @@ func TestRecentResultsIncludesActive(t *testing.T) {
 			<-blocked
 			return nil
 		},
-	})
+	}, newTestStore(t))
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 
@@ -439,7 +444,7 @@ func TestRemoveActiveTaskCancels(t *testing.T) {
 			<-ctx.Done()
 			return ctx.Err()
 		},
-	})
+	}, newTestStore(t))
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 
@@ -463,6 +468,8 @@ func TestContextCancellationStopsEngine(t *testing.T) {
 	var mu sync.Mutex
 	executed := 0
 	ctx, cancel := context.WithCancel(context.Background())
+	store, _ := NewMemoryStore()
+	t.Cleanup(func() { store.Close() })
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
 			mu.Lock()
@@ -470,7 +477,7 @@ func TestContextCancellationStopsEngine(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-	})
+	}, store)
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 	waitForResult(t, eng, id)
@@ -582,7 +589,7 @@ func TestEvalSchedulesFiresDueTasks(t *testing.T) {
 			executed <- struct{}{}
 			return nil
 		},
-	})
+	}, newTestStore(t))
 
 	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, ScheduleConfig{Cron: "* * * * *"})
 
@@ -613,7 +620,7 @@ func TestEvalSchedulesSkipsAlreadyRunning(t *testing.T) {
 			<-blocked
 			return nil
 		},
-	})
+	}, newTestStore(t))
 
 	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, ScheduleConfig{Cron: "* * * * *"})
 
@@ -687,7 +694,7 @@ func TestLongRunningTaskDoesNotBlockOthers(t *testing.T) {
 			return ctx.Err()
 		},
 		TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
-	})
+	}, newTestStore(t))
 
 	_, _ = eng.Submit(Task{Type: TaskConfigPatch})
 
