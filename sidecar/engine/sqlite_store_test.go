@@ -224,6 +224,56 @@ func TestStoreMigrateIdempotent(t *testing.T) {
 	}
 }
 
+func TestStoreListScheduled(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().Truncate(time.Nanosecond)
+
+	// Scheduled task due in the past.
+	past := now.Add(-time.Minute)
+	due := &TaskResult{
+		ID:          "sched-due-0000-0000-0000-000000000000",
+		Type:        "config-patch",
+		Status:      TaskStatusRunning,
+		Schedule:    &ScheduleConfig{Cron: "* * * * *"},
+		SubmittedAt: now,
+		NextRunAt:   &past,
+	}
+	// Scheduled task due in the future.
+	future := now.Add(time.Hour)
+	notDue := &TaskResult{
+		ID:          "sched-fut-0000-0000-0000-000000000000",
+		Type:        "config-patch",
+		Status:      TaskStatusRunning,
+		Schedule:    &ScheduleConfig{Cron: "*/5 * * * *"},
+		SubmittedAt: now,
+		NextRunAt:   &future,
+	}
+	// Non-scheduled (one-shot) task — should never appear.
+	oneShot := &TaskResult{
+		ID:          "oneshot-00000-0000-0000-000000000000",
+		Type:        "config-patch",
+		Status:      TaskStatusCompleted,
+		SubmittedAt: now,
+	}
+
+	for _, r := range []*TaskResult{due, notDue, oneShot} {
+		if err := s.Save(r); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+	}
+
+	results, err := s.ListScheduled(now)
+	if err != nil {
+		t.Fatalf("list scheduled: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 due scheduled task, got %d", len(results))
+	}
+	if results[0].ID != due.ID {
+		t.Fatalf("expected ID %q, got %q", due.ID, results[0].ID)
+	}
+}
+
 func TestStoreNullableFields(t *testing.T) {
 	s := newTestStore(t)
 

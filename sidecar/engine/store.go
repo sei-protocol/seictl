@@ -1,9 +1,12 @@
 package engine
 
-import "database/sql"
+import (
+	"database/sql"
+	"time"
+)
 
-// ResultStore persists completed task results. Implementations must be
-// safe for concurrent use by a single writer and multiple readers.
+// ResultStore persists task results across all lifecycle states.
+// Implementations must be safe for concurrent use.
 type ResultStore interface {
 	// Save persists a TaskResult. If a result with the same ID already
 	// exists, it is overwritten (upsert).
@@ -14,6 +17,10 @@ type ResultStore interface {
 
 	// List returns the most recent results, newest first, up to limit.
 	List(limit int) ([]TaskResult, error)
+
+	// ListScheduled returns scheduled tasks that are due for execution
+	// (next_run_at <= now and schedule IS NOT NULL).
+	ListScheduled(now time.Time) ([]TaskResult, error)
 
 	// Delete removes a result by ID. Returns true if it existed.
 	Delete(id string) (bool, error)

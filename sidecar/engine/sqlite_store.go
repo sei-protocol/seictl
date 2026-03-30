@@ -145,6 +145,29 @@ func (s *SQLiteStore) List(limit int) ([]TaskResult, error) {
 	return results, rows.Err()
 }
 
+func (s *SQLiteStore) ListScheduled(now time.Time) ([]TaskResult, error) {
+	rows, err := s.db.Query(`
+		SELECT id, type, status, params, schedule, error,
+		       submitted_at, completed_at, next_run_at
+		FROM task_results
+		WHERE schedule IS NOT NULL AND next_run_at <= ?
+		ORDER BY next_run_at ASC`, now.Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []TaskResult
+	for rows.Next() {
+		r, err := scanTaskResult(rows)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, *r)
+	}
+	return results, rows.Err()
+}
+
 func (s *SQLiteStore) Delete(id string) (bool, error) {
 	res, err := s.db.Exec("DELETE FROM task_results WHERE id = ?", id)
 	if err != nil {

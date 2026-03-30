@@ -21,6 +21,8 @@ func migrate(db *sql.DB) error {
 			);
 			CREATE INDEX IF NOT EXISTS idx_task_results_submitted_at
 				ON task_results (submitted_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_task_results_schedule
+				ON task_results (next_run_at) WHERE schedule IS NOT NULL;
 			PRAGMA user_version = 1;
 		`); err != nil {
 			return err
