@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seictl/sidecar/server"
@@ -72,8 +71,6 @@ var serveCmd = cli.Command{
 
 		eng := engine.NewEngine(ctx, handlers, store)
 
-		go runSchedulerTicker(ctx, eng)
-
 		srv := server.NewServer(":"+port, eng, homeDir)
 		srvErr := srv.ListenAndServe(ctx)
 
@@ -86,17 +83,4 @@ var serveCmd = cli.Command{
 		}
 		return nil
 	},
-}
-
-func runSchedulerTicker(ctx context.Context, eng *engine.Engine) {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			eng.EvalSchedules()
-		}
-	}
 }

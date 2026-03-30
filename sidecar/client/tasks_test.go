@@ -152,30 +152,6 @@ func TestSnapshotUploadRoundTrip(t *testing.T) {
 	properties.TestingRun(t)
 }
 
-func TestSnapshotUploadTask_NoSchedule(t *testing.T) {
-	task := SnapshotUploadTask{Bucket: "b", Region: "r"}
-	req := task.ToTaskRequest()
-	if req.Schedule != nil {
-		t.Errorf("expected nil Schedule, got %v", req.Schedule)
-	}
-}
-
-func TestSnapshotUploadTask_WithSchedule(t *testing.T) {
-	cron := "0 0 * * *"
-	task := SnapshotUploadTask{
-		Bucket:   "b",
-		Region:   "r",
-		Schedule: &ScheduleConfig{Cron: &cron},
-	}
-	req := task.ToTaskRequest()
-	if req.Schedule == nil || req.Schedule.Cron == nil {
-		t.Fatal("expected schedule.cron to be set")
-	}
-	if *req.Schedule.Cron != cron {
-		t.Errorf("schedule.cron = %q, want %q", *req.Schedule.Cron, cron)
-	}
-}
-
 func TestConfigureGenesisRoundTrip_S3(t *testing.T) {
 	properties := gopter.NewProperties(gopter.DefaultTestParameters())
 	properties.Property("ConfigureGenesisTask (S3) round-trips through TaskRequest", prop.ForAll(
@@ -532,44 +508,6 @@ func TestTaskRequestJSONRoundTrip(t *testing.T) {
 		),
 	))
 	properties.TestingRun(t)
-}
-
-func TestScheduleConfigJSONRoundTrip(t *testing.T) {
-	cron := "*/5 * * * *"
-	height := int64(12345)
-	cases := []struct {
-		name  string
-		sched ScheduleConfig
-	}{
-		{"cron only", ScheduleConfig{Cron: &cron}},
-		{"block height only", ScheduleConfig{BlockHeight: &height}},
-		{"both", ScheduleConfig{Cron: &cron, BlockHeight: &height}},
-		{"empty", ScheduleConfig{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			data, err := json.Marshal(tc.sched)
-			if err != nil {
-				t.Fatalf("Marshal: %v", err)
-			}
-			var decoded ScheduleConfig
-			if err := json.Unmarshal(data, &decoded); err != nil {
-				t.Fatalf("Unmarshal: %v", err)
-			}
-			if (tc.sched.Cron == nil) != (decoded.Cron == nil) {
-				t.Errorf("Cron nil mismatch")
-			}
-			if tc.sched.Cron != nil && *tc.sched.Cron != *decoded.Cron {
-				t.Errorf("Cron = %q, want %q", *decoded.Cron, *tc.sched.Cron)
-			}
-			if (tc.sched.BlockHeight == nil) != (decoded.BlockHeight == nil) {
-				t.Errorf("BlockHeight nil mismatch")
-			}
-			if tc.sched.BlockHeight != nil && *tc.sched.BlockHeight != *decoded.BlockHeight {
-				t.Errorf("BlockHeight = %d, want %d", *decoded.BlockHeight, *tc.sched.BlockHeight)
-			}
-		})
-	}
 }
 
 func TestResultExportRoundTrip(t *testing.T) {

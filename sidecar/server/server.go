@@ -29,15 +29,13 @@ type Server struct {
 	mux     *http.ServeMux
 }
 
-// TaskRequest is the JSON body for POST /v0/tasks. When Schedule is set
-// the task recurs on the given cron; otherwise it runs once immediately.
-// When ID is provided, the engine uses it as the task's canonical
-// identifier; otherwise a random UUID is generated.
+// TaskRequest is the JSON body for POST /v0/tasks. When ID is provided,
+// the engine uses it as the task's canonical identifier; otherwise a
+// random UUID is generated.
 type TaskRequest struct {
-	ID       string                 `json:"id,omitempty"`
-	Type     string                 `json:"type"`
-	Params   map[string]any         `json:"params,omitempty"`
-	Schedule *engine.ScheduleConfig `json:"schedule,omitempty"`
+	ID     string         `json:"id,omitempty"`
+	Type   string         `json:"type"`
+	Params map[string]any `json:"params,omitempty"`
 }
 
 // ErrorResponse is a standard JSON error envelope.
@@ -98,22 +96,6 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task := engine.Task{ID: req.ID, Type: engine.TaskType(req.Type), Params: req.Params}
-
-	if req.Schedule != nil {
-		if req.Schedule.Cron != "" {
-			if err := engine.ValidateCron(req.Schedule.Cron); err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-		}
-		id, err := s.engine.SubmitScheduled(task, *req.Schedule)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
-		return
-	}
 
 	id, err := s.engine.Submit(task)
 	if err != nil {

@@ -68,27 +68,17 @@ func (s *SQLiteStore) Save(r *TaskResult) error {
 		return fmt.Errorf("marshal params: %w", err)
 	}
 
-	var sched []byte
-	if r.Schedule != nil {
-		sched, err = json.Marshal(r.Schedule)
-		if err != nil {
-			return fmt.Errorf("marshal schedule: %w", err)
-		}
-	}
-
 	_, err = s.db.Exec(`
 		INSERT OR REPLACE INTO task_results
-			(id, type, status, params, schedule, error, submitted_at, completed_at, next_run_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(id, type, status, params, error, submitted_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		r.ID,
 		r.Type,
 		string(r.Status),
 		string(params),
-		nullableBytes(sched),
 		r.Error,
 		r.SubmittedAt.UTC().Format(time.RFC3339Nano),
 		formatNullableTime(r.CompletedAt),
-		formatNullableTime(r.NextRunAt),
 	)
 	return err
 }
@@ -109,18 +99,8 @@ func (s *SQLiteStore) List(limit int) ([]TaskResult, error) {
 	return s.queryMany(selectColumns+` ORDER BY submitted_at DESC LIMIT ?`, limit)
 }
 
-func (s *SQLiteStore) ListScheduled(now time.Time) ([]TaskResult, error) {
-	return s.queryMany(
-		selectColumns+` WHERE schedule IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at ASC`,
-		now.UTC().Format(time.RFC3339Nano),
-	)
-}
-
 func (s *SQLiteStore) ListStaleTasks() ([]TaskResult, error) {
-	return s.queryMany(
-		selectColumns+` WHERE status = ? AND schedule IS NULL`,
-		string(TaskStatusRunning),
-	)
+	return s.queryMany(selectColumns+` WHERE status = ?`, string(TaskStatusRunning))
 }
 
 func (s *SQLiteStore) Delete(id string) (bool, error) {
@@ -139,8 +119,7 @@ func (s *SQLiteStore) Close() error {
 // --- query helpers ---
 
 const selectColumns = `
-	SELECT id, type, status, params, schedule, error,
-	       submitted_at, completed_at, next_run_at
+	SELECT id, type, status, params, error, submitted_at, completed_at
 	FROM task_results`
 
 // queryMany executes a query and scans all rows into TaskResults.
@@ -169,17 +148,16 @@ type rowScanner interface {
 
 func scanTaskResult(s rowScanner) (*TaskResult, error) {
 	var (
-		r                      TaskResult
-		status                 string
-		paramsJSON             string
-		schedJSON              sql.NullString
-		submittedAt            string
-		completedAt, nextRunAt sql.NullString
+		r           TaskResult
+		status      string
+		paramsJSON  string
+		submittedAt string
+		completedAt sql.NullString
 	)
 
 	if err := s.Scan(
-		&r.ID, &r.Type, &status, &paramsJSON, &schedJSON,
-		&r.Error, &submittedAt, &completedAt, &nextRunAt,
+		&r.ID, &r.Type, &status, &paramsJSON,
+		&r.Error, &submittedAt, &completedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -190,14 +168,6 @@ func scanTaskResult(s rowScanner) (*TaskResult, error) {
 		if err := json.Unmarshal([]byte(paramsJSON), &r.Params); err != nil {
 			return nil, fmt.Errorf("unmarshal params: %w", err)
 		}
-	}
-
-	if schedJSON.Valid {
-		var sc ScheduleConfig
-		if err := json.Unmarshal([]byte(schedJSON.String), &sc); err != nil {
-			return nil, fmt.Errorf("unmarshal schedule: %w", err)
-		}
-		r.Schedule = &sc
 	}
 
 	t, err := time.Parse(time.RFC3339Nano, submittedAt)
@@ -214,14 +184,6 @@ func scanTaskResult(s rowScanner) (*TaskResult, error) {
 		r.CompletedAt = &t
 	}
 
-	if nextRunAt.Valid {
-		t, err := time.Parse(time.RFC3339Nano, nextRunAt.String)
-		if err != nil {
-			return nil, fmt.Errorf("parse next_run_at: %w", err)
-		}
-		r.NextRunAt = &t
-	}
-
 	return &r, nil
 }
 
@@ -230,11 +192,4 @@ func formatNullableTime(t *time.Time) any {
 		return nil
 	}
 	return t.UTC().Format(time.RFC3339Nano)
-}
-
-func nullableBytes(b []byte) any {
-	if b == nil {
-		return nil
-	}
-	return string(b)
 }

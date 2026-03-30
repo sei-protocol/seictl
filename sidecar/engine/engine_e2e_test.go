@@ -154,31 +154,7 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 		}
 	})
 
-	// --- Phase 3: Scheduled task ---
-
-	t.Run("scheduled_task", func(t *testing.T) {
-		const schedID = "33333333-3333-3333-3333-333333333333"
-		id, err := eng.SubmitScheduled(
-			Task{ID: schedID, Type: TaskConfigPatch},
-			ScheduleConfig{Cron: "*/5 * * * *"},
-		)
-		if err != nil {
-			t.Fatalf("submit scheduled: %v", err)
-		}
-
-		result := eng.GetResult(id)
-		if result == nil {
-			t.Fatal("expected result for scheduled task")
-		}
-		if result.Schedule == nil || result.Schedule.Cron != "*/5 * * * *" {
-			t.Fatalf("expected schedule with cron, got %+v", result.Schedule)
-		}
-		if result.NextRunAt == nil {
-			t.Fatal("expected NextRunAt")
-		}
-	})
-
-	// --- Phase 4: Remove a task ---
+	// --- Phase 3: Remove a task ---
 
 	t.Run("remove_task", func(t *testing.T) {
 		const failID = "22222222-2222-2222-2222-222222222222"
@@ -223,16 +199,6 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 			t.Fatal("removed task should not reappear after restart")
 		}
 
-		// The scheduled task should still be there with its schedule.
-		const schedID = "33333333-3333-3333-3333-333333333333"
-		sched := eng2.GetResult(schedID)
-		if sched == nil {
-			t.Fatal("scheduled task should survive restart")
-		}
-		if sched.Schedule == nil || sched.Schedule.Cron != "*/5 * * * *" {
-			t.Fatalf("schedule not preserved: %+v", sched.Schedule)
-		}
-
 		// RecentResults should return persisted results.
 		results := eng2.RecentResults()
 		if len(results) < 2 {
@@ -265,22 +231,14 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 func TestE2E_StaleTaskRehydration(t *testing.T) {
 	store, dbPath := newFileStore(t)
 
-	// Simulate a previous crash: insert tasks left as "running".
-	staleOneShot := &TaskResult{
+	// Simulate a previous crash: insert a task left as "running".
+	stale := &TaskResult{
 		ID:          "66666666-6666-6666-6666-666666666666",
 		Type:        "config-patch",
 		Status:      TaskStatusRunning,
 		SubmittedAt: time.Now().UTC(),
 	}
-	staleScheduled := &TaskResult{
-		ID:          "77777777-7777-7777-7777-777777777777",
-		Type:        "config-patch",
-		Status:      TaskStatusRunning,
-		Schedule:    &ScheduleConfig{Cron: "* * * * *"},
-		SubmittedAt: time.Now().UTC(),
-	}
-	store.Save(staleOneShot)
-	store.Save(staleScheduled)
+	store.Save(stale)
 
 	// Reopen store and create a new engine (simulates restart).
 	store2 := reopenStore(t, store, dbPath)
@@ -291,82 +249,10 @@ func TestE2E_StaleTaskRehydration(t *testing.T) {
 	}
 	eng := NewEngine(ctx, handlers, store2)
 
-	// One-shot task should be re-executed and complete successfully.
-	result := waitForResult(t, eng, staleOneShot.ID)
+	// Stale task should be re-executed and complete successfully.
+	result := waitForResult(t, eng, stale.ID)
 	if result.Status != TaskStatusCompleted {
 		t.Fatalf("expected rehydrated task to complete, got %q", result.Status)
-	}
-
-	// Scheduled task should remain running (not rehydrated, left for scheduler).
-	s, _ := store2.Get(staleScheduled.ID)
-	if s == nil {
-		t.Fatal("expected stale scheduled task to exist")
-	}
-	if s.Status != TaskStatusRunning {
-		t.Fatalf("expected stale scheduled to remain running, got %q", s.Status)
-	}
-}
-
-func TestE2E_ScheduledTaskExecution(t *testing.T) {
-	store, _ := newFileStore(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var execCount atomic.Int32
-	handlers := map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
-			execCount.Add(1)
-			return nil
-		},
-	}
-
-	eng := NewEngine(ctx, handlers, store)
-
-	// Register a scheduled task.
-	id, err := eng.SubmitScheduled(
-		Task{Type: TaskConfigPatch},
-		ScheduleConfig{Cron: "* * * * *"},
-	)
-	if err != nil {
-		t.Fatalf("submit scheduled: %v", err)
-	}
-
-	// Move NextRunAt into the past to make it due.
-	r, _ := store.Get(id)
-	past := time.Now().Add(-time.Minute)
-	r.NextRunAt = &past
-	store.Save(r)
-
-	// Fire the scheduler.
-	eng.EvalSchedules()
-
-	// Wait for execution.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if execCount.Load() >= 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if execCount.Load() < 1 {
-		t.Fatal("scheduled task should have executed")
-	}
-
-	// Wait for the store to be updated with completion status.
-	time.Sleep(50 * time.Millisecond)
-	result, _ := store.Get(id)
-	if result == nil {
-		t.Fatal("expected result in store")
-	}
-	if result.Status != TaskStatusCompleted {
-		t.Fatalf("expected completed, got %q", result.Status)
-	}
-	if result.CompletedAt == nil {
-		t.Fatal("expected CompletedAt after execution")
-	}
-	// NextRunAt should have been advanced to the future.
-	if result.NextRunAt == nil || !result.NextRunAt.After(time.Now().Add(-time.Second)) {
-		t.Fatalf("expected NextRunAt advanced to future, got %v", result.NextRunAt)
 	}
 }
 

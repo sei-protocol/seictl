@@ -113,13 +113,11 @@ func SnapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestor
 }
 
 // SnapshotUploadTask archives and streams a local snapshot to S3.
-// Schedule may be set to run this task on a recurring cron.
 type SnapshotUploadTask struct {
 	TaskMeta
-	Bucket   string
-	Prefix   string
-	Region   string
-	Schedule *ScheduleConfig
+	Bucket string
+	Prefix string
+	Region string
 }
 
 func (t SnapshotUploadTask) TaskType() string { return TaskTypeSnapshotUpload }
@@ -143,9 +141,6 @@ func (t SnapshotUploadTask) ToTaskRequest() TaskRequest {
 		p["prefix"] = t.Prefix
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
-	if t.Schedule != nil {
-		req.Schedule = t.Schedule
-	}
 	t.applyMeta(&req)
 	return req
 }

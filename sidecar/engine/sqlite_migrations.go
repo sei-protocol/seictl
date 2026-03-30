@@ -35,7 +35,6 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 
-		// Set version inside the same transaction for atomicity.
 		if _, err := tx.Exec("PRAGMA user_version = 1"); err != nil {
 			return err
 		}
@@ -45,7 +44,29 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
-	// Future migrations: if version < 2 { tx := db.Begin(); ... tx.Commit() }
+	if version < 2 {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`
+			DROP INDEX IF EXISTS idx_task_results_schedule;
+			ALTER TABLE task_results DROP COLUMN schedule;
+			ALTER TABLE task_results DROP COLUMN next_run_at;
+		`); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 2"); err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
