@@ -1,5 +1,7 @@
 package engine
 
+import "database/sql"
+
 // ResultStore persists completed task results. Implementations must be
 // safe for concurrent use by a single writer and multiple readers.
 type ResultStore interface {
@@ -19,3 +21,15 @@ type ResultStore interface {
 	// Close releases underlying resources.
 	Close() error
 }
+
+// RowScanner abstracts *sql.Row and *sql.Rows so a single scan function
+// can handle both single-row and multi-row query results.
+type RowScanner interface {
+	Scan(dest ...any) error
+}
+
+// Compile-time interface checks.
+var (
+	_ RowScanner = (*sql.Row)(nil)
+	_ RowScanner = (*sql.Rows)(nil)
+)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -15,15 +16,35 @@ type SQLiteStore struct {
 	db *sql.DB
 }
 
+var (
+	storeMu      sync.Mutex
+	storeCreated bool
+)
+
 // NewSQLiteStore opens (or creates) a SQLite database at dbPath and runs
 // any pending schema migrations. The file is opened in WAL mode with
 // pragmas tuned for a single-writer sidecar workload.
+//
+// Only one file-backed store may be created per process. Subsequent calls
+// return an error.
 func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
-	return openStore(dbPath)
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	if storeCreated {
+		return nil, errors.New("result store already initialized")
+	}
+	s, err := openStore(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	storeCreated = true
+	return s, nil
 }
 
-// NewMemoryStore returns a SQLiteStore backed by an in-memory database.
-// Useful for tests and non-sidecar CLI commands.
+// NewMemoryStore returns a SQLiteStore backed by an in-memory SQLite
+// database (the ":memory:" DSN). The database exists only for the
+// lifetime of the returned store — nothing is written to disk. Useful
+// for tests and non-sidecar CLI commands.
 func NewMemoryStore() (*SQLiteStore, error) {
 	return openStore(":memory:")
 }
@@ -52,34 +73,6 @@ func openStore(dsn string) (*SQLiteStore, error) {
 	}
 
 	return &SQLiteStore{db: db}, nil
-}
-
-func migrate(db *sql.DB) error {
-	var version int
-	_ = db.QueryRow("PRAGMA user_version").Scan(&version)
-
-	if version < 1 {
-		if _, err := db.Exec(`
-			CREATE TABLE IF NOT EXISTS task_results (
-				id           TEXT PRIMARY KEY,
-				type         TEXT    NOT NULL,
-				status       TEXT    NOT NULL,
-				params       TEXT,
-				schedule     TEXT,
-				error        TEXT    NOT NULL DEFAULT '',
-				submitted_at TEXT    NOT NULL,
-				completed_at TEXT,
-				next_run_at  TEXT
-			);
-			CREATE INDEX IF NOT EXISTS idx_task_results_submitted_at
-				ON task_results (submitted_at DESC);
-			PRAGMA user_version = 1;
-		`); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (s *SQLiteStore) Save(r *TaskResult) error {
@@ -119,7 +112,7 @@ func (s *SQLiteStore) Get(id string) (*TaskResult, error) {
 		       submitted_at, completed_at, next_run_at
 		FROM task_results WHERE id = ?`, id)
 
-	r, err := scanResult(row)
+	r, err := scanTaskResult(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -143,7 +136,7 @@ func (s *SQLiteStore) List(limit int) ([]TaskResult, error) {
 
 	var results []TaskResult
 	for rows.Next() {
-		r, err := scanRows(rows)
+		r, err := scanTaskResult(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -165,20 +158,7 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
-// scanner abstracts *sql.Row and *sql.Rows for shared scan logic.
-type scanner interface {
-	Scan(dest ...any) error
-}
-
-func scanResult(row *sql.Row) (*TaskResult, error) {
-	return scanInto(row)
-}
-
-func scanRows(rows *sql.Rows) (*TaskResult, error) {
-	return scanInto(rows)
-}
-
-func scanInto(s scanner) (*TaskResult, error) {
+func scanTaskResult(s RowScanner) (*TaskResult, error) {
 	var (
 		r                      TaskResult
 		status                 string
