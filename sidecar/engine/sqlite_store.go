@@ -94,11 +94,7 @@ func (s *SQLiteStore) Save(r *TaskResult) error {
 }
 
 func (s *SQLiteStore) Get(id string) (*TaskResult, error) {
-	row := s.db.QueryRow(`
-		SELECT id, type, status, params, schedule, error,
-		       submitted_at, completed_at, next_run_at
-		FROM task_results WHERE id = ?`, id)
-
+	row := s.db.QueryRow(selectColumns+` WHERE id = ?`, id)
 	r, err := scanTaskResult(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -110,72 +106,21 @@ func (s *SQLiteStore) Get(id string) (*TaskResult, error) {
 }
 
 func (s *SQLiteStore) List(limit int) ([]TaskResult, error) {
-	rows, err := s.db.Query(`
-		SELECT id, type, status, params, schedule, error,
-		       submitted_at, completed_at, next_run_at
-		FROM task_results
-		ORDER BY submitted_at DESC
-		LIMIT ?`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []TaskResult
-	for rows.Next() {
-		r, err := scanTaskResult(rows)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, *r)
-	}
-	return results, rows.Err()
+	return s.queryMany(selectColumns+` ORDER BY submitted_at DESC LIMIT ?`, limit)
 }
 
 func (s *SQLiteStore) ListScheduled(now time.Time) ([]TaskResult, error) {
-	rows, err := s.db.Query(`
-		SELECT id, type, status, params, schedule, error,
-		       submitted_at, completed_at, next_run_at
-		FROM task_results
-		WHERE schedule IS NOT NULL AND next_run_at <= ?
-		ORDER BY next_run_at ASC`, now.UTC().Format(time.RFC3339Nano))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []TaskResult
-	for rows.Next() {
-		r, err := scanTaskResult(rows)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, *r)
-	}
-	return results, rows.Err()
+	return s.queryMany(
+		selectColumns+` WHERE schedule IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at ASC`,
+		now.UTC().Format(time.RFC3339Nano),
+	)
 }
 
 func (s *SQLiteStore) ListStaleTasks() ([]TaskResult, error) {
-	rows, err := s.db.Query(`
-		SELECT id, type, status, params, schedule, error,
-		       submitted_at, completed_at, next_run_at
-		FROM task_results
-		WHERE status = ? AND schedule IS NULL`,
-		string(TaskStatusRunning))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []TaskResult
-	for rows.Next() {
-		r, err := scanTaskResult(rows)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, *r)
-	}
-	return results, rows.Err()
+	return s.queryMany(
+		selectColumns+` WHERE status = ? AND schedule IS NULL`,
+		string(TaskStatusRunning),
+	)
 }
 
 func (s *SQLiteStore) Delete(id string) (bool, error) {
@@ -191,7 +136,38 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
-func scanTaskResult(s RowScanner) (*TaskResult, error) {
+// --- query helpers ---
+
+const selectColumns = `
+	SELECT id, type, status, params, schedule, error,
+	       submitted_at, completed_at, next_run_at
+	FROM task_results`
+
+// queryMany executes a query and scans all rows into TaskResults.
+func (s *SQLiteStore) queryMany(query string, args ...any) ([]TaskResult, error) {
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []TaskResult
+	for rows.Next() {
+		r, err := scanTaskResult(rows)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, *r)
+	}
+	return results, rows.Err()
+}
+
+// rowScanner abstracts *sql.Row and *sql.Rows for shared scan logic.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanTaskResult(s rowScanner) (*TaskResult, error) {
 	var (
 		r                      TaskResult
 		status                 string
