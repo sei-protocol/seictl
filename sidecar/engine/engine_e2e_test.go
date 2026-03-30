@@ -307,56 +307,6 @@ func TestE2E_StaleTaskRehydration(t *testing.T) {
 	}
 }
 
-func TestE2E_ShutdownDrainsGoroutines(t *testing.T) {
-	store, _ := newFileStore(t)
-	ctx, cancel := context.WithCancel(context.Background())
-
-	started := make(chan struct{})
-	handlers := map[TaskType]TaskHandler{
-		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
-			close(started)
-			// Block until context is cancelled (simulates long-running task).
-			<-ctx.Done()
-			return nil
-		},
-	}
-
-	eng := NewEngine(ctx, handlers, store)
-
-	const drainID = "55555555-5555-5555-5555-555555555555"
-	id, err := eng.Submit(Task{
-		ID:   drainID,
-		Type: TaskConfigPatch,
-	})
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-
-	// Wait for the handler to start.
-	select {
-	case <-started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for task to start")
-	}
-
-	// Cancel the context (simulates SIGTERM).
-	cancel()
-
-	// Shutdown with a grace period for goroutines to drain.
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-	eng.Shutdown(shutdownCtx)
-
-	// The task should be in the store with completed status (handler returned nil).
-	result, _ := store.Get(id)
-	if result == nil {
-		t.Fatal("expected result in store after drain")
-	}
-	if result.Status != TaskStatusCompleted {
-		t.Fatalf("expected completed after drain, got %q", result.Status)
-	}
-}
-
 func TestE2E_ScheduledTaskExecution(t *testing.T) {
 	store, _ := newFileStore(t)
 	ctx, cancel := context.WithCancel(context.Background())

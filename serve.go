@@ -77,12 +77,6 @@ var serveCmd = cli.Command{
 		srv := server.NewServer(":"+port, eng, homeDir)
 		srvErr := srv.ListenAndServe(ctx)
 
-		// Give in-flight task goroutines a grace period to complete
-		// their final store writes after context cancellation.
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-		eng.Shutdown(shutdownCtx)
-
 		if closeErr := store.Close(); closeErr != nil {
 			fmt.Fprintf(os.Stderr, "warn: result store close: %v\n", closeErr)
 		}

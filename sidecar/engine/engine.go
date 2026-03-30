@@ -29,10 +29,9 @@ func validateTaskID(id string) error {
 // Engine is the task executor. Every submitted task runs in its own
 // goroutine. Scheduled tasks are re-fired by EvalSchedules on their cron.
 //
-// The store is the single source of truth for all task state. Only
-// cancel funcs and the scheduled-task overlap guard are held in memory
-// because they represent process-level goroutine state that cannot be
-// serialized.
+// The store is the single source of truth for all task state. The engine
+// context propagates to all handlers — on SIGTERM the context is
+// cancelled and handlers observe ctx.Done() to stop gracefully.
 type Engine struct {
 	handlers map[TaskType]TaskHandler
 	ctx      context.Context
@@ -42,17 +41,9 @@ type Engine struct {
 	// Persistent store — source of truth for all task results.
 	store ResultStore
 
-	// Cancel funcs for currently executing tasks. Keyed by task ID.
-	// These cannot be serialized into the store.
-	cancels map[string]context.CancelFunc
-
 	// Overlap guard: prevents a scheduled task from being fired again
 	// while a previous execution is still running.
 	runningTasks map[string]struct{}
-
-	// wg tracks in-flight task goroutines so they can be drained
-	// before the store is closed on shutdown.
-	wg sync.WaitGroup
 }
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
@@ -63,7 +54,6 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store Res
 		handlers:     handlers,
 		ctx:          ctx,
 		store:        store,
-		cancels:      make(map[string]context.CancelFunc),
 		runningTasks: make(map[string]struct{}),
 	}
 	eng.rehydrateStaleTasks()
@@ -94,23 +84,6 @@ func (e *Engine) rehydrateStaleTasks() {
 	}
 }
 
-// Shutdown waits for in-flight task goroutines to finish within the
-// given context's deadline. All handlers should observe their context
-// cancellation and return promptly. Call this after the engine's context
-// has been cancelled and before closing the store.
-func (e *Engine) Shutdown(ctx context.Context) {
-	done := make(chan struct{})
-	go func() {
-		e.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		log.Warn("shutdown deadline exceeded, proceeding with store close")
-	}
-}
-
 // Submit starts a task in its own goroutine and returns its ID. When
 // task.ID is set, it becomes the canonical identifier (enabling
 // deterministic IDs from the controller). When empty, a random UUID is
@@ -131,14 +104,8 @@ func (e *Engine) Submit(task Task) (string, error) {
 		id = uuid.New().String()
 	}
 
-	e.mu.Lock()
-	// Dedup: check in-memory cancels (active) then store (completed).
-	if _, running := e.cancels[id]; running {
-		e.mu.Unlock()
-		return id, nil
-	}
+	// Dedup check against the store.
 	if existing, _ := e.store.Get(id); existing != nil {
-		e.mu.Unlock()
 		return id, nil
 	}
 
@@ -153,10 +120,8 @@ func (e *Engine) Submit(task Task) (string, error) {
 	}
 
 	if err := e.store.Save(tr); err != nil {
-		e.mu.Unlock()
 		return "", fmt.Errorf("persist task: %w", err)
 	}
-	e.mu.Unlock()
 
 	log.Info("task submitted", "type", task.Type, "id", id)
 	e.runTask(id, task.Type, handler, task.Params, now)
@@ -165,29 +130,11 @@ func (e *Engine) Submit(task Task) (string, error) {
 }
 
 // runTask spawns a goroutine to run the handler and persist the result.
-// It creates a cancellable context derived from the engine context and
-// stores the cancel func in e.cancels so RemoveResult can stop it.
+// The engine context is passed directly to the handler — SIGTERM
+// cancels it and well-behaved handlers return promptly.
 func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time) {
-	taskCtx, cancel := context.WithCancel(e.ctx)
-
-	e.mu.Lock()
-	e.cancels[id] = cancel
-	e.mu.Unlock()
-
-	e.wg.Add(1)
 	go func() {
-		defer e.wg.Done()
-		err := e.execute(taskCtx, taskType, handler, params)
-
-		e.mu.Lock()
-		_, stillActive := e.cancels[id]
-		if !stillActive {
-			// Task was removed via RemoveResult while running; skip save.
-			e.mu.Unlock()
-			return
-		}
-		delete(e.cancels, id)
-		e.mu.Unlock()
+		err := e.execute(e.ctx, taskType, handler, params)
 
 		t := time.Now().UTC()
 		tr := &TaskResult{
@@ -286,7 +233,6 @@ func (e *Engine) EvalSchedules() {
 			continue
 		}
 		e.runningTasks[tr.ID] = struct{}{}
-		e.wg.Add(1)
 		e.mu.Unlock()
 
 		// Advance next run time.
@@ -299,7 +245,6 @@ func (e *Engine) EvalSchedules() {
 
 		log.Info("executing scheduled task", "type", tr.Type, "id", tr.ID)
 		go func(tr TaskResult, h TaskHandler) {
-			defer e.wg.Done()
 			execErr := e.execute(e.ctx, TaskType(tr.Type), h, tr.Params)
 
 			e.mu.Lock()
@@ -377,14 +322,9 @@ func (e *Engine) GetResult(id string) *TaskResult {
 	return r
 }
 
-// RemoveResult removes a task by ID. For active tasks this cancels the
-// goroutine's context. Returns true if found.
+// RemoveResult removes a task by ID. Returns true if found.
 func (e *Engine) RemoveResult(id string) bool {
 	e.mu.Lock()
-	if cancel, ok := e.cancels[id]; ok {
-		cancel()
-		delete(e.cancels, id)
-	}
 	delete(e.runningTasks, id)
 	e.mu.Unlock()
 
