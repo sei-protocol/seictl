@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -16,29 +15,17 @@ type SQLiteStore struct {
 	db *sql.DB
 }
 
-var (
-	storeMu      sync.Mutex
-	storeCreated bool
-)
-
 // NewSQLiteStore opens (or creates) a SQLite database at dbPath and runs
 // any pending schema migrations. The file is opened in WAL mode with
 // pragmas tuned for a single-writer sidecar workload.
 //
-// Only one file-backed store may be created per process. Subsequent calls
-// return an error.
+// The database file must reside on a local or block-device-backed
+// filesystem (e.g. EBS, GCE PD, local SSD). WAL mode is unsafe on
+// NFS-backed volumes (EFS, Azure Files, CephFS over NFS) because they
+// do not support the POSIX byte-range locks that SQLite requires for
+// the shared-memory (-shm) file.
 func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
-	storeMu.Lock()
-	defer storeMu.Unlock()
-	if storeCreated {
-		return nil, errors.New("result store already initialized")
-	}
-	s, err := openStore(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	storeCreated = true
-	return s, nil
+	return openStore(dbPath)
 }
 
 // NewMemoryStore returns a SQLiteStore backed by an in-memory SQLite
@@ -99,7 +86,7 @@ func (s *SQLiteStore) Save(r *TaskResult) error {
 		string(params),
 		nullableBytes(sched),
 		r.Error,
-		r.SubmittedAt.Format(time.RFC3339Nano),
+		r.SubmittedAt.UTC().Format(time.RFC3339Nano),
 		formatNullableTime(r.CompletedAt),
 		formatNullableTime(r.NextRunAt),
 	)
@@ -151,7 +138,7 @@ func (s *SQLiteStore) ListScheduled(now time.Time) ([]TaskResult, error) {
 		       submitted_at, completed_at, next_run_at
 		FROM task_results
 		WHERE schedule IS NOT NULL AND next_run_at <= ?
-		ORDER BY next_run_at ASC`, now.Format(time.RFC3339Nano))
+		ORDER BY next_run_at ASC`, now.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +153,15 @@ func (s *SQLiteStore) ListScheduled(now time.Time) ([]TaskResult, error) {
 		results = append(results, *r)
 	}
 	return results, rows.Err()
+}
+
+func (s *SQLiteStore) RecoverStaleTasks() error {
+	_, err := s.db.Exec(`
+		UPDATE task_results
+		SET status = ?, error = 'recovered: process restarted while task was running'
+		WHERE status = ? AND schedule IS NULL`,
+		string(TaskStatusFailed), string(TaskStatusRunning))
+	return err
 }
 
 func (s *SQLiteStore) Delete(id string) (bool, error) {
@@ -243,7 +239,7 @@ func formatNullableTime(t *time.Time) any {
 	if t == nil {
 		return nil
 	}
-	return t.Format(time.RFC3339Nano)
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 func nullableBytes(b []byte) any {

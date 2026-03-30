@@ -77,6 +77,10 @@ var serveCmd = cli.Command{
 		srv := server.NewServer(":"+port, eng, homeDir)
 		srvErr := srv.ListenAndServe(ctx)
 
+		// Drain in-flight task goroutines before closing the store so
+		// all final writes land.
+		eng.Wait()
+
 		if closeErr := store.Close(); closeErr != nil {
 			fmt.Fprintf(os.Stderr, "warn: result store close: %v\n", closeErr)
 		}

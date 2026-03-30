@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -261,6 +262,115 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 	})
 }
 
+func TestE2E_StaleTaskRecovery(t *testing.T) {
+	store, dbPath := newFileStore(t)
+
+	// Simulate a previous crash: insert tasks left as "running".
+	staleOneShot := &TaskResult{
+		ID:          "stale-1111-1111-1111-111111111111",
+		Type:        "config-patch",
+		Status:      TaskStatusRunning,
+		SubmittedAt: time.Now().UTC(),
+	}
+	staleScheduled := &TaskResult{
+		ID:          "stale-2222-2222-2222-222222222222",
+		Type:        "config-patch",
+		Status:      TaskStatusRunning,
+		Schedule:    &ScheduleConfig{Cron: "* * * * *"},
+		SubmittedAt: time.Now().UTC(),
+	}
+	store.Save(staleOneShot)
+	store.Save(staleScheduled)
+
+	// Reopen store and create a new engine (simulates restart).
+	store2 := reopenStore(t, store, dbPath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handlers := map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	}
+	_ = NewEngine(ctx, handlers, store2)
+
+	// One-shot running task should be marked failed.
+	r, _ := store2.Get(staleOneShot.ID)
+	if r == nil {
+		t.Fatal("expected stale one-shot task to exist")
+	}
+	if r.Status != TaskStatusFailed {
+		t.Fatalf("expected stale one-shot to be failed, got %q", r.Status)
+	}
+	if r.Error == "" {
+		t.Fatal("expected recovery error message")
+	}
+
+	// Scheduled task should remain running (it will be re-evaluated by the scheduler).
+	s, _ := store2.Get(staleScheduled.ID)
+	if s == nil {
+		t.Fatal("expected stale scheduled task to exist")
+	}
+	if s.Status != TaskStatusRunning {
+		t.Fatalf("expected stale scheduled to remain running, got %q", s.Status)
+	}
+}
+
+func TestE2E_ShutdownDrainsGoroutines(t *testing.T) {
+	store, _ := newFileStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	started := make(chan struct{})
+	handlers := map[TaskType]TaskHandler{
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
+			close(started)
+			// Block until context is cancelled (simulates long-running task).
+			<-ctx.Done()
+			return nil
+		},
+	}
+
+	eng := NewEngine(ctx, handlers, store)
+
+	const drainID = "55555555-5555-5555-5555-555555555555"
+	id, err := eng.Submit(Task{
+		ID:   drainID,
+		Type: TaskConfigPatch,
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	// Wait for the handler to start.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for task to start")
+	}
+
+	// Cancel the context (simulates SIGTERM).
+	cancel()
+
+	// Wait for goroutines to drain.
+	done := make(chan struct{})
+	go func() {
+		eng.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for engine.Wait()")
+	}
+
+	// The task should be in the store with completed status (handler returned nil).
+	result, _ := store.Get(id)
+	if result == nil {
+		t.Fatal("expected result in store after drain")
+	}
+	if result.Status != TaskStatusCompleted {
+		t.Fatalf("expected completed after drain, got %q", result.Status)
+	}
+}
+
 func TestE2E_ScheduledTaskExecution(t *testing.T) {
 	store, _ := newFileStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -344,18 +454,17 @@ func TestE2E_ConcurrentSubmit(t *testing.T) {
 	const n = 10
 	ids := make([]string, n)
 	errs := make([]error, n)
-	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(n)
 
 	for i := 0; i < n; i++ {
 		go func(i int) {
+			defer wg.Done()
 			ids[i], errs[i] = eng.Submit(Task{Type: TaskConfigPatch})
-			<-done
 		}(i)
 	}
 
-	// Let all goroutines submit.
-	time.Sleep(100 * time.Millisecond)
-	close(done)
+	wg.Wait()
 
 	for i, err := range errs {
 		if err != nil {

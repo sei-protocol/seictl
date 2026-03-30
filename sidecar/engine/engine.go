@@ -49,10 +49,19 @@ type Engine struct {
 	// Overlap guard: prevents a scheduled task from being fired again
 	// while a previous execution is still running.
 	runningTasks map[string]struct{}
+
+	// wg tracks in-flight task goroutines so they can be drained
+	// before the store is closed on shutdown.
+	wg sync.WaitGroup
 }
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
+// On startup, any one-shot tasks left in "running" state from a previous
+// crash are marked as failed.
 func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store ResultStore) *Engine {
+	if err := store.RecoverStaleTasks(); err != nil {
+		log.Error("failed to recover stale tasks", "err", err)
+	}
 	return &Engine{
 		handlers:     handlers,
 		ctx:          ctx,
@@ -60,6 +69,13 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store Res
 		cancels:      make(map[string]context.CancelFunc),
 		runningTasks: make(map[string]struct{}),
 	}
+}
+
+// Wait blocks until all in-flight task goroutines have completed.
+// Call this after cancelling the engine's context and before closing
+// the store to ensure all final writes land.
+func (e *Engine) Wait() {
+	e.wg.Wait()
 }
 
 // Submit starts a task in its own goroutine and returns its ID. When
@@ -93,7 +109,7 @@ func (e *Engine) Submit(task Task) (string, error) {
 		return id, nil
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	taskCtx, cancel := context.WithCancel(e.ctx)
 
 	tr := &TaskResult{
@@ -110,18 +126,26 @@ func (e *Engine) Submit(task Task) (string, error) {
 		return "", fmt.Errorf("persist task: %w", err)
 	}
 	e.cancels[id] = cancel
+	e.wg.Add(1)
 	e.mu.Unlock()
 
 	log.Info("task submitted", "type", task.Type, "id", id)
 
 	go func() {
+		defer e.wg.Done()
 		err := e.execute(taskCtx, task.Type, handler, task.Params)
 
 		e.mu.Lock()
+		_, stillActive := e.cancels[id]
+		if !stillActive {
+			// Task was removed via RemoveResult while running; skip save.
+			e.mu.Unlock()
+			return
+		}
 		delete(e.cancels, id)
 		e.mu.Unlock()
 
-		t := time.Now()
+		t := time.Now().UTC()
 		tr := &TaskResult{
 			ID:          id,
 			Type:        string(task.Type),
@@ -160,7 +184,7 @@ func (e *Engine) SubmitScheduled(task Task, sched ScheduleConfig) (string, error
 		return "", err
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	next, err := nextCronTime(sched.Cron, now)
 	if err != nil {
 		return "", fmt.Errorf("invalid cron %q: %w", sched.Cron, err)
@@ -196,7 +220,7 @@ func (e *Engine) SubmitScheduled(task Task, sched ScheduleConfig) (string, error
 
 // EvalSchedules checks all scheduled tasks and fires any that are due.
 func (e *Engine) EvalSchedules() {
-	now := time.Now()
+	now := time.Now().UTC()
 
 	due, err := e.store.ListScheduled(now)
 	if err != nil {
@@ -220,6 +244,7 @@ func (e *Engine) EvalSchedules() {
 			continue
 		}
 		e.runningTasks[tr.ID] = struct{}{}
+		e.wg.Add(1)
 		e.mu.Unlock()
 
 		// Advance next run time.
@@ -232,13 +257,14 @@ func (e *Engine) EvalSchedules() {
 
 		log.Info("executing scheduled task", "type", tr.Type, "id", tr.ID)
 		go func(tr TaskResult, h TaskHandler) {
+			defer e.wg.Done()
 			execErr := e.execute(e.ctx, TaskType(tr.Type), h, tr.Params)
 
 			e.mu.Lock()
 			delete(e.runningTasks, tr.ID)
 			e.mu.Unlock()
 
-			t := time.Now()
+			t := time.Now().UTC()
 			tr.CompletedAt = &t
 			tr.Error = ""
 			if execErr != nil {
