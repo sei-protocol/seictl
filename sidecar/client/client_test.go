@@ -182,37 +182,6 @@ func TestSubmitTask_Conflict(t *testing.T) {
 	}
 }
 
-func TestSubmitTask_Scheduled(t *testing.T) {
-	taskID := uuid.New()
-	cron := "*/5 * * * *"
-	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req TaskRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode body: %v", err)
-		}
-		if req.Schedule == nil || req.Schedule.Cron == nil {
-			t.Fatal("expected schedule.cron to be set")
-		}
-		if *req.Schedule.Cron != cron {
-			t.Errorf("schedule.cron = %q, want %q", *req.Schedule.Cron, cron)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(TaskSubmitResponse{Id: taskID})
-	}))
-
-	id, err := c.SubmitTask(context.Background(), TaskRequest{
-		Type:     TaskTypeDiscoverPeers,
-		Schedule: &ScheduleConfig{Cron: &cron},
-	})
-	if err != nil {
-		t.Fatalf("SubmitTask() error = %v", err)
-	}
-	if id != taskID {
-		t.Errorf("returned id = %s, want %s", id, taskID)
-	}
-}
-
 func TestSubmitTask_BadRequest(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

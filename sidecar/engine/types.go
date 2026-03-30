@@ -37,7 +37,8 @@ type Task struct {
 	Params map[string]any `json:"params,omitempty"`
 }
 
-// TaskHandler executes a specific task type.
+// TaskHandler executes a specific task type. Handlers MUST be idempotent:
+// the engine may re-execute a handler after a crash recovery.
 type TaskHandler func(ctx context.Context, params map[string]any) error
 
 // TaskStatus represents the lifecycle state of a task.
@@ -49,25 +50,15 @@ const (
 	TaskStatusFailed    TaskStatus = "failed"
 )
 
-// ScheduleConfig triggers a task on a recurring basis. Cron is supported
-// today; BlockHeight is reserved for future use.
-type ScheduleConfig struct {
-	Cron        string `json:"cron,omitempty"`
-	BlockHeight *int64 `json:"blockHeight,omitempty"`
-}
-
-// TaskResult records a task and its outcome. All tasks share this model.
-// When Schedule is non-nil the engine re-executes the task on its cron.
+// TaskResult records a task and its outcome.
 type TaskResult struct {
-	ID          string          `json:"id"`
-	Type        string          `json:"type"`
-	Status      TaskStatus      `json:"status"`
-	Params      map[string]any  `json:"params,omitempty"`
-	Schedule    *ScheduleConfig `json:"schedule,omitempty"`
-	Error       string          `json:"error,omitempty"`
-	SubmittedAt time.Time       `json:"submittedAt"`
-	CompletedAt *time.Time      `json:"completedAt,omitempty"`
-	NextRunAt   *time.Time      `json:"nextRunAt,omitempty"`
+	ID          string         `json:"id"`
+	Type        string         `json:"type"`
+	Status      TaskStatus     `json:"status"`
+	Params      map[string]any `json:"params,omitempty"`
+	Error       string         `json:"error,omitempty"`
+	SubmittedAt time.Time      `json:"submittedAt"`
+	CompletedAt *time.Time     `json:"completedAt,omitempty"`
 }
 
 // StatusResponse is the shape returned by the status endpoint.

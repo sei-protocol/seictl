@@ -19,18 +19,15 @@ func TestStoreSaveAndGet(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Now().Truncate(time.Nanosecond)
 	completed := now.Add(time.Second)
-	nextRun := now.Add(time.Minute)
 
 	r := &TaskResult{
 		ID:          "aaaaaaaa-1111-2222-3333-444444444444",
 		Type:        "config-patch",
 		Status:      TaskStatusCompleted,
 		Params:      map[string]any{"file": "config.toml", "nested": map[string]any{"key": "val"}},
-		Schedule:    &ScheduleConfig{Cron: "*/5 * * * *"},
 		Error:       "",
 		SubmittedAt: now,
 		CompletedAt: &completed,
-		NextRunAt:   &nextRun,
 	}
 
 	if err := s.Save(r); err != nil {
@@ -56,14 +53,8 @@ func TestStoreSaveAndGet(t *testing.T) {
 	if got.Error != r.Error {
 		t.Fatalf("Error = %q, want %q", got.Error, r.Error)
 	}
-	if got.Schedule == nil || got.Schedule.Cron != "*/5 * * * *" {
-		t.Fatalf("Schedule = %+v, want cron */5 * * * *", got.Schedule)
-	}
 	if got.CompletedAt == nil {
 		t.Fatal("expected non-nil CompletedAt")
-	}
-	if got.NextRunAt == nil {
-		t.Fatal("expected non-nil NextRunAt")
 	}
 
 	// Verify nested params survived JSON round-trip.
@@ -224,56 +215,6 @@ func TestStoreMigrateIdempotent(t *testing.T) {
 	}
 }
 
-func TestStoreListScheduled(t *testing.T) {
-	s := newTestStore(t)
-	now := time.Now().Truncate(time.Nanosecond)
-
-	// Scheduled task due in the past.
-	past := now.Add(-time.Minute)
-	due := &TaskResult{
-		ID:          "sched-due-0000-0000-0000-000000000000",
-		Type:        "config-patch",
-		Status:      TaskStatusRunning,
-		Schedule:    &ScheduleConfig{Cron: "* * * * *"},
-		SubmittedAt: now,
-		NextRunAt:   &past,
-	}
-	// Scheduled task due in the future.
-	future := now.Add(time.Hour)
-	notDue := &TaskResult{
-		ID:          "sched-fut-0000-0000-0000-000000000000",
-		Type:        "config-patch",
-		Status:      TaskStatusRunning,
-		Schedule:    &ScheduleConfig{Cron: "*/5 * * * *"},
-		SubmittedAt: now,
-		NextRunAt:   &future,
-	}
-	// Non-scheduled (one-shot) task — should never appear.
-	oneShot := &TaskResult{
-		ID:          "oneshot-00000-0000-0000-000000000000",
-		Type:        "config-patch",
-		Status:      TaskStatusCompleted,
-		SubmittedAt: now,
-	}
-
-	for _, r := range []*TaskResult{due, notDue, oneShot} {
-		if err := s.Save(r); err != nil {
-			t.Fatalf("save: %v", err)
-		}
-	}
-
-	results, err := s.ListScheduled(now)
-	if err != nil {
-		t.Fatalf("list scheduled: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 due scheduled task, got %d", len(results))
-	}
-	if results[0].ID != due.ID {
-		t.Fatalf("expected ID %q, got %q", due.ID, results[0].ID)
-	}
-}
-
 func TestStoreNullableFields(t *testing.T) {
 	s := newTestStore(t)
 
@@ -282,7 +223,7 @@ func TestStoreNullableFields(t *testing.T) {
 		Type:        "snapshot-restore",
 		Status:      TaskStatusRunning,
 		SubmittedAt: time.Now(),
-		// CompletedAt, NextRunAt, Schedule all nil; Params nil.
+		// CompletedAt nil; Params nil.
 	}
 	if err := s.Save(r); err != nil {
 		t.Fatalf("save: %v", err)
@@ -294,11 +235,5 @@ func TestStoreNullableFields(t *testing.T) {
 	}
 	if got.CompletedAt != nil {
 		t.Fatal("expected nil CompletedAt")
-	}
-	if got.NextRunAt != nil {
-		t.Fatal("expected nil NextRunAt")
-	}
-	if got.Schedule != nil {
-		t.Fatal("expected nil Schedule")
 	}
 }

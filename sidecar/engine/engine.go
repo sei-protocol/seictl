@@ -3,7 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,38 +27,50 @@ func validateTaskID(id string) error {
 }
 
 // Engine is the task executor. Every submitted task runs in its own
-// goroutine. Scheduled tasks are re-fired by EvalSchedules on their cron.
-//
-// The store is the single source of truth for all task state. Only
-// cancel funcs and the scheduled-task overlap guard are held in memory
-// because they represent process-level goroutine state that cannot be
-// serialized.
+// goroutine. The store is the single source of truth for all task state.
+// The engine context propagates to all handlers — on SIGTERM the
+// context is cancelled and handlers observe ctx.Done() to stop gracefully.
 type Engine struct {
 	handlers map[TaskType]TaskHandler
 	ctx      context.Context
-	mu       sync.RWMutex
-	ready    bool
-
-	// Persistent store — source of truth for all task results.
-	store ResultStore
-
-	// Cancel funcs for currently executing tasks. Keyed by task ID.
-	// These cannot be serialized into the store.
-	cancels map[string]context.CancelFunc
-
-	// Overlap guard: prevents a scheduled task from being fired again
-	// while a previous execution is still running.
-	runningTasks map[string]struct{}
+	ready    atomic.Bool
+	store    ResultStore
 }
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
+// On startup, any tasks left in "running" state from a previous process
+// are re-executed.
 func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store ResultStore) *Engine {
-	return &Engine{
-		handlers:     handlers,
-		ctx:          ctx,
-		store:        store,
-		cancels:      make(map[string]context.CancelFunc),
-		runningTasks: make(map[string]struct{}),
+	eng := &Engine{
+		handlers: handlers,
+		ctx:      ctx,
+		store:    store,
+	}
+	eng.rehydrateStaleTasks()
+	return eng
+}
+
+// rehydrateStaleTasks re-executes tasks that were left in "running"
+// state by a previous process that exited before completing them.
+func (e *Engine) rehydrateStaleTasks() {
+	stale, err := e.store.ListStaleTasks()
+	if err != nil {
+		log.Error("failed to list stale tasks", "err", err)
+		return
+	}
+	for _, tr := range stale {
+		handler, ok := e.handlers[TaskType(tr.Type)]
+		if !ok {
+			log.Warn("stale task has no handler, marking failed", "type", tr.Type, "id", tr.ID)
+			t := time.Now().UTC()
+			tr.Status = TaskStatusFailed
+			tr.Error = "no handler registered for task type"
+			tr.CompletedAt = &t
+			_ = e.store.Save(&tr)
+			continue
+		}
+		log.Info("rehydrating stale task", "type", tr.Type, "id", tr.ID)
+		e.runTask(tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt)
 	}
 }
 
@@ -82,19 +94,12 @@ func (e *Engine) Submit(task Task) (string, error) {
 		id = uuid.New().String()
 	}
 
-	e.mu.Lock()
-	// Dedup: check in-memory cancels (active) then store (completed).
-	if _, running := e.cancels[id]; running {
-		e.mu.Unlock()
-		return id, nil
-	}
+	// Dedup check against the store.
 	if existing, _ := e.store.Get(id); existing != nil {
-		e.mu.Unlock()
 		return id, nil
 	}
 
-	now := time.Now()
-	taskCtx, cancel := context.WithCancel(e.ctx)
+	now := time.Now().UTC()
 
 	tr := &TaskResult{
 		ID:          id,
@@ -105,28 +110,26 @@ func (e *Engine) Submit(task Task) (string, error) {
 	}
 
 	if err := e.store.Save(tr); err != nil {
-		cancel()
-		e.mu.Unlock()
 		return "", fmt.Errorf("persist task: %w", err)
 	}
-	e.cancels[id] = cancel
-	e.mu.Unlock()
 
 	log.Info("task submitted", "type", task.Type, "id", id)
+	e.runTask(id, task.Type, handler, task.Params, now)
 
+	return id, nil
+}
+
+// runTask spawns a goroutine to run the handler and persist the result.
+func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time) {
 	go func() {
-		err := e.execute(taskCtx, task.Type, handler, task.Params)
+		err := e.execute(e.ctx, taskType, handler, params)
 
-		e.mu.Lock()
-		delete(e.cancels, id)
-		e.mu.Unlock()
-
-		t := time.Now()
+		t := time.Now().UTC()
 		tr := &TaskResult{
 			ID:          id,
-			Type:        string(task.Type),
-			Params:      task.Params,
-			SubmittedAt: now,
+			Type:        string(taskType),
+			Params:      params,
+			SubmittedAt: submittedAt,
 			CompletedAt: &t,
 		}
 		if err != nil {
@@ -140,119 +143,6 @@ func (e *Engine) Submit(task Task) (string, error) {
 			log.Error("failed to persist task result", "id", id, "err", storeErr)
 		}
 	}()
-
-	return id, nil
-}
-
-// SubmitScheduled creates a scheduled task. The schedule is evaluated by
-// EvalSchedules. Only cron schedules are supported today. When task.ID is
-// set, it becomes the canonical identifier. If a task with the same ID
-// already exists, the existing ID is returned without re-registering.
-func (e *Engine) SubmitScheduled(task Task, sched ScheduleConfig) (string, error) {
-	if _, ok := e.handlers[task.Type]; !ok {
-		return "", fmt.Errorf("unknown task type: %s", task.Type)
-	}
-	if sched.Cron == "" {
-		return "", fmt.Errorf("schedule must specify a cron expression")
-	}
-
-	if err := validateTaskID(task.ID); err != nil {
-		return "", err
-	}
-
-	now := time.Now()
-	next, err := nextCronTime(sched.Cron, now)
-	if err != nil {
-		return "", fmt.Errorf("invalid cron %q: %w", sched.Cron, err)
-	}
-
-	id := task.ID
-	if id == "" {
-		id = uuid.New().String()
-	}
-
-	// Dedup check.
-	if existing, _ := e.store.Get(id); existing != nil {
-		return id, nil
-	}
-
-	tr := &TaskResult{
-		ID:          id,
-		Type:        string(task.Type),
-		Status:      TaskStatusRunning,
-		Params:      task.Params,
-		Schedule:    &sched,
-		SubmittedAt: now,
-		NextRunAt:   &next,
-	}
-
-	if err := e.store.Save(tr); err != nil {
-		return "", fmt.Errorf("persist scheduled task: %w", err)
-	}
-
-	log.Info("scheduled task registered", "type", task.Type, "id", id, "cron", sched.Cron, "next-run", next.Format(time.RFC3339))
-	return id, nil
-}
-
-// EvalSchedules checks all scheduled tasks and fires any that are due.
-func (e *Engine) EvalSchedules() {
-	now := time.Now()
-
-	due, err := e.store.ListScheduled(now)
-	if err != nil {
-		log.Error("store.ListScheduled failed", "err", err)
-		return
-	}
-
-	for i := range due {
-		tr := due[i]
-		handler, ok := e.handlers[TaskType(tr.Type)]
-		if !ok {
-			log.Warn("scheduled task has no handler, removing", "type", tr.Type, "id", tr.ID)
-			e.store.Delete(tr.ID)
-			continue
-		}
-
-		e.mu.Lock()
-		if _, alreadyRunning := e.runningTasks[tr.ID]; alreadyRunning {
-			e.mu.Unlock()
-			log.Debug("scheduled task still running, skipping", "type", tr.Type, "id", tr.ID)
-			continue
-		}
-		e.runningTasks[tr.ID] = struct{}{}
-		e.mu.Unlock()
-
-		// Advance next run time.
-		if tr.Schedule != nil && tr.Schedule.Cron != "" {
-			if next, cronErr := nextCronTime(tr.Schedule.Cron, now); cronErr == nil {
-				tr.NextRunAt = &next
-				log.Debug("scheduled task advancing", "type", tr.Type, "id", tr.ID, "next-run", next.Format(time.RFC3339))
-			}
-		}
-
-		log.Info("executing scheduled task", "type", tr.Type, "id", tr.ID)
-		go func(tr TaskResult, h TaskHandler) {
-			execErr := e.execute(e.ctx, TaskType(tr.Type), h, tr.Params)
-
-			e.mu.Lock()
-			delete(e.runningTasks, tr.ID)
-			e.mu.Unlock()
-
-			t := time.Now()
-			tr.CompletedAt = &t
-			tr.Error = ""
-			if execErr != nil {
-				tr.Error = execErr.Error()
-				tr.Status = TaskStatusFailed
-			} else {
-				tr.Status = TaskStatusCompleted
-			}
-
-			if storeErr := e.store.Save(&tr); storeErr != nil {
-				log.Error("failed to persist scheduled task result", "id", tr.ID, "err", storeErr)
-			}
-		}(tr, handler)
-	}
 }
 
 // execute runs a handler synchronously and logs the outcome.
@@ -264,26 +154,20 @@ func (e *Engine) execute(ctx context.Context, taskType TaskType, handler TaskHan
 	}
 	log.Info("task completed", "type", taskType, "elapsed", time.Since(start).Round(time.Millisecond))
 	if taskType == TaskMarkReady {
-		e.mu.Lock()
-		e.ready = true
-		e.mu.Unlock()
+		e.ready.Store(true)
 	}
 	return nil
 }
 
 // Healthz returns true after the engine has been marked ready.
 func (e *Engine) Healthz() bool {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.ready
+	return e.ready.Load()
 }
 
 // Status returns the engine's current state.
 func (e *Engine) Status() StatusResponse {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
 	status := "Initializing"
-	if e.ready {
+	if e.ready.Load() {
 		status = "Ready"
 	}
 	return StatusResponse{Status: status}
@@ -309,17 +193,8 @@ func (e *Engine) GetResult(id string) *TaskResult {
 	return r
 }
 
-// RemoveResult removes a task by ID. For active tasks this cancels the
-// goroutine's context. Returns true if found.
+// RemoveResult removes a task by ID. Returns true if found.
 func (e *Engine) RemoveResult(id string) bool {
-	e.mu.Lock()
-	if cancel, ok := e.cancels[id]; ok {
-		cancel()
-		delete(e.cancels, id)
-	}
-	delete(e.runningTasks, id)
-	e.mu.Unlock()
-
 	deleted, err := e.store.Delete(id)
 	if err != nil {
 		log.Error("store.Delete failed", "id", id, "err", err)

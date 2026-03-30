@@ -140,27 +140,6 @@ func TestPostTaskReturnsID(t *testing.T) {
 	}
 }
 
-func TestPostTaskScheduled(t *testing.T) {
-	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
-	})
-	srv := NewServer(":0", eng, t.TempDir())
-
-	body := `{"type":"config-patch","schedule":{"cron":"*/5 * * * *"}}`
-	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var resp map[string]string
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode: %v", err)
-	}
-	if resp["id"] == "" {
-		t.Fatal("expected non-empty id")
-	}
-}
-
 func TestPostTaskWithCallerID(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
@@ -268,17 +247,6 @@ func TestPostTaskUnknownType(t *testing.T) {
 	eng := newTestEngine(t, nil)
 	srv := NewServer(":0", eng, t.TempDir())
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"nonexistent"}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
-	}
-}
-
-func TestPostTaskInvalidSchedule(t *testing.T) {
-	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
-	})
-	srv := NewServer(":0", eng, t.TempDir())
-	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","schedule":{"cron":"not a cron"}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
@@ -427,28 +395,6 @@ func TestDeleteTask(t *testing.T) {
 	}
 
 	rec = serveHTTP(srv, http.MethodDelete, "/v0/tasks/"+id, "")
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 after delete, got %d", rec.Code)
-	}
-}
-
-func TestDeleteScheduledTask(t *testing.T) {
-	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
-	})
-	srv := NewServer(":0", eng, t.TempDir())
-
-	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch","schedule":{"cron":"*/5 * * * *"}}`)
-	var resp map[string]string
-	_ = json.NewDecoder(rec.Body).Decode(&resp)
-	id := resp["id"]
-
-	rec = serveHTTP(srv, http.MethodDelete, "/v0/tasks/"+id, "")
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d", rec.Code)
-	}
-
-	rec = serveHTTP(srv, http.MethodGet, "/v0/tasks/"+id, "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 after delete, got %d", rec.Code)
 	}

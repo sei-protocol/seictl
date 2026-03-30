@@ -36,15 +36,6 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// ScheduleConfig Triggers a task on a recurring basis.
-type ScheduleConfig struct {
-	// BlockHeight Reserved for future block-height-based scheduling.
-	BlockHeight *int64 `json:"blockHeight,omitempty"`
-
-	// Cron Cron expression for recurring execution.
-	Cron *string `json:"cron,omitempty"`
-}
-
 // StatusResponse defines model for StatusResponse.
 type StatusResponse struct {
 	Status StatusResponseStatus `json:"status"`
@@ -59,9 +50,6 @@ type TaskRequest struct {
 	Id     *openapi_types.UUID     `json:"id,omitempty"`
 	Params *map[string]interface{} `json:"params,omitempty"`
 
-	// Schedule Triggers a task on a recurring basis.
-	Schedule *ScheduleConfig `json:"schedule,omitempty"`
-
 	// Type Task type identifier.
 	Type string `json:"type"`
 }
@@ -71,13 +59,9 @@ type TaskResult struct {
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 
 	// Error Error message if the task failed.
-	Error     *string                 `json:"error,omitempty"`
-	Id        openapi_types.UUID      `json:"id"`
-	NextRunAt *time.Time              `json:"nextRunAt,omitempty"`
-	Params    *map[string]interface{} `json:"params,omitempty"`
-
-	// Schedule Triggers a task on a recurring basis.
-	Schedule *ScheduleConfig `json:"schedule,omitempty"`
+	Error  *string                 `json:"error,omitempty"`
+	Id     openapi_types.UUID      `json:"id"`
+	Params *map[string]interface{} `json:"params,omitempty"`
 
 	// Status Current task lifecycle state.
 	Status      TaskResultStatus `json:"status"`
