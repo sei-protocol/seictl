@@ -155,13 +155,27 @@ func (s *SQLiteStore) ListScheduled(now time.Time) ([]TaskResult, error) {
 	return results, rows.Err()
 }
 
-func (s *SQLiteStore) RecoverStaleTasks() error {
-	_, err := s.db.Exec(`
-		UPDATE task_results
-		SET status = ?, error = 'recovered: process restarted while task was running'
+func (s *SQLiteStore) ListStaleTasks() ([]TaskResult, error) {
+	rows, err := s.db.Query(`
+		SELECT id, type, status, params, schedule, error,
+		       submitted_at, completed_at, next_run_at
+		FROM task_results
 		WHERE status = ? AND schedule IS NULL`,
-		string(TaskStatusFailed), string(TaskStatusRunning))
-	return err
+		string(TaskStatusRunning))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []TaskResult
+	for rows.Next() {
+		r, err := scanTaskResult(rows)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, *r)
+	}
+	return results, rows.Err()
 }
 
 func (s *SQLiteStore) Delete(id string) (bool, error) {

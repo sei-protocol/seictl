@@ -57,25 +57,58 @@ type Engine struct {
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
 // On startup, any one-shot tasks left in "running" state from a previous
-// crash are marked as failed.
+// process are re-executed.
 func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store ResultStore) *Engine {
-	if err := store.RecoverStaleTasks(); err != nil {
-		log.Error("failed to recover stale tasks", "err", err)
-	}
-	return &Engine{
+	eng := &Engine{
 		handlers:     handlers,
 		ctx:          ctx,
 		store:        store,
 		cancels:      make(map[string]context.CancelFunc),
 		runningTasks: make(map[string]struct{}),
 	}
+	eng.rehydrateStaleTasks()
+	return eng
 }
 
-// Wait blocks until all in-flight task goroutines have completed.
-// Call this after cancelling the engine's context and before closing
-// the store to ensure all final writes land.
-func (e *Engine) Wait() {
-	e.wg.Wait()
+// rehydrateStaleTasks re-executes one-shot tasks that were left in
+// "running" state by a previous process that exited before completing them.
+func (e *Engine) rehydrateStaleTasks() {
+	stale, err := e.store.ListStaleTasks()
+	if err != nil {
+		log.Error("failed to list stale tasks", "err", err)
+		return
+	}
+	for _, tr := range stale {
+		handler, ok := e.handlers[TaskType(tr.Type)]
+		if !ok {
+			log.Warn("stale task has no handler, marking failed", "type", tr.Type, "id", tr.ID)
+			t := time.Now().UTC()
+			tr.Status = TaskStatusFailed
+			tr.Error = "no handler registered for task type"
+			tr.CompletedAt = &t
+			e.store.Save(&tr)
+			continue
+		}
+		log.Info("rehydrating stale task", "type", tr.Type, "id", tr.ID)
+		e.runTask(tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt)
+	}
+}
+
+// Shutdown waits for in-flight task goroutines to finish within the
+// given context's deadline. All handlers should observe their context
+// cancellation and return promptly. Call this after the engine's context
+// has been cancelled and before closing the store.
+func (e *Engine) Shutdown(ctx context.Context) {
+	done := make(chan struct{})
+	go func() {
+		e.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		log.Warn("shutdown deadline exceeded, proceeding with store close")
+	}
 }
 
 // Submit starts a task in its own goroutine and returns its ID. When
@@ -110,7 +143,6 @@ func (e *Engine) Submit(task Task) (string, error) {
 	}
 
 	now := time.Now().UTC()
-	taskCtx, cancel := context.WithCancel(e.ctx)
 
 	tr := &TaskResult{
 		ID:          id,
@@ -121,19 +153,31 @@ func (e *Engine) Submit(task Task) (string, error) {
 	}
 
 	if err := e.store.Save(tr); err != nil {
-		cancel()
 		e.mu.Unlock()
 		return "", fmt.Errorf("persist task: %w", err)
 	}
-	e.cancels[id] = cancel
-	e.wg.Add(1)
 	e.mu.Unlock()
 
 	log.Info("task submitted", "type", task.Type, "id", id)
+	e.runTask(id, task.Type, handler, task.Params, now)
 
+	return id, nil
+}
+
+// runTask spawns a goroutine to run the handler and persist the result.
+// It creates a cancellable context derived from the engine context and
+// stores the cancel func in e.cancels so RemoveResult can stop it.
+func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time) {
+	taskCtx, cancel := context.WithCancel(e.ctx)
+
+	e.mu.Lock()
+	e.cancels[id] = cancel
+	e.mu.Unlock()
+
+	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
-		err := e.execute(taskCtx, task.Type, handler, task.Params)
+		err := e.execute(taskCtx, taskType, handler, params)
 
 		e.mu.Lock()
 		_, stillActive := e.cancels[id]
@@ -148,9 +192,9 @@ func (e *Engine) Submit(task Task) (string, error) {
 		t := time.Now().UTC()
 		tr := &TaskResult{
 			ID:          id,
-			Type:        string(task.Type),
-			Params:      task.Params,
-			SubmittedAt: now,
+			Type:        string(taskType),
+			Params:      params,
+			SubmittedAt: submittedAt,
 			CompletedAt: &t,
 		}
 		if err != nil {
@@ -164,8 +208,6 @@ func (e *Engine) Submit(task Task) (string, error) {
 			log.Error("failed to persist task result", "id", id, "err", storeErr)
 		}
 	}()
-
-	return id, nil
 }
 
 // SubmitScheduled creates a scheduled task. The schedule is evaluated by

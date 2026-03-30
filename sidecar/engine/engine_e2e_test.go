@@ -262,18 +262,18 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 	})
 }
 
-func TestE2E_StaleTaskRecovery(t *testing.T) {
+func TestE2E_StaleTaskRehydration(t *testing.T) {
 	store, dbPath := newFileStore(t)
 
 	// Simulate a previous crash: insert tasks left as "running".
 	staleOneShot := &TaskResult{
-		ID:          "stale-1111-1111-1111-111111111111",
+		ID:          "66666666-6666-6666-6666-666666666666",
 		Type:        "config-patch",
 		Status:      TaskStatusRunning,
 		SubmittedAt: time.Now().UTC(),
 	}
 	staleScheduled := &TaskResult{
-		ID:          "stale-2222-2222-2222-222222222222",
+		ID:          "77777777-7777-7777-7777-777777777777",
 		Type:        "config-patch",
 		Status:      TaskStatusRunning,
 		Schedule:    &ScheduleConfig{Cron: "* * * * *"},
@@ -289,21 +289,15 @@ func TestE2E_StaleTaskRecovery(t *testing.T) {
 	handlers := map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	}
-	_ = NewEngine(ctx, handlers, store2)
+	eng := NewEngine(ctx, handlers, store2)
 
-	// One-shot running task should be marked failed.
-	r, _ := store2.Get(staleOneShot.ID)
-	if r == nil {
-		t.Fatal("expected stale one-shot task to exist")
-	}
-	if r.Status != TaskStatusFailed {
-		t.Fatalf("expected stale one-shot to be failed, got %q", r.Status)
-	}
-	if r.Error == "" {
-		t.Fatal("expected recovery error message")
+	// One-shot task should be re-executed and complete successfully.
+	result := waitForResult(t, eng, staleOneShot.ID)
+	if result.Status != TaskStatusCompleted {
+		t.Fatalf("expected rehydrated task to complete, got %q", result.Status)
 	}
 
-	// Scheduled task should remain running (it will be re-evaluated by the scheduler).
+	// Scheduled task should remain running (not rehydrated, left for scheduler).
 	s, _ := store2.Get(staleScheduled.ID)
 	if s == nil {
 		t.Fatal("expected stale scheduled task to exist")
@@ -348,18 +342,10 @@ func TestE2E_ShutdownDrainsGoroutines(t *testing.T) {
 	// Cancel the context (simulates SIGTERM).
 	cancel()
 
-	// Wait for goroutines to drain.
-	done := make(chan struct{})
-	go func() {
-		eng.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for engine.Wait()")
-	}
+	// Shutdown with a grace period for goroutines to drain.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	eng.Shutdown(shutdownCtx)
 
 	// The task should be in the store with completed status (handler returned nil).
 	result, _ := store.Get(id)

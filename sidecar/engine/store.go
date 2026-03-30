@@ -22,9 +22,9 @@ type ResultStore interface {
 	// (next_run_at <= now and schedule IS NOT NULL).
 	ListScheduled(now time.Time) ([]TaskResult, error)
 
-	// RecoverStaleTasks marks any non-scheduled tasks left in "running"
-	// state as "failed". These are leftovers from a previous crash.
-	RecoverStaleTasks() error
+	// ListStaleTasks returns one-shot tasks left in "running" state from
+	// a previous process that exited without completing them.
+	ListStaleTasks() ([]TaskResult, error)
 
 	// Delete removes a result by ID. Returns true if it existed.
 	Delete(id string) (bool, error)
