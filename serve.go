@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -44,6 +45,11 @@ var serveCmd = cli.Command{
 			return fmt.Errorf("home directory init failed: %w", err)
 		}
 
+		store, err := engine.NewSQLiteStore(filepath.Join(homeDir, "sidecar.db"))
+		if err != nil {
+			return fmt.Errorf("open result store: %w", err)
+		}
+
 		handlers := map[engine.TaskType]engine.TaskHandler{
 			engine.TaskSnapshotRestore:          tasks.NewSnapshotRestorer(homeDir, nil).Handler(),
 			engine.TaskDiscoverPeers:            tasks.NewPeerDiscoverer(homeDir, nil, nil).Handler(),
@@ -64,13 +70,19 @@ var serveCmd = cli.Command{
 			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, nil).Handler(),
 		}
 
-		eng := engine.NewEngine(ctx, handlers)
+		eng := engine.NewEngine(ctx, handlers, store)
 
 		go runSchedulerTicker(ctx, eng)
 
 		srv := server.NewServer(":"+port, eng, homeDir)
-		if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			return fmt.Errorf("server error: %w", err)
+		srvErr := srv.ListenAndServe(ctx)
+
+		if closeErr := store.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "warn: result store close: %v\n", closeErr)
+		}
+
+		if srvErr != nil && !errors.Is(srvErr, context.Canceled) {
+			return fmt.Errorf("server error: %w", srvErr)
 		}
 		return nil
 	},

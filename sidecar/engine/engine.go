@@ -12,8 +12,6 @@ import (
 
 var log = seilog.NewLogger("seictl", "engine")
 
-const maxResults = 10
-
 // ErrInvalidTaskID is returned when a caller-provided task ID is not a valid UUID.
 var ErrInvalidTaskID = fmt.Errorf("task ID must be a valid UUID")
 
@@ -28,38 +26,38 @@ func validateTaskID(id string) error {
 	return nil
 }
 
-// taskEntry tracks a running task and its cancel func.
-type taskEntry struct {
-	result *TaskResult
-	cancel context.CancelFunc
-}
-
 // Engine is the task executor. Every submitted task runs in its own
 // goroutine. Scheduled tasks are re-fired by EvalSchedules on their cron.
+//
+// The store is the single source of truth for all task state. Only
+// cancel funcs and the scheduled-task overlap guard are held in memory
+// because they represent process-level goroutine state that cannot be
+// serialized.
 type Engine struct {
 	handlers map[TaskType]TaskHandler
 	ctx      context.Context
 	mu       sync.RWMutex
 	ready    bool
 
-	// Currently running tasks.
-	active map[string]*taskEntry
+	// Persistent store — source of truth for all task results.
+	store ResultStore
 
-	// Completed task results (ring buffer, newest last).
-	results []*TaskResult
+	// Cancel funcs for currently executing tasks. Keyed by task ID.
+	// These cannot be serialized into the store.
+	cancels map[string]context.CancelFunc
 
-	// Registered scheduled tasks and overlap guard.
-	scheduled    map[string]*TaskResult
+	// Overlap guard: prevents a scheduled task from being fired again
+	// while a previous execution is still running.
 	runningTasks map[string]struct{}
 }
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
-func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler) *Engine {
+func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store ResultStore) *Engine {
 	return &Engine{
 		handlers:     handlers,
 		ctx:          ctx,
-		active:       make(map[string]*taskEntry),
-		scheduled:    make(map[string]*TaskResult),
+		store:        store,
+		cancels:      make(map[string]context.CancelFunc),
 		runningTasks: make(map[string]struct{}),
 	}
 }
@@ -67,8 +65,8 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler) *Engine {
 // Submit starts a task in its own goroutine and returns its ID. When
 // task.ID is set, it becomes the canonical identifier (enabling
 // deterministic IDs from the controller). When empty, a random UUID is
-// generated. If a task with the same ID already exists (active or
-// completed), the existing ID is returned without re-submitting.
+// generated. If a task with the same ID already exists, the existing ID
+// is returned without re-submitting.
 func (e *Engine) Submit(task Task) (string, error) {
 	handler, ok := e.handlers[task.Type]
 	if !ok {
@@ -85,7 +83,12 @@ func (e *Engine) Submit(task Task) (string, error) {
 	}
 
 	e.mu.Lock()
-	if existing := e.getResultLocked(id); existing != nil {
+	// Dedup: check in-memory cancels (active) then store (completed).
+	if _, running := e.cancels[id]; running {
+		e.mu.Unlock()
+		return id, nil
+	}
+	if existing, _ := e.store.Get(id); existing != nil {
 		e.mu.Unlock()
 		return id, nil
 	}
@@ -101,7 +104,12 @@ func (e *Engine) Submit(task Task) (string, error) {
 		SubmittedAt: now,
 	}
 
-	e.active[id] = &taskEntry{result: tr, cancel: cancel}
+	if err := e.store.Save(tr); err != nil {
+		cancel()
+		e.mu.Unlock()
+		return "", fmt.Errorf("persist task: %w", err)
+	}
+	e.cancels[id] = cancel
 	e.mu.Unlock()
 
 	log.Info("task submitted", "type", task.Type, "id", id)
@@ -110,25 +118,27 @@ func (e *Engine) Submit(task Task) (string, error) {
 		err := e.execute(taskCtx, task.Type, handler, task.Params)
 
 		e.mu.Lock()
-		defer e.mu.Unlock()
-		entry, ok := e.active[id]
-		if !ok {
-			log.Error("task completed but was removed while running", "type", task.Type, "id", id)
-			return
-		}
+		delete(e.cancels, id)
+		e.mu.Unlock()
+
 		t := time.Now()
-		entry.result.CompletedAt = &t
+		tr := &TaskResult{
+			ID:          id,
+			Type:        string(task.Type),
+			Params:      task.Params,
+			SubmittedAt: now,
+			CompletedAt: &t,
+		}
 		if err != nil {
-			entry.result.Error = err.Error()
-			entry.result.Status = TaskStatusFailed
+			tr.Error = err.Error()
+			tr.Status = TaskStatusFailed
 		} else {
-			entry.result.Status = TaskStatusCompleted
+			tr.Status = TaskStatusCompleted
 		}
-		e.results = append(e.results, entry.result)
-		if len(e.results) > maxResults {
-			e.results = e.results[len(e.results)-maxResults:]
+
+		if storeErr := e.store.Save(tr); storeErr != nil {
+			log.Error("failed to persist task result", "id", id, "err", storeErr)
 		}
-		delete(e.active, id)
 	}()
 
 	return id, nil
@@ -161,9 +171,8 @@ func (e *Engine) SubmitScheduled(task Task, sched ScheduleConfig) (string, error
 		id = uuid.New().String()
 	}
 
-	e.mu.Lock()
-	if existing := e.getResultLocked(id); existing != nil {
-		e.mu.Unlock()
+	// Dedup check.
+	if existing, _ := e.store.Get(id); existing != nil {
 		return id, nil
 	}
 
@@ -177,8 +186,9 @@ func (e *Engine) SubmitScheduled(task Task, sched ScheduleConfig) (string, error
 		NextRunAt:   &next,
 	}
 
-	e.scheduled[id] = tr
-	e.mu.Unlock()
+	if err := e.store.Save(tr); err != nil {
+		return "", fmt.Errorf("persist scheduled task: %w", err)
+	}
 
 	log.Info("scheduled task registered", "type", task.Type, "id", id, "cron", sched.Cron, "next-run", next.Format(time.RFC3339))
 	return id, nil
@@ -188,22 +198,18 @@ func (e *Engine) SubmitScheduled(task Task, sched ScheduleConfig) (string, error
 func (e *Engine) EvalSchedules() {
 	now := time.Now()
 
-	e.mu.RLock()
-	var due []*TaskResult
-	for _, tr := range e.scheduled {
-		if tr.NextRunAt != nil && !now.Before(*tr.NextRunAt) {
-			due = append(due, tr)
-		}
+	due, err := e.store.ListScheduled(now)
+	if err != nil {
+		log.Error("store.ListScheduled failed", "err", err)
+		return
 	}
-	e.mu.RUnlock()
 
-	for _, tr := range due {
+	for i := range due {
+		tr := due[i]
 		handler, ok := e.handlers[TaskType(tr.Type)]
 		if !ok {
 			log.Warn("scheduled task has no handler, removing", "type", tr.Type, "id", tr.ID)
-			e.mu.Lock()
-			delete(e.scheduled, tr.ID)
-			e.mu.Unlock()
+			e.store.Delete(tr.ID)
 			continue
 		}
 
@@ -214,34 +220,36 @@ func (e *Engine) EvalSchedules() {
 			continue
 		}
 		e.runningTasks[tr.ID] = struct{}{}
+		e.mu.Unlock()
 
+		// Advance next run time.
 		if tr.Schedule != nil && tr.Schedule.Cron != "" {
 			if next, cronErr := nextCronTime(tr.Schedule.Cron, now); cronErr == nil {
 				tr.NextRunAt = &next
 				log.Debug("scheduled task advancing", "type", tr.Type, "id", tr.ID, "next-run", next.Format(time.RFC3339))
 			}
 		}
-		e.mu.Unlock()
 
 		log.Info("executing scheduled task", "type", tr.Type, "id", tr.ID)
-		go func(tr *TaskResult, h TaskHandler) {
-			err := e.execute(e.ctx, TaskType(tr.Type), h, tr.Params)
+		go func(tr TaskResult, h TaskHandler) {
+			execErr := e.execute(e.ctx, TaskType(tr.Type), h, tr.Params)
 
 			e.mu.Lock()
-			defer e.mu.Unlock()
 			delete(e.runningTasks, tr.ID)
-			s, ok := e.scheduled[tr.ID]
-			if !ok {
-				return
-			}
+			e.mu.Unlock()
+
 			t := time.Now()
-			s.CompletedAt = &t
-			s.Error = ""
-			if err != nil {
-				s.Error = err.Error()
-				s.Status = TaskStatusFailed
+			tr.CompletedAt = &t
+			tr.Error = ""
+			if execErr != nil {
+				tr.Error = execErr.Error()
+				tr.Status = TaskStatusFailed
 			} else {
-				s.Status = TaskStatusCompleted
+				tr.Status = TaskStatusCompleted
+			}
+
+			if storeErr := e.store.Save(&tr); storeErr != nil {
+				log.Error("failed to persist scheduled task result", "id", tr.ID, "err", storeErr)
 			}
 		}(tr, handler)
 	}
@@ -281,79 +289,41 @@ func (e *Engine) Status() StatusResponse {
 	return StatusResponse{Status: status}
 }
 
-// RecentResults returns the most recent task results, combining active
-// tasks, completed results, and scheduled tasks.
+// RecentResults returns the most recent task results across all states.
 func (e *Engine) RecentResults() []TaskResult {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	total := len(e.active) + len(e.results) + len(e.scheduled)
-	all := make([]TaskResult, 0, total)
-	for _, a := range e.active {
-		all = append(all, *a.result)
+	results, err := e.store.List(100)
+	if err != nil {
+		log.Error("store.List failed", "err", err)
+		return nil
 	}
-	for i := len(e.results) - 1; i >= 0; i-- {
-		all = append(all, *e.results[i])
-	}
-	for _, s := range e.scheduled {
-		all = append(all, *s)
-	}
-
-	if len(all) > maxResults {
-		all = all[:maxResults]
-	}
-	return all
+	return results
 }
 
-// GetResult returns a task by ID (active, completed, or scheduled), or nil.
+// GetResult returns a task by ID, or nil if not found.
 func (e *Engine) GetResult(id string) *TaskResult {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.getResultLocked(id)
-}
-
-// getResultLocked returns a task by ID without acquiring the lock.
-// Caller must hold at least a read lock.
-func (e *Engine) getResultLocked(id string) *TaskResult {
-	if a, ok := e.active[id]; ok {
-		cp := *a.result
-		return &cp
+	r, err := e.store.Get(id)
+	if err != nil {
+		log.Error("store.Get failed", "id", id, "err", err)
+		return nil
 	}
-	if s, ok := e.scheduled[id]; ok {
-		cp := *s
-		return &cp
-	}
-	for _, r := range e.results {
-		if r.ID == id {
-			cp := *r
-			return &cp
-		}
-	}
-	return nil
+	return r
 }
 
 // RemoveResult removes a task by ID. For active tasks this cancels the
-// goroutine's context. For scheduled tasks this stops the schedule.
-// Returns true if found.
+// goroutine's context. Returns true if found.
 func (e *Engine) RemoveResult(id string) bool {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	if cancel, ok := e.cancels[id]; ok {
+		cancel()
+		delete(e.cancels, id)
+	}
+	delete(e.runningTasks, id)
+	e.mu.Unlock()
 
-	if a, ok := e.active[id]; ok {
-		a.cancel()
-		delete(e.active, id)
-		return true
+	deleted, err := e.store.Delete(id)
+	if err != nil {
+		log.Error("store.Delete failed", "id", id, "err", err)
+		return false
 	}
-	if _, ok := e.scheduled[id]; ok {
-		delete(e.scheduled, id)
-		delete(e.runningTasks, id)
-		return true
-	}
-	for i, r := range e.results {
-		if r.ID == id {
-			e.results = append(e.results[:i], e.results[i+1:]...)
-			return true
-		}
-	}
-	return false
+	return deleted
 }

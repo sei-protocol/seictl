@@ -13,7 +13,12 @@ func newTestEngine(t *testing.T, handlers map[TaskType]TaskHandler) *Engine {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	return NewEngine(ctx, handlers)
+	store, err := NewMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return NewEngine(ctx, handlers, store)
 }
 
 func waitForHealthz(t *testing.T, eng *Engine) {
@@ -137,7 +142,7 @@ func TestSubmitDedupExistingActive(t *testing.T) {
 			<-blocked
 			return nil
 		},
-	})
+	}, newTestStore(t))
 
 	const dedupID = "bbbbbbbb-1111-2222-3333-444444444444"
 	id1, err := eng.Submit(Task{ID: dedupID, Type: TaskConfigPatch})
@@ -327,7 +332,7 @@ func TestGetResultReturnsRunning(t *testing.T) {
 			<-blocked
 			return nil
 		},
-	})
+	}, newTestStore(t))
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 
@@ -355,7 +360,7 @@ func TestGetResultReturnsRunning(t *testing.T) {
 	}
 }
 
-func TestRecentResultsBounded(t *testing.T) {
+func TestRecentResultsReturnsAll(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
@@ -370,8 +375,8 @@ func TestRecentResultsBounded(t *testing.T) {
 	}
 
 	results := eng.RecentResults()
-	if len(results) > maxResults {
-		t.Fatalf("expected at most %d results, got %d", maxResults, len(results))
+	if len(results) != 7 {
+		t.Fatalf("expected 7 results, got %d", len(results))
 	}
 }
 
@@ -386,7 +391,7 @@ func TestRecentResultsIncludesActive(t *testing.T) {
 			<-blocked
 			return nil
 		},
-	})
+	}, newTestStore(t))
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 
@@ -439,7 +444,7 @@ func TestRemoveActiveTaskCancels(t *testing.T) {
 			<-ctx.Done()
 			return ctx.Err()
 		},
-	})
+	}, newTestStore(t))
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 
@@ -463,6 +468,8 @@ func TestContextCancellationStopsEngine(t *testing.T) {
 	var mu sync.Mutex
 	executed := 0
 	ctx, cancel := context.WithCancel(context.Background())
+	store, _ := NewMemoryStore()
+	t.Cleanup(func() { store.Close() })
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
 			mu.Lock()
@@ -470,7 +477,7 @@ func TestContextCancellationStopsEngine(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-	})
+	}, store)
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 	waitForResult(t, eng, id)
@@ -577,19 +584,21 @@ func TestEvalSchedulesFiresDueTasks(t *testing.T) {
 	executed := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	store := newTestStore(t)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
 			executed <- struct{}{}
 			return nil
 		},
-	})
+	}, store)
 
 	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, ScheduleConfig{Cron: "* * * * *"})
 
-	eng.mu.Lock()
+	// Set NextRunAt to the past so EvalSchedules considers it due.
+	r, _ := store.Get(id)
 	past := time.Now().Add(-1 * time.Minute)
-	eng.scheduled[id].NextRunAt = &past
-	eng.mu.Unlock()
+	r.NextRunAt = &past
+	store.Save(r)
 
 	eng.EvalSchedules()
 
@@ -606,6 +615,7 @@ func TestEvalSchedulesSkipsAlreadyRunning(t *testing.T) {
 	callCount := int32(0)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	store := newTestStore(t)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
 			atomic.AddInt32(&callCount, 1)
@@ -613,14 +623,15 @@ func TestEvalSchedulesSkipsAlreadyRunning(t *testing.T) {
 			<-blocked
 			return nil
 		},
-	})
+	}, store)
 
 	id, _ := eng.SubmitScheduled(Task{Type: TaskConfigPatch}, ScheduleConfig{Cron: "* * * * *"})
 
-	eng.mu.Lock()
+	// Set NextRunAt to the past so EvalSchedules considers it due.
+	r, _ := store.Get(id)
 	past := time.Now().Add(-1 * time.Minute)
-	eng.scheduled[id].NextRunAt = &past
-	eng.mu.Unlock()
+	r.NextRunAt = &past
+	store.Save(r)
 
 	eng.EvalSchedules()
 	select {
@@ -629,10 +640,11 @@ func TestEvalSchedulesSkipsAlreadyRunning(t *testing.T) {
 		t.Fatal("timed out waiting for task to start")
 	}
 
-	eng.mu.Lock()
+	// Set NextRunAt to the past again; should be skipped due to overlap guard.
+	r, _ = store.Get(id)
 	past2 := time.Now().Add(-1 * time.Minute)
-	eng.scheduled[id].NextRunAt = &past2
-	eng.mu.Unlock()
+	r.NextRunAt = &past2
+	store.Save(r)
 
 	eng.EvalSchedules()
 	time.Sleep(50 * time.Millisecond)
@@ -687,7 +699,7 @@ func TestLongRunningTaskDoesNotBlockOthers(t *testing.T) {
 			return ctx.Err()
 		},
 		TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
-	})
+	}, newTestStore(t))
 
 	_, _ = eng.Submit(Task{Type: TaskConfigPatch})
 
