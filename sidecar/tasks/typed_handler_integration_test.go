@@ -103,11 +103,9 @@ persistent-peers = ""
 func TestDeserialize_AssembleGenesis(t *testing.T) {
 	// We only test deserialization, not the full S3 flow, so we expect
 	// a validation error for missing S3 bucket when bucket is empty.
-	handler := NewGenesisAssembler(t.TempDir(), nil, nil, nil).Handler()
+	handler := NewGenesisAssembler(t.TempDir(), "my-bucket", "us-east-1", "test-chain", nil, nil).Handler()
 
 	params := map[string]any{
-		"s3Bucket":       "my-bucket",
-		"s3Region":       "us-east-1",
 		"accountBalance": "10000000usei",
 		"namespace":      "default",
 		"nodes": []any{
@@ -230,54 +228,43 @@ func TestDeserialize_SnapshotUpload(t *testing.T) {
 }
 
 // TestDeserialize_ConfigureGenesis verifies that the configure-genesis handler
-// correctly deserializes URI and region from the wire format.
+// works with empty params for an embedded chain.
 func TestDeserialize_ConfigureGenesis(t *testing.T) {
 	homeDir := t.TempDir()
-	fetcher := NewGenesisFetcher(homeDir, "pacific-1", nil)
+	fetcher := NewGenesisFetcher(homeDir, "pacific-1", "test-bucket", "us-east-2", nil)
 	handler := fetcher.Handler()
 
-	params := map[string]any{
-		"uri":    "s3://bucket/key",
-		"region": "us-east-1",
-	}
-
-	// This will fail at S3 download, but deserialization should succeed.
-	err := handler(context.Background(), params)
-	if err == nil {
-		t.Fatal("expected S3 error, got nil")
-	}
-	if strings.Contains(err.Error(), "parsing params") {
-		t.Fatalf("deserialization failed: %v", err)
+	err := handler(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error for embedded chain: %v", err)
 	}
 }
 
 // TestDeserialize_UploadArtifacts verifies that the upload-genesis-artifacts handler
 // correctly deserializes the S3 and node name params from the wire format.
 func TestDeserialize_UploadArtifacts(t *testing.T) {
-	handler := NewGenesisArtifactUploader(t.TempDir(), nil).Handler()
+	handler := NewGenesisArtifactUploader(t.TempDir(), "test-bucket", "us-east-2", "test-chain", nil).Handler()
 
 	params := map[string]any{
-		"s3Bucket": "",
-		"s3Region": "us-east-1",
-		"nodeName": "val-0",
+		"nodeName": "",
 	}
 
 	err := handler(context.Background(), params)
 	if err == nil {
-		t.Fatal("expected error for empty bucket, got nil")
+		t.Fatal("expected error for empty nodeName, got nil")
 	}
 	if strings.Contains(err.Error(), "parsing params") {
 		t.Fatalf("deserialization failed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "missing required param 's3Bucket'") {
-		t.Errorf("expected s3Bucket validation error, got: %v", err)
+	if !strings.Contains(err.Error(), "missing required param 'nodeName'") {
+		t.Errorf("expected nodeName validation error, got: %v", err)
 	}
 }
 
 // TestDeserialize_GenerateIdentity verifies that the generate-identity handler
 // correctly deserializes chainId and moniker from the wire format.
 func TestDeserialize_GenerateIdentity(t *testing.T) {
-	handler := NewIdentityGenerator(t.TempDir(), nil).Handler()
+	handler := NewIdentityGenerator(t.TempDir()).Handler()
 
 	params := map[string]any{
 		"chainId": "",
@@ -299,23 +286,16 @@ func TestDeserialize_GenerateIdentity(t *testing.T) {
 // TestDeserialize_SetGenesisPeers verifies that the set-genesis-peers handler
 // correctly deserializes S3 coordinates from the wire format.
 func TestDeserialize_SetGenesisPeers(t *testing.T) {
-	handler := NewGenesisPeersSetter(t.TempDir(), nil).Handler()
+	handler := NewGenesisPeersSetter(t.TempDir(), "test-bucket", "us-east-2", "test-chain", nil).Handler()
 
-	params := map[string]any{
-		"s3Bucket": "",
-		"s3Key":    "peers.json",
-		"s3Region": "us-east-1",
-	}
-
-	err := handler(context.Background(), params)
+	// The handler will try to download peers.json from S3 — that will fail
+	// since there's no real S3 client. But it proves deserialization worked.
+	err := handler(context.Background(), map[string]any{})
 	if err == nil {
-		t.Fatal("expected error for empty bucket, got nil")
+		t.Fatal("expected error (no S3), got nil")
 	}
 	if strings.Contains(err.Error(), "parsing params") {
 		t.Fatalf("deserialization failed: %v", err)
-	}
-	if !strings.Contains(err.Error(), "missing required param 's3Bucket'") {
-		t.Errorf("expected s3Bucket validation error, got: %v", err)
 	}
 }
 
@@ -369,7 +349,7 @@ func TestDeserialize_ResultExport(t *testing.T) {
 // TestDeserialize_GenerateGentx verifies that the generate-gentx handler
 // correctly deserializes all string params from the wire format.
 func TestDeserialize_GenerateGentx(t *testing.T) {
-	handler := NewGentxGenerator(t.TempDir(), nil).Handler()
+	handler := NewGentxGenerator(t.TempDir()).Handler()
 
 	params := map[string]any{
 		"chainId":        "",

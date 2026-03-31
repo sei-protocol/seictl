@@ -41,12 +41,9 @@ func TestAssembler_DownloadsGentxFiles(t *testing.T) {
 		return s3Objects, nil
 	}
 
-	assembler := NewGenesisAssembler(homeDir, nil, s3Factory, mockUploaderFactory(newMockS3Uploader()))
+	assembler := NewGenesisAssembler(homeDir, "my-bucket", "us-west-2", "genesis", s3Factory, mockUploaderFactory(newMockS3Uploader()))
 
 	cfg := AssembleGenesisRequest{
-		Bucket:         "my-bucket",
-		Prefix:         "genesis/",
-		Region:         "us-west-2",
 		AccountBalance: "10000000usei",
 		Namespace:      "default",
 		Nodes:          []AssembleNodeEntry{{Name: "val-0"}, {Name: "val-1"}},
@@ -67,18 +64,16 @@ func TestAssembler_DownloadsGentxFiles(t *testing.T) {
 }
 
 func TestAssembler_MissingParams(t *testing.T) {
-	handler := NewGenesisAssembler(t.TempDir(), nil, nil, nil).Handler()
+	handler := NewGenesisAssembler(t.TempDir(), "b", "r", "chain", nil, nil).Handler()
 
 	tests := []struct {
 		name   string
 		params map[string]any
 	}{
-		{"missing bucket", map[string]any{"s3Region": "r", "accountBalance": "10usei", "namespace": "ns", "nodes": []any{map[string]any{"name": "n"}}}},
-		{"missing region", map[string]any{"s3Bucket": "b", "accountBalance": "10usei", "namespace": "ns", "nodes": []any{map[string]any{"name": "n"}}}},
-		{"missing accountBalance", map[string]any{"s3Bucket": "b", "s3Region": "r", "namespace": "ns", "nodes": []any{map[string]any{"name": "n"}}}},
-		{"missing namespace", map[string]any{"s3Bucket": "b", "s3Region": "r", "accountBalance": "10usei", "nodes": []any{map[string]any{"name": "n"}}}},
-		{"missing nodes", map[string]any{"s3Bucket": "b", "s3Region": "r", "accountBalance": "10usei", "namespace": "ns"}},
-		{"empty nodes", map[string]any{"s3Bucket": "b", "s3Region": "r", "accountBalance": "10usei", "namespace": "ns", "nodes": []any{}}},
+		{"missing accountBalance", map[string]any{"namespace": "ns", "nodes": []any{map[string]any{"name": "n"}}}},
+		{"missing namespace", map[string]any{"accountBalance": "10usei", "nodes": []any{map[string]any{"name": "n"}}}},
+		{"missing nodes", map[string]any{"accountBalance": "10usei", "namespace": "ns"}},
+		{"empty nodes", map[string]any{"accountBalance": "10usei", "namespace": "ns", "nodes": []any{}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -95,9 +90,8 @@ func TestAssembler_S3DownloadFailure(t *testing.T) {
 		return &mockS3GetObject{objects: map[string][]byte{}}, nil
 	}
 
-	handler := NewGenesisAssembler(homeDir, nil, s3Factory, nil).Handler()
+	handler := NewGenesisAssembler(homeDir, "b", "r", "c", s3Factory, nil).Handler()
 	err := handler(context.Background(), map[string]any{
-		"s3Bucket": "b", "s3Prefix": "p/", "s3Region": "r", "chainId": "c",
 		"accountBalance": "10000000usei", "namespace": "default",
 		"nodes": []any{map[string]any{"name": "missing-node"}},
 	})

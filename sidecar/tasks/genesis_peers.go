@@ -2,6 +2,9 @@ package tasks
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,54 +20,55 @@ import (
 
 var genesisPeersLog = seilog.NewLogger("seictl", "task", "set-genesis-peers")
 
+const (
+	ed25519PrivKeyLen   = 64
+	ed25519PubKeyOffset = 32
+	cometbftAddressLen  = 20
+)
+
 // SetGenesisPeersRequest holds the typed parameters for the set-genesis-peers task.
-type SetGenesisPeersRequest struct {
-	Bucket string `json:"s3Bucket"`
-	Key    string `json:"s3Key"`
-	Region string `json:"s3Region"`
-}
+// S3 coordinates are derived from the sidecar's environment.
+type SetGenesisPeersRequest struct{}
 
 // GenesisPeersSetter downloads a peers.json file produced by the genesis
 // assembler and writes the entries into config.toml as persistent_peers,
 // filtering out the current node's own entry.
 type GenesisPeersSetter struct {
 	homeDir         string
+	bucket          string
+	region          string
+	chainID         string
 	s3ClientFactory S3ClientFactory
 }
 
 // NewGenesisPeersSetter creates a setter targeting the given home directory.
-func NewGenesisPeersSetter(homeDir string, s3Factory S3ClientFactory) *GenesisPeersSetter {
+func NewGenesisPeersSetter(homeDir, bucket, region, chainID string, s3Factory S3ClientFactory) *GenesisPeersSetter {
 	if s3Factory == nil {
 		s3Factory = DefaultS3ClientFactory
 	}
-	return &GenesisPeersSetter{homeDir: homeDir, s3ClientFactory: s3Factory}
+	return &GenesisPeersSetter{
+		homeDir:         homeDir,
+		bucket:          bucket,
+		region:          region,
+		chainID:         chainID,
+		s3ClientFactory: s3Factory,
+	}
 }
 
 // Handler returns an engine.TaskHandler for the set-genesis-peers task.
-//
-// Expected params:
-//
-//	{"s3Bucket": "...", "s3Key": "...", "s3Region": "..."}
+// The peers.json key is derived from the chain ID: {chainID}/peers.json.
 func (g *GenesisPeersSetter) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, cfg SetGenesisPeersRequest) error {
-		if cfg.Bucket == "" {
-			return fmt.Errorf("set-genesis-peers: missing required param 's3Bucket'")
-		}
-		if cfg.Key == "" {
-			return fmt.Errorf("set-genesis-peers: missing required param 's3Key'")
-		}
-		if cfg.Region == "" {
-			return fmt.Errorf("set-genesis-peers: missing required param 's3Region'")
-		}
+	return engine.TypedHandler(func(ctx context.Context, _ SetGenesisPeersRequest) error {
+		key := g.chainID + "/peers.json"
 
-		s3Client, err := g.s3ClientFactory(ctx, cfg.Region)
+		s3Client, err := g.s3ClientFactory(ctx, g.region)
 		if err != nil {
 			return fmt.Errorf("set-genesis-peers: building S3 client: %w", err)
 		}
 
 		output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
-			Bucket: aws.String(cfg.Bucket),
-			Key:    aws.String(cfg.Key),
+			Bucket: aws.String(g.bucket),
+			Key:    aws.String(key),
 		})
 		if err != nil {
 			return fmt.Errorf("set-genesis-peers: downloading peers.json: %w", err)
@@ -99,7 +103,9 @@ func (g *GenesisPeersSetter) Handler() engine.TaskHandler {
 	})
 }
 
-// readLocalNodeID reads the Tendermint node ID from the local node_key.json.
+// readLocalNodeID derives the Tendermint node ID from the Ed25519 key in
+// node_key.json. The ID is hex(SHA256(pubkey)[:20]), matching CometBFT's
+// p2p.PubKeyToID derivation.
 func readLocalNodeID(homeDir string) (string, error) {
 	path := filepath.Join(homeDir, "config", "node_key.json")
 	data, err := os.ReadFile(path)
@@ -107,14 +113,21 @@ func readLocalNodeID(homeDir string) (string, error) {
 		return "", fmt.Errorf("set-genesis-peers: reading node_key.json: %w", err)
 	}
 
-	var nodeKey struct {
-		ID string `json:"id"`
+	var keyFile struct {
+		PrivKey struct {
+			Value string `json:"value"`
+		} `json:"priv_key"`
 	}
-	if err := json.Unmarshal(data, &nodeKey); err != nil {
+	if err := json.Unmarshal(data, &keyFile); err != nil {
 		return "", fmt.Errorf("set-genesis-peers: parsing node_key.json: %w", err)
 	}
-	if nodeKey.ID == "" {
-		return "", fmt.Errorf("set-genesis-peers: node_key.json has empty id")
+
+	keyBytes, err := base64.StdEncoding.DecodeString(keyFile.PrivKey.Value)
+	if err != nil || len(keyBytes) != ed25519PrivKeyLen {
+		return "", fmt.Errorf("set-genesis-peers: invalid Ed25519 key in node_key.json")
 	}
-	return nodeKey.ID, nil
+
+	pubKey := keyBytes[ed25519PubKeyOffset:]
+	hash := sha256.Sum256(pubKey)
+	return hex.EncodeToString(hash[:cometbftAddressLen]), nil
 }

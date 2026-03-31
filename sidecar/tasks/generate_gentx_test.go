@@ -9,7 +9,7 @@ import (
 )
 
 func TestGentxGenerator_MissingParams(t *testing.T) {
-	handler := NewGentxGenerator(t.TempDir(), nil).Handler()
+	handler := NewGentxGenerator(t.TempDir()).Handler()
 
 	tests := []struct {
 		name   string
@@ -32,7 +32,7 @@ func TestGentxGenerator_MissingParams(t *testing.T) {
 
 func TestGentxGenerator_NoMarkerOnFailure(t *testing.T) {
 	homeDir := t.TempDir()
-	handler := NewGentxGenerator(homeDir, nil).Handler()
+	handler := NewGentxGenerator(homeDir).Handler()
 
 	// This will fail because there's no genesis.json to work with
 	_ = handler(context.Background(), map[string]any{

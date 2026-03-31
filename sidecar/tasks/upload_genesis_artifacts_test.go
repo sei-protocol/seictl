@@ -24,23 +24,20 @@ func TestArtifactUploader_UploadsGentxAndIdentity(t *testing.T) {
 	}
 
 	mock := newMockS3Uploader()
-	uploader := NewGenesisArtifactUploader(homeDir, mockUploaderFactory(mock))
+	uploader := NewGenesisArtifactUploader(homeDir, "test-bucket", "us-east-2", "test-chain", mockUploaderFactory(mock))
 	handler := uploader.Handler()
 
 	err := handler(context.Background(), map[string]any{
-		"s3Bucket": "my-bucket",
-		"s3Prefix": "genesis/",
-		"s3Region": "us-west-2",
 		"nodeName": "val-0",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if _, ok := mock.uploads["my-bucket/genesis/val-0/gentx.json"]; !ok {
+	if _, ok := mock.uploads["test-bucket/test-chain/val-0/gentx.json"]; !ok {
 		t.Errorf("expected gentx.json upload, uploads: %v", keys(mock.uploads))
 	}
-	if _, ok := mock.uploads["my-bucket/genesis/val-0/identity.json"]; !ok {
+	if _, ok := mock.uploads["test-bucket/test-chain/val-0/identity.json"]; !ok {
 		t.Errorf("expected identity.json upload, uploads: %v", keys(mock.uploads))
 	}
 }
@@ -60,11 +57,11 @@ func TestArtifactUploader_Idempotent(t *testing.T) {
 	}
 
 	mock := newMockS3Uploader()
-	uploader := NewGenesisArtifactUploader(homeDir, mockUploaderFactory(mock))
+	uploader := NewGenesisArtifactUploader(homeDir, "test-bucket", "us-east-2", "test-chain", mockUploaderFactory(mock))
 	handler := uploader.Handler()
 
 	params := map[string]any{
-		"s3Bucket": "b", "s3Prefix": "p/", "s3Region": "r", "nodeName": "n",
+		"nodeName": "n",
 	}
 	if err := handler(context.Background(), params); err != nil {
 		t.Fatalf("first call: %v", err)
@@ -80,15 +77,14 @@ func TestArtifactUploader_Idempotent(t *testing.T) {
 }
 
 func TestArtifactUploader_MissingParams(t *testing.T) {
-	handler := NewGenesisArtifactUploader(t.TempDir(), nil).Handler()
+	handler := NewGenesisArtifactUploader(t.TempDir(), "test-bucket", "us-east-2", "test-chain", nil).Handler()
 
 	tests := []struct {
 		name   string
 		params map[string]any
 	}{
-		{"missing bucket", map[string]any{"s3Region": "r", "nodeName": "n"}},
-		{"missing region", map[string]any{"s3Bucket": "b", "nodeName": "n"}},
-		{"missing nodeName", map[string]any{"s3Bucket": "b", "s3Region": "r"}},
+		{"missing nodeName", map[string]any{}},
+		{"empty nodeName", map[string]any{"nodeName": ""}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -109,10 +105,10 @@ func TestArtifactUploader_NoGentxFile(t *testing.T) {
 	}
 
 	mock := newMockS3Uploader()
-	handler := NewGenesisArtifactUploader(homeDir, mockUploaderFactory(mock)).Handler()
+	handler := NewGenesisArtifactUploader(homeDir, "test-bucket", "us-east-2", "test-chain", mockUploaderFactory(mock)).Handler()
 
 	err := handler(context.Background(), map[string]any{
-		"s3Bucket": "b", "s3Prefix": "p/", "s3Region": "r", "nodeName": "n",
+		"nodeName": "n",
 	})
 	if err == nil {
 		t.Fatal("expected error when no gentx file exists")

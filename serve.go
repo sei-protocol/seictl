@@ -40,12 +40,26 @@ var serveCmd = cli.Command{
 		}
 		port := cmd.String("port")
 		chainID := os.Getenv("SEI_CHAIN_ID")
+		genesisBucket := os.Getenv("SEI_GENESIS_BUCKET")
+		genesisRegion := os.Getenv("SEI_GENESIS_REGION")
+
+		for _, kv := range []struct{ name, val string }{
+			{"SEI_CHAIN_ID", chainID},
+			{"SEI_GENESIS_BUCKET", genesisBucket},
+			{"SEI_GENESIS_REGION", genesisRegion},
+		} {
+			if kv.val == "" {
+				return fmt.Errorf("required environment variable %s is not set", kv.name)
+			}
+		}
 
 		var snapshotUploadInterval time.Duration
 		if raw := os.Getenv("SEI_SNAPSHOT_UPLOAD_INTERVAL"); raw != "" {
-			if parsed, err := time.ParseDuration(raw); err == nil {
-				snapshotUploadInterval = parsed
+			parsed, err := time.ParseDuration(raw)
+			if err != nil {
+				return fmt.Errorf("invalid SEI_SNAPSHOT_UPLOAD_INTERVAL %q: %w", raw, err)
 			}
+			snapshotUploadInterval = parsed
 		}
 
 		if err := tasks.EnsureDefaultConfig(homeDir); err != nil {
@@ -65,16 +79,16 @@ var serveCmd = cli.Command{
 			engine.TaskConfigValidate:           tasks.NewConfigValidator(homeDir).Handler(),
 			engine.TaskConfigReload:             tasks.NewConfigReloader(homeDir).Handler(),
 			engine.TaskMarkReady:                tasks.MarkReadyHandler(),
-			engine.TaskConfigureGenesis:         tasks.NewGenesisFetcher(homeDir, chainID, nil).Handler(),
+			engine.TaskConfigureGenesis:         tasks.NewGenesisFetcher(homeDir, chainID, genesisBucket, genesisRegion, nil).Handler(),
 			engine.TaskConfigureStateSync:       tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
 			engine.TaskSnapshotUpload:           tasks.NewSnapshotUploader(homeDir, snapshotUploadInterval, nil).Handler(),
 			engine.TaskResultExport:             tasks.NewResultExporter(homeDir, nil).Handler(),
 			engine.TaskAwaitCondition:           tasks.NewConditionWaiter(nil).Handler(),
-			engine.TaskGenerateIdentity:         tasks.NewIdentityGenerator(homeDir, nil).Handler(),
-			engine.TaskGenerateGentx:            tasks.NewGentxGenerator(homeDir, nil).Handler(),
-			engine.TaskUploadGenesisArtifacts:   tasks.NewGenesisArtifactUploader(homeDir, nil).Handler(),
-			engine.TaskAssembleAndUploadGenesis: tasks.NewGenesisAssembler(homeDir, nil, nil, nil).Handler(),
-			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, nil).Handler(),
+			engine.TaskGenerateIdentity:         tasks.NewIdentityGenerator(homeDir).Handler(),
+			engine.TaskGenerateGentx:            tasks.NewGentxGenerator(homeDir).Handler(),
+			engine.TaskUploadGenesisArtifacts:   tasks.NewGenesisArtifactUploader(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
+			engine.TaskAssembleAndUploadGenesis: tasks.NewGenesisAssembler(homeDir, genesisBucket, genesisRegion, chainID, nil, nil).Handler(),
+			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)

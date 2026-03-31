@@ -37,6 +37,9 @@ const assembleMarkerFile = ".sei-sidecar-assemble-done"
 // validators to download.
 type GenesisAssembler struct {
 	homeDir           string
+	bucket            string
+	region            string
+	chainID           string
 	s3ClientFactory   S3ClientFactory
 	s3UploaderFactory seis3.UploaderFactory
 }
@@ -47,10 +50,8 @@ type AssembleNodeEntry struct {
 }
 
 // AssembleGenesisRequest holds the typed parameters for the assemble-and-upload-genesis task.
+// S3 bucket, region, and prefix are derived from the sidecar's environment.
 type AssembleGenesisRequest struct {
-	Bucket         string              `json:"s3Bucket"`
-	Prefix         string              `json:"s3Prefix"`
-	Region         string              `json:"s3Region"`
 	AccountBalance string              `json:"accountBalance"`
 	Namespace      string              `json:"namespace"`
 	Nodes          []AssembleNodeEntry `json:"nodes"`
@@ -66,8 +67,7 @@ func (c AssembleGenesisRequest) nodeNames() []string {
 }
 
 // NewGenesisAssembler creates an assembler targeting the given home directory.
-// The CommandRunner parameter is ignored (kept for call-site compatibility).
-func NewGenesisAssembler(homeDir string, _ CommandRunner, s3Factory S3ClientFactory, uploaderFactory seis3.UploaderFactory) *GenesisAssembler {
+func NewGenesisAssembler(homeDir, bucket, region, chainID string, s3Factory S3ClientFactory, uploaderFactory seis3.UploaderFactory) *GenesisAssembler {
 	if s3Factory == nil {
 		s3Factory = DefaultS3ClientFactory
 	}
@@ -76,24 +76,16 @@ func NewGenesisAssembler(homeDir string, _ CommandRunner, s3Factory S3ClientFact
 	}
 	return &GenesisAssembler{
 		homeDir:           homeDir,
+		bucket:            bucket,
+		region:            region,
+		chainID:           chainID,
 		s3ClientFactory:   s3Factory,
 		s3UploaderFactory: uploaderFactory,
 	}
 }
 
 // Handler returns an engine.TaskHandler for the assemble-and-upload-genesis task type.
-//
-// Expected params:
-//
-//	{
-//	  "s3Bucket":   "...",
-//	  "s3Prefix":   "...",
-//	  "s3Region":   "...",
-//	  "chainId":    "...",
-//	  "namespace":  "...",
-//	  "accountBalance": "...",
-//	  "nodes":      [{"name": "node-0"}, {"name": "node-1"}, ...]
-//	}
+// S3 coordinates are derived from the sidecar's environment.
 func (a *GenesisAssembler) Handler() engine.TaskHandler {
 	return engine.TypedHandler(func(ctx context.Context, cfg AssembleGenesisRequest) error {
 		if markerExists(a.homeDir, assembleMarkerFile) {
@@ -101,12 +93,6 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return nil
 		}
 
-		if cfg.Bucket == "" {
-			return fmt.Errorf("assemble-genesis: missing required param 's3Bucket'")
-		}
-		if cfg.Region == "" {
-			return fmt.Errorf("assemble-genesis: missing required param 's3Region'")
-		}
 		if cfg.AccountBalance == "" {
 			return fmt.Errorf("assemble-genesis: missing required param 'accountBalance'")
 		}
@@ -152,7 +138,7 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 // downloadGentxFiles fetches each node's gentx.json from S3 and writes
 // it to the local config/gentx/ directory.
 func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleGenesisRequest, nodes []string) error {
-	s3Client, err := a.s3ClientFactory(ctx, cfg.Region)
+	s3Client, err := a.s3ClientFactory(ctx, a.region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: building S3 client: %w", err)
 	}
@@ -162,7 +148,7 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleG
 		return fmt.Errorf("assemble-genesis: creating gentx dir: %w", err)
 	}
 
-	prefix := normalizePrefix(cfg.Prefix)
+	prefix := a.chainID + "/"
 
 	downloaded := make(map[string]bool, len(nodes))
 	for _, nodeName := range nodes {
@@ -170,7 +156,7 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleG
 		assembleLog.Info("downloading gentx", "node", nodeName, "key", key)
 
 		output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
-			Bucket: aws.String(cfg.Bucket),
+			Bucket: aws.String(a.bucket),
 			Key:    aws.String(key),
 		})
 		if err != nil {
@@ -364,16 +350,16 @@ func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg AssembleGenesi
 		return fmt.Errorf("assemble-genesis: reading genesis.json: %w", err)
 	}
 
-	uploader, err := a.s3UploaderFactory(ctx, cfg.Region)
+	uploader, err := a.s3UploaderFactory(ctx, a.region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: building S3 uploader: %w", err)
 	}
 
-	key := normalizePrefix(cfg.Prefix) + "genesis.json"
+	key := a.chainID + "/" + "genesis.json"
 	assembleLog.Info("uploading assembled genesis", "key", key)
 
 	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket:      aws.String(cfg.Bucket),
+		Bucket:      aws.String(a.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(data),
 		ContentType: aws.String("application/json"),
@@ -388,18 +374,18 @@ func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg AssembleGenesi
 // it to S3 alongside genesis.json. Each entry is a full Tendermint peer address
 // using in-cluster DNS: <nodeID>@<name>-0.<name>.<namespace>.svc.cluster.local:26656
 func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg AssembleGenesisRequest, nodes []string) error {
-	s3Client, err := a.s3ClientFactory(ctx, cfg.Region)
+	s3Client, err := a.s3ClientFactory(ctx, a.region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: building S3 client for peers: %w", err)
 	}
 
-	prefix := normalizePrefix(cfg.Prefix)
+	prefix := a.chainID + "/"
 	var peers []string
 
 	for _, nodeName := range nodes {
 		key := fmt.Sprintf("%s%s/identity.json", prefix, nodeName)
 		output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
-			Bucket: aws.String(cfg.Bucket),
+			Bucket: aws.String(a.bucket),
 			Key:    aws.String(key),
 		})
 		if err != nil {
@@ -437,7 +423,7 @@ func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg AssembleGenesisR
 		return fmt.Errorf("assemble-genesis: marshaling peers.json: %w", err)
 	}
 
-	uploader, err := a.s3UploaderFactory(ctx, cfg.Region)
+	uploader, err := a.s3UploaderFactory(ctx, a.region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: building S3 uploader for peers: %w", err)
 	}
@@ -446,7 +432,7 @@ func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg AssembleGenesisR
 	assembleLog.Info("uploading peers.json", "key", peersKey, "count", len(peers))
 
 	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket:      aws.String(cfg.Bucket),
+		Bucket:      aws.String(a.bucket),
 		Key:         aws.String(peersKey),
 		Body:        bytes.NewReader(peersJSON),
 		ContentType: aws.String("application/json"),

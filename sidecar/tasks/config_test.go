@@ -189,18 +189,12 @@ persistent-peers = ""
 	}
 }
 
-func TestConfigPatcherHandlerNoOpsOnEmptyFiles(t *testing.T) {
-	homeDir := t.TempDir()
-	setupConfigFile(t, homeDir, `
-[p2p]
-persistent-peers = ""
-`)
-
-	patcher := NewConfigPatcher(homeDir)
+func TestConfigPatcherHandlerRejectsEmptyFiles(t *testing.T) {
+	patcher := NewConfigPatcher(t.TempDir())
 	handler := patcher.Handler()
 	err := handler(context.Background(), map[string]any{})
-	if err != nil {
-		t.Fatalf("expected no error for empty params, got %v", err)
+	if err == nil {
+		t.Fatal("expected error for empty files, got nil")
 	}
 }
 

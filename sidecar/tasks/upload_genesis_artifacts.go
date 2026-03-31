@@ -22,9 +22,6 @@ const artifactUploadMarkerFile = ".sei-sidecar-artifact-upload-done"
 
 // UploadArtifactsRequest holds the typed parameters for the upload-genesis-artifacts task.
 type UploadArtifactsRequest struct {
-	Bucket   string `json:"s3Bucket"`
-	Prefix   string `json:"s3Prefix"`
-	Region   string `json:"s3Region"`
 	NodeName string `json:"nodeName"`
 }
 
@@ -32,27 +29,28 @@ type UploadArtifactsRequest struct {
 // manifest to S3 so the assembler can collect them.
 type GenesisArtifactUploader struct {
 	homeDir           string
+	bucket            string
+	region            string
+	chainID           string
 	s3UploaderFactory seis3.UploaderFactory
 }
 
 // NewGenesisArtifactUploader creates an uploader targeting the given home directory.
-func NewGenesisArtifactUploader(homeDir string, factory seis3.UploaderFactory) *GenesisArtifactUploader {
+// Bucket, region, and chainID are read from environment at construction time.
+func NewGenesisArtifactUploader(homeDir, bucket, region, chainID string, factory seis3.UploaderFactory) *GenesisArtifactUploader {
 	if factory == nil {
 		factory = seis3.DefaultUploaderFactory
 	}
-	return &GenesisArtifactUploader{homeDir: homeDir, s3UploaderFactory: factory}
+	return &GenesisArtifactUploader{
+		homeDir:           homeDir,
+		bucket:            bucket,
+		region:            region,
+		chainID:           chainID,
+		s3UploaderFactory: factory,
+	}
 }
 
 // Handler returns an engine.TaskHandler for the upload-genesis-artifacts task type.
-//
-// Expected params:
-//
-//	{"s3Bucket": "...", "s3Prefix": "...", "s3Region": "...", "nodeName": "..."}
-//
-// Uploads two objects:
-//
-//	<prefix>/<nodeName>/gentx.json   - the validator's genesis transaction
-//	<prefix>/<nodeName>/identity.json - node ID and validator pubkey metadata
 func (u *GenesisArtifactUploader) Handler() engine.TaskHandler {
 	return engine.TypedHandler(func(ctx context.Context, cfg UploadArtifactsRequest) error {
 		if markerExists(u.homeDir, artifactUploadMarkerFile) {
@@ -60,33 +58,27 @@ func (u *GenesisArtifactUploader) Handler() engine.TaskHandler {
 			return nil
 		}
 
-		if cfg.Bucket == "" {
-			return fmt.Errorf("upload-genesis-artifacts: missing required param 's3Bucket'")
-		}
-		if cfg.Region == "" {
-			return fmt.Errorf("upload-genesis-artifacts: missing required param 's3Region'")
-		}
 		if cfg.NodeName == "" {
 			return fmt.Errorf("upload-genesis-artifacts: missing required param 'nodeName'")
 		}
 
-		uploader, err := u.s3UploaderFactory(ctx, cfg.Region)
+		uploader, err := u.s3UploaderFactory(ctx, u.region)
 		if err != nil {
 			return fmt.Errorf("upload-genesis-artifacts: building S3 uploader: %w", err)
 		}
 
-		prefix := normalizePrefix(cfg.Prefix)
+		prefix := u.chainID + "/"
 		nodePrefix := prefix + cfg.NodeName + "/"
 
-		if err := u.uploadGentx(ctx, uploader, cfg.Bucket, nodePrefix); err != nil {
+		if err := u.uploadGentx(ctx, uploader, u.bucket, nodePrefix); err != nil {
 			return err
 		}
 
-		if err := u.uploadIdentity(ctx, uploader, cfg.Bucket, nodePrefix); err != nil {
+		if err := u.uploadIdentity(ctx, uploader, u.bucket, nodePrefix); err != nil {
 			return err
 		}
 
-		artifactLog.Info("artifacts uploaded", "bucket", cfg.Bucket, "prefix", nodePrefix)
+		artifactLog.Info("artifacts uploaded", "bucket", u.bucket, "prefix", nodePrefix)
 		return writeMarker(u.homeDir, artifactUploadMarkerFile)
 	})
 }

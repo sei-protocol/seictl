@@ -45,7 +45,7 @@ func NewConfigPatcher(homeDir string) *ConfigPatcher {
 func (p *ConfigPatcher) Handler() engine.TaskHandler {
 	return engine.TypedHandler(func(ctx context.Context, params ConfigPatchRequest) error {
 		if len(params.Files) == 0 {
-			return nil
+			return fmt.Errorf("config-patch: at least one file is required")
 		}
 		// Convert to map[string]any for PatchFiles (public API).
 		files := make(map[string]any, len(params.Files))

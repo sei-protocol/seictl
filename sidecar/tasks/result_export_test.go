@@ -162,8 +162,11 @@ func TestExportS3UploaderFactoryError(t *testing.T) {
 		Region:      "us-east-1",
 		RPCEndpoint: srv.URL,
 	})
-	if err != nil {
-		t.Fatalf("Export() returned error %v, want nil (fail-safe)", err)
+	if err == nil {
+		t.Fatal("expected error when S3 uploader factory fails")
+	}
+	if !strings.Contains(err.Error(), "simulated AWS error") {
+		t.Errorf("expected simulated AWS error, got: %v", err)
 	}
 }
 

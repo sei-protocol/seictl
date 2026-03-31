@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -46,66 +44,60 @@ type GenesisS3Config struct {
 }
 
 // ConfigureGenesisRequest holds the typed parameters for the configure-genesis task.
-type ConfigureGenesisRequest struct {
-	URI    string `json:"uri"`
-	Region string `json:"region"`
-}
+// All fields are optional — the fetcher resolves genesis from the chain ID using
+// embedded config or S3 fallback.
+type ConfigureGenesisRequest struct{}
 
-// GenesisFetcher writes genesis.json to the config directory. When S3 params
-// are provided in the task, it downloads from S3. Otherwise it writes the
-// embedded genesis for the configured chain ID (from SEI_CHAIN_ID).
+// GenesisFetcher writes genesis.json to the config directory. It first checks
+// for an embedded genesis in sei-config for the chain ID. If not found, it
+// falls back to downloading from S3 at {bucket}/{chainID}/genesis.json.
 type GenesisFetcher struct {
 	homeDir         string
 	chainID         string
+	genesisBucket   string
+	genesisRegion   string
 	s3ClientFactory S3ClientFactory
 }
 
 // NewGenesisFetcher creates a fetcher targeting the given home directory.
 // chainID is the chain this sidecar is running for (typically from SEI_CHAIN_ID).
-// When a task has no S3 params, the fetcher writes embedded genesis for this chain.
-func NewGenesisFetcher(homeDir string, chainID string, factory S3ClientFactory) *GenesisFetcher {
+// genesisBucket and genesisRegion configure the S3 fallback location when the
+// chain is not embedded in sei-config.
+func NewGenesisFetcher(homeDir, chainID, genesisBucket, genesisRegion string, factory S3ClientFactory) *GenesisFetcher {
 	if factory == nil {
 		factory = DefaultS3ClientFactory
 	}
 	return &GenesisFetcher{
 		homeDir:         homeDir,
 		chainID:         chainID,
+		genesisBucket:   genesisBucket,
+		genesisRegion:   genesisRegion,
 		s3ClientFactory: factory,
 	}
 }
 
-// Handler returns an engine.TaskHandler that parses params and delegates to
-// the appropriate genesis source.
+// Handler returns an engine.TaskHandler that resolves genesis from embedded
+// config or S3 fallback. No task parameters are required.
 func (g *GenesisFetcher) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params ConfigureGenesisRequest) error {
+	return engine.TypedHandler(func(ctx context.Context, _ ConfigureGenesisRequest) error {
 		if markerExists(g.homeDir, genesisMarkerFile) {
 			genesisLog.Debug("already completed, skipping")
 			return nil
 		}
 
-		if params.URI == "" {
+		// Try embedded genesis first.
+		if _, err := seiconfig.GenesisForChain(g.chainID); err == nil {
 			return g.writeEmbeddedGenesis()
 		}
 
-		if params.Region == "" {
-			return fmt.Errorf("configure-genesis: 'region' is required when 'uri' is set")
+		// Fall back to S3.
+		if g.genesisBucket == "" || g.genesisRegion == "" {
+			return fmt.Errorf("configure-genesis: chain %q is not embedded and SEI_GENESIS_BUCKET/SEI_GENESIS_REGION are not set", g.chainID)
 		}
 
-		parsed, err := url.Parse(params.URI)
-		if err != nil {
-			return fmt.Errorf("configure-genesis: invalid uri %q: %w", params.URI, err)
-		}
-		if parsed.Scheme != "s3" {
-			return fmt.Errorf("configure-genesis: uri must use s3:// scheme, got %q", parsed.Scheme)
-		}
-
-		bucket := parsed.Host
-		key := strings.TrimPrefix(parsed.Path, "/")
-		if bucket == "" || key == "" {
-			return fmt.Errorf("configure-genesis: uri must be s3://bucket/key, got %q", params.URI)
-		}
-
-		return g.fetchFromS3(ctx, GenesisS3Config{Bucket: bucket, Key: key, Region: params.Region})
+		key := g.chainID + "/genesis.json"
+		genesisLog.Info("chain not embedded, fetching from S3", "chainId", g.chainID, "bucket", g.genesisBucket, "key", key)
+		return g.fetchFromS3(ctx, GenesisS3Config{Bucket: g.genesisBucket, Key: key, Region: g.genesisRegion})
 	})
 }
 
