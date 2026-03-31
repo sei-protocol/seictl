@@ -313,6 +313,27 @@ func normalizePrefix(prefix string) string {
 	return prefix
 }
 
+// parseUploadConfig converts raw params into SnapshotUploadRequest with validation.
+func parseUploadConfig(params map[string]any) (SnapshotUploadRequest, error) {
+	var cfg SnapshotUploadRequest
+	if b, _ := params["bucket"].(string); b != "" {
+		cfg.Bucket = b
+	}
+	if p, _ := params["prefix"].(string); p != "" {
+		cfg.Prefix = p
+	}
+	if r, _ := params["region"].(string); r != "" {
+		cfg.Region = r
+	}
+	if cfg.Bucket == "" {
+		return cfg, fmt.Errorf("snapshot-upload: missing required param 'bucket'")
+	}
+	if cfg.Region == "" {
+		return cfg, fmt.Errorf("snapshot-upload: missing required param 'region'")
+	}
+	return cfg, nil
+}
+
 func (u *SnapshotUploader) readUploadState() uploadState {
 	data, err := os.ReadFile(filepath.Join(u.homeDir, uploadStateFile))
 	if err != nil {
