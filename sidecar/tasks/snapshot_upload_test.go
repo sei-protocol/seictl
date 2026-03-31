@@ -234,4 +234,3 @@ func TestNormalizePrefix(t *testing.T) {
 		}
 	}
 }
-
