@@ -99,7 +99,7 @@ func TestUpload_UploadsArchiveAndLatestTxt(t *testing.T) {
 	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
 
 	mock := newMockS3Uploader()
-	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))
+	uploader := NewSnapshotUploader(homeDir, 0, mockUploaderFactory(mock))
 
 	err := uploader.Upload(context.Background(), SnapshotUploadConfig{
 		Bucket: "my-bucket",
@@ -132,7 +132,7 @@ func TestUpload_SkipsWhenAlreadyUploaded(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
 	mock := newMockS3Uploader()
-	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))
+	uploader := NewSnapshotUploader(homeDir, 0, mockUploaderFactory(mock))
 
 	err := uploader.Upload(context.Background(), SnapshotUploadConfig{
 		Bucket: "my-bucket",
@@ -157,7 +157,7 @@ func TestUpload_UploadsNewerSnapshot(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
 	mock := newMockS3Uploader()
-	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))
+	uploader := NewSnapshotUploader(homeDir, 0, mockUploaderFactory(mock))
 
 	err := uploader.Upload(context.Background(), SnapshotUploadConfig{
 		Bucket: "my-bucket",
@@ -178,7 +178,7 @@ func TestUpload_NoOpsWhenTooFewSnapshots(t *testing.T) {
 	setupSnapshotDirs(t, homeDir, []int64{1000})
 
 	mock := newMockS3Uploader()
-	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))
+	uploader := NewSnapshotUploader(homeDir, 0, mockUploaderFactory(mock))
 
 	err := uploader.Upload(context.Background(), SnapshotUploadConfig{
 		Bucket: "my-bucket",
@@ -199,7 +199,7 @@ func TestUpload_WritesUploadState(t *testing.T) {
 	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
 
 	mock := newMockS3Uploader()
-	uploader := NewSnapshotUploader(homeDir, mockUploaderFactory(mock))
+	uploader := NewSnapshotUploader(homeDir, 0, mockUploaderFactory(mock))
 
 	err := uploader.Upload(context.Background(), SnapshotUploadConfig{
 		Bucket: "my-bucket",

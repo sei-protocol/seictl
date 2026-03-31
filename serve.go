@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seictl/sidecar/server"
@@ -40,6 +41,13 @@ var serveCmd = cli.Command{
 		port := cmd.String("port")
 		chainID := os.Getenv("SEI_CHAIN_ID")
 
+		var snapshotUploadInterval time.Duration
+		if raw := os.Getenv("SEI_SNAPSHOT_UPLOAD_INTERVAL"); raw != "" {
+			if parsed, err := time.ParseDuration(raw); err == nil {
+				snapshotUploadInterval = parsed
+			}
+		}
+
 		if err := tasks.EnsureDefaultConfig(homeDir); err != nil {
 			return fmt.Errorf("home directory init failed: %w", err)
 		}
@@ -59,7 +67,7 @@ var serveCmd = cli.Command{
 			engine.TaskMarkReady:                tasks.MarkReadyHandler(),
 			engine.TaskConfigureGenesis:         tasks.NewGenesisFetcher(homeDir, chainID, nil).Handler(),
 			engine.TaskConfigureStateSync:       tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
-			engine.TaskSnapshotUpload:           tasks.NewSnapshotUploader(homeDir, nil).Handler(),
+			engine.TaskSnapshotUpload:           tasks.NewSnapshotUploader(homeDir, snapshotUploadInterval, nil).Handler(),
 			engine.TaskResultExport:             tasks.NewResultExporter(homeDir, nil).Handler(),
 			engine.TaskAwaitCondition:           tasks.NewConditionWaiter(nil).Handler(),
 			engine.TaskGenerateIdentity:         tasks.NewIdentityGenerator(homeDir, nil).Handler(),
