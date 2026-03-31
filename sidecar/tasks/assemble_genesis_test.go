@@ -43,13 +43,13 @@ func TestAssembler_DownloadsGentxFiles(t *testing.T) {
 
 	assembler := NewGenesisAssembler(homeDir, nil, s3Factory, mockUploaderFactory(newMockS3Uploader()))
 
-	cfg := assembleConfig{
+	cfg := AssembleGenesisRequest{
 		Bucket:         "my-bucket",
 		Prefix:         "genesis/",
 		Region:         "us-west-2",
 		AccountBalance: "10000000usei",
 		Namespace:      "default",
-		Nodes:          []assembleNodeEntry{{Name: "val-0"}, {Name: "val-1"}},
+		Nodes:          []AssembleNodeEntry{{Name: "val-0"}, {Name: "val-1"}},
 	}
 
 	nodes := cfg.nodeNames()
@@ -107,9 +107,9 @@ func TestAssembler_S3DownloadFailure(t *testing.T) {
 }
 
 func TestParseAssembleNodes(t *testing.T) {
-	// Test that assembleNodeEntry JSON round-trips correctly.
+	// Test that AssembleNodeEntry JSON round-trips correctly.
 	raw := `[{"name":"val-0"},{"name":"val-1"}]`
-	var nodes []assembleNodeEntry
+	var nodes []AssembleNodeEntry
 	if err := json.Unmarshal([]byte(raw), &nodes); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestParseAssembleNodes(t *testing.T) {
 func TestParseAssembleNodes_MissingName(t *testing.T) {
 	// Test that empty names are caught by the handler validation.
 	raw := `[{"other":"field"}]`
-	var nodes []assembleNodeEntry
+	var nodes []AssembleNodeEntry
 	if err := json.Unmarshal([]byte(raw), &nodes); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

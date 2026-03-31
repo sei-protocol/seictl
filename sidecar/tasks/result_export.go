@@ -32,8 +32,8 @@ const (
 
 var defaultRPCEndpoint = fmt.Sprintf("http://localhost:%d", seiconfig.PortRPC)
 
-// ResultExportConfig holds the parameters for the result-export task.
-type ResultExportConfig struct {
+// ResultExportRequest holds the parameters for the result-export task.
+type ResultExportRequest struct {
 	Bucket      string `json:"bucket"`
 	Prefix      string `json:"prefix"`
 	Region      string `json:"region"`
@@ -64,7 +64,7 @@ func NewResultExporter(homeDir string, factory seis3.UploaderFactory) *ResultExp
 }
 
 func (e *ResultExporter) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, cfg ResultExportConfig) error {
+	return engine.TypedHandler(func(ctx context.Context, cfg ResultExportRequest) error {
 		if cfg.Bucket == "" {
 			return fmt.Errorf("result-export: missing required param 'bucket'")
 		}
@@ -84,7 +84,7 @@ func (e *ResultExporter) Handler() engine.TaskHandler {
 // Export queries the local node for block results and uploads pages to S3.
 // Each invocation exports as many complete pages as are available since the
 // last export height. The state file tracks progress across invocations.
-func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportConfig) error {
+func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportRequest) error {
 	last := e.readExportState()
 	startHeight := last.LastExportedHeight + 1
 

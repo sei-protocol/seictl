@@ -17,8 +17,8 @@ import (
 
 var genesisPeersLog = seilog.NewLogger("seictl", "task", "set-genesis-peers")
 
-// genesisPeersConfig holds the typed parameters for the set-genesis-peers task.
-type genesisPeersConfig struct {
+// SetGenesisPeersRequest holds the typed parameters for the set-genesis-peers task.
+type SetGenesisPeersRequest struct {
 	Bucket string `json:"s3Bucket"`
 	Key    string `json:"s3Key"`
 	Region string `json:"s3Region"`
@@ -46,7 +46,7 @@ func NewGenesisPeersSetter(homeDir string, s3Factory S3ClientFactory) *GenesisPe
 //
 //	{"s3Bucket": "...", "s3Key": "...", "s3Region": "..."}
 func (g *GenesisPeersSetter) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, cfg genesisPeersConfig) error {
+	return engine.TypedHandler(func(ctx context.Context, cfg SetGenesisPeersRequest) error {
 		if cfg.Bucket == "" {
 			return fmt.Errorf("set-genesis-peers: missing required param 's3Bucket'")
 		}

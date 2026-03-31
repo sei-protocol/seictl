@@ -46,8 +46,8 @@ const (
 	validatorKeyName = "validator"
 )
 
-// gentxParams holds the typed parameters for the generate-gentx task.
-type gentxParams struct {
+// GenerateGentxRequest holds the typed parameters for the generate-gentx task.
+type GenerateGentxRequest struct {
 	ChainID        string `json:"chainId"`
 	StakingAmount  string `json:"stakingAmount"`
 	AccountBalance string `json:"accountBalance"`
@@ -77,7 +77,7 @@ func NewGentxGenerator(homeDir string, _ CommandRunner) *GentxGenerator {
 //	  "genesisParams":  "" (optional, reserved for future genesis customization)
 //	}
 func (g *GentxGenerator) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params gentxParams) error {
+	return engine.TypedHandler(func(ctx context.Context, params GenerateGentxRequest) error {
 		if markerExists(g.homeDir, gentxMarkerFile) {
 			gentxLog.Debug("already completed, skipping")
 			return nil

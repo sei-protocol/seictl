@@ -14,10 +14,10 @@ import (
 
 var patchLog = seilog.NewLogger("seictl", "task", "config-patch")
 
-// configPatchParams holds the typed parameters for the config-patch task.
+// ConfigPatchRequest holds the typed parameters for the config-patch task.
 // Files is intentionally map[string]map[string]any because TOML patches
 // are inherently untyped.
-type configPatchParams struct {
+type ConfigPatchRequest struct {
 	Files map[string]map[string]any `json:"files"`
 }
 
@@ -43,7 +43,7 @@ func NewConfigPatcher(homeDir string) *ConfigPatcher {
 //	  }
 //	}
 func (p *ConfigPatcher) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params configPatchParams) error {
+	return engine.TypedHandler(func(ctx context.Context, params ConfigPatchRequest) error {
 		if len(params.Files) == 0 {
 			return nil
 		}

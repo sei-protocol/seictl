@@ -30,8 +30,8 @@ const SnapshotHeightFile = ".sei-sidecar-snapshot-height"
 // snapshotHeightRe extracts heights from S3 keys like snapshot_198030000_pacific-1_eu-central-1.tar.gz.
 var snapshotHeightRe = regexp.MustCompile(`snapshot_(\d+)_`)
 
-// SnapshotConfig holds S3 coordinates for snapshot download.
-type SnapshotConfig struct {
+// SnapshotRestoreRequest holds S3 coordinates for snapshot download.
+type SnapshotRestoreRequest struct {
 	Bucket  string `json:"bucket"`
 	Prefix  string `json:"prefix"`
 	Region  string `json:"region"`
@@ -58,7 +58,7 @@ func NewSnapshotRestorer(homeDir string, factory seis3.TransferClientFactory) *S
 
 // Handler returns an engine.TaskHandler for the snapshot-restore task.
 func (r *SnapshotRestorer) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, cfg SnapshotConfig) error {
+	return engine.TypedHandler(func(ctx context.Context, cfg SnapshotRestoreRequest) error {
 		if cfg.Bucket == "" {
 			return fmt.Errorf("snapshot-restore: missing required param 'bucket'")
 		}
@@ -79,7 +79,7 @@ func (r *SnapshotRestorer) Handler() engine.TaskHandler {
 // It reads latest.txt to resolve the current snapshot key, then uses the transfer
 // manager's DownloadObject (io.WriterAt path) for parallel byte-range downloads
 // to a temp file, and finally streams the temp file through gzip+tar extraction.
-func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) error {
+func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotRestoreRequest) error {
 	if markerExists(r.homeDir, snapshotMarkerFile) {
 		restoreLog.Debug("already completed, skipping")
 		return nil
@@ -149,7 +149,7 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotConfig) erro
 }
 
 // resolveSnapshotKey reads <prefix>latest.txt to find the current snapshot object key.
-func resolveSnapshotKey(ctx context.Context, client seis3.TransferClient, cfg SnapshotConfig) (string, error) {
+func resolveSnapshotKey(ctx context.Context, client seis3.TransferClient, cfg SnapshotRestoreRequest) (string, error) {
 	var buf seis3.WriteAtBuffer
 	_, err := client.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
 		Bucket:   aws.String(cfg.Bucket),

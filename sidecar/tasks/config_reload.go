@@ -11,8 +11,8 @@ import (
 
 var reloadLog = seilog.NewLogger("seictl", "task", "config-reload")
 
-// configReloadParams holds the typed parameters for the config-reload task.
-type configReloadParams struct {
+// ConfigReloadRequest holds the typed parameters for the config-reload task.
+type ConfigReloadRequest struct {
 	Fields map[string]string `json:"fields"`
 }
 
@@ -30,7 +30,7 @@ func NewConfigReloader(homeDir string) *ConfigReloader {
 
 // Handler returns an engine.TaskHandler for the config-reload task type.
 func (r *ConfigReloader) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(_ context.Context, params configReloadParams) error {
+	return engine.TypedHandler(func(_ context.Context, params ConfigReloadRequest) error {
 		if len(params.Fields) == 0 {
 			return fmt.Errorf("config-reload: at least one field is required")
 		}

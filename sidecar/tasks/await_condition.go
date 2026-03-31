@@ -20,8 +20,8 @@ const (
 	heightPollInterval = 100 * time.Millisecond
 )
 
-// awaitConditionParams holds the typed parameters for the await-condition task.
-type awaitConditionParams struct {
+// AwaitConditionRequest holds the typed parameters for the await-condition task.
+type AwaitConditionRequest struct {
 	Condition    string `json:"condition"`
 	Action       string `json:"action"`
 	TargetHeight int64  `json:"targetHeight"`
@@ -43,7 +43,7 @@ func NewConditionWaiter(rpcClient *rpc.StatusClient) *ConditionWaiter {
 
 // Handler returns an engine.TaskHandler for the await-condition task type.
 func (w *ConditionWaiter) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params awaitConditionParams) error {
+	return engine.TypedHandler(func(ctx context.Context, params AwaitConditionRequest) error {
 		if params.Condition == "" {
 			return fmt.Errorf("condition is required")
 		}

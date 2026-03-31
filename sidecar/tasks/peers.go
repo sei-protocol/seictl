@@ -61,13 +61,13 @@ type StaticSource struct {
 	Addresses []string
 }
 
-// peerDiscoverParams holds the typed parameters for the discover-peers task.
-type peerDiscoverParams struct {
-	Sources []peerSourceConfig `json:"sources"`
+// DiscoverPeersRequest holds the typed parameters for the discover-peers task.
+type DiscoverPeersRequest struct {
+	Sources []PeerSourceEntry `json:"sources"`
 }
 
-// peerSourceConfig represents a single peer source in the params JSON.
-type peerSourceConfig struct {
+// PeerSourceEntry represents a single peer source in the params JSON.
+type PeerSourceEntry struct {
 	Type      string            `json:"type"`
 	Region    string            `json:"region,omitempty"`
 	Tags      map[string]string `json:"tags,omitempty"`
@@ -168,7 +168,7 @@ func NewPeerDiscoverer(homeDir string, ec2Factory EC2ClientFactory, nodeIDQuerie
 //
 //	{"sources": [{"type": "ec2Tags", "region": "...", "tags": {...}}, ...]}
 func (d *PeerDiscoverer) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params peerDiscoverParams) error {
+	return engine.TypedHandler(func(ctx context.Context, params DiscoverPeersRequest) error {
 		if len(params.Sources) == 0 {
 			return fmt.Errorf("discover-peers: missing required param 'sources'")
 		}
@@ -215,7 +215,7 @@ func discoverFromSources(ctx context.Context, sources []PeerSource) ([]string, e
 }
 
 // buildSources converts typed source configs into PeerSource instances.
-func (d *PeerDiscoverer) buildSources(configs []peerSourceConfig) ([]PeerSource, error) {
+func (d *PeerDiscoverer) buildSources(configs []PeerSourceEntry) ([]PeerSource, error) {
 	var sources []PeerSource
 	for i, cfg := range configs {
 		switch cfg.Type {

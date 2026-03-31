@@ -45,8 +45,8 @@ type GenesisS3Config struct {
 	Region string
 }
 
-// genesisParams holds the typed parameters for the configure-genesis task.
-type genesisParams struct {
+// ConfigureGenesisRequest holds the typed parameters for the configure-genesis task.
+type ConfigureGenesisRequest struct {
 	URI    string `json:"uri"`
 	Region string `json:"region"`
 }
@@ -77,7 +77,7 @@ func NewGenesisFetcher(homeDir string, chainID string, factory S3ClientFactory) 
 // Handler returns an engine.TaskHandler that parses params and delegates to
 // the appropriate genesis source.
 func (g *GenesisFetcher) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params genesisParams) error {
+	return engine.TypedHandler(func(ctx context.Context, params ConfigureGenesisRequest) error {
 		if markerExists(g.homeDir, genesisMarkerFile) {
 			genesisLog.Debug("already completed, skipping")
 			return nil

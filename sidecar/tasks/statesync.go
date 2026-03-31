@@ -56,13 +56,13 @@ func NewStateSyncConfigurer(homeDir string, client HTTPDoer) *StateSyncConfigure
 
 // Handler returns an engine.TaskHandler.
 func (s *StateSyncConfigurer) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params StateSyncParams) error {
+	return engine.TypedHandler(func(ctx context.Context, params StateSyncRequest) error {
 		return s.Configure(ctx, params)
 	})
 }
 
-// StateSyncParams groups the caller-provided parameters for state-sync configuration.
-type StateSyncParams struct {
+// StateSyncRequest groups the caller-provided parameters for state-sync configuration.
+type StateSyncRequest struct {
 	UseLocalSnapshot bool  `json:"useLocalSnapshot"`
 	TrustPeriod      string `json:"trustPeriod"`
 	BackfillBlocks   int64  `json:"backfillBlocks"`
@@ -72,7 +72,7 @@ type StateSyncParams struct {
 // trust point, and writes the state sync settings back to config.toml.
 // When UseLocalSnapshot is true, the trust height is derived from the
 // locally-restored snapshot and use-local-snapshot is set in config.toml.
-func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncParams) error {
+func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncRequest) error {
 	if markerExists(s.homeDir, stateSyncMarkerFile) {
 		ssLog.Debug("already completed, skipping")
 		return nil

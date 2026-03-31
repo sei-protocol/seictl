@@ -20,8 +20,8 @@ var artifactLog = seilog.NewLogger("seictl", "task", "upload-genesis-artifacts")
 
 const artifactUploadMarkerFile = ".sei-sidecar-artifact-upload-done"
 
-// artifactUploadConfig holds the typed parameters for the upload-genesis-artifacts task.
-type artifactUploadConfig struct {
+// UploadArtifactsRequest holds the typed parameters for the upload-genesis-artifacts task.
+type UploadArtifactsRequest struct {
 	Bucket   string `json:"s3Bucket"`
 	Prefix   string `json:"s3Prefix"`
 	Region   string `json:"s3Region"`
@@ -54,7 +54,7 @@ func NewGenesisArtifactUploader(homeDir string, factory seis3.UploaderFactory) *
 //	<prefix>/<nodeName>/gentx.json   - the validator's genesis transaction
 //	<prefix>/<nodeName>/identity.json - node ID and validator pubkey metadata
 func (u *GenesisArtifactUploader) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, cfg artifactUploadConfig) error {
+	return engine.TypedHandler(func(ctx context.Context, cfg UploadArtifactsRequest) error {
 		if markerExists(u.homeDir, artifactUploadMarkerFile) {
 			artifactLog.Debug("already completed, skipping")
 			return nil

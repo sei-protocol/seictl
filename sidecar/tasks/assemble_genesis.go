@@ -41,23 +41,23 @@ type GenesisAssembler struct {
 	s3UploaderFactory seis3.UploaderFactory
 }
 
-// assembleNodeEntry represents a single node in the "nodes" list param.
-type assembleNodeEntry struct {
+// AssembleNodeEntry represents a single node in the "nodes" list param.
+type AssembleNodeEntry struct {
 	Name string `json:"name"`
 }
 
-// assembleConfig holds the typed parameters for the assemble-and-upload-genesis task.
-type assembleConfig struct {
+// AssembleGenesisRequest holds the typed parameters for the assemble-and-upload-genesis task.
+type AssembleGenesisRequest struct {
 	Bucket         string              `json:"s3Bucket"`
 	Prefix         string              `json:"s3Prefix"`
 	Region         string              `json:"s3Region"`
 	AccountBalance string              `json:"accountBalance"`
 	Namespace      string              `json:"namespace"`
-	Nodes          []assembleNodeEntry `json:"nodes"`
+	Nodes          []AssembleNodeEntry `json:"nodes"`
 }
 
 // nodeNames returns the list of node name strings from the Nodes entries.
-func (c assembleConfig) nodeNames() []string {
+func (c AssembleGenesisRequest) nodeNames() []string {
 	names := make([]string, len(c.Nodes))
 	for i, n := range c.Nodes {
 		names[i] = n.Name
@@ -95,7 +95,7 @@ func NewGenesisAssembler(homeDir string, _ CommandRunner, s3Factory S3ClientFact
 //	  "nodes":      [{"name": "node-0"}, {"name": "node-1"}, ...]
 //	}
 func (a *GenesisAssembler) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, cfg assembleConfig) error {
+	return engine.TypedHandler(func(ctx context.Context, cfg AssembleGenesisRequest) error {
 		if markerExists(a.homeDir, assembleMarkerFile) {
 			assembleLog.Debug("already completed, skipping")
 			return nil
@@ -151,7 +151,7 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 
 // downloadGentxFiles fetches each node's gentx.json from S3 and writes
 // it to the local config/gentx/ directory.
-func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg assembleConfig, nodes []string) error {
+func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleGenesisRequest, nodes []string) error {
 	s3Client, err := a.s3ClientFactory(ctx, cfg.Region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: building S3 client: %w", err)
@@ -357,7 +357,7 @@ func (a *GenesisAssembler) collectGentxs() error {
 
 // uploadGenesis reads the assembled genesis.json and uploads it to S3
 // at <prefix>/genesis.json where all validators will fetch it from.
-func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg assembleConfig) error {
+func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg AssembleGenesisRequest) error {
 	genesisPath := filepath.Join(a.homeDir, "config", "genesis.json")
 	data, err := os.ReadFile(genesisPath)
 	if err != nil {
@@ -387,7 +387,7 @@ func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg assembleConfig
 // uploadPeers builds a peers.json from each node's identity.json and uploads
 // it to S3 alongside genesis.json. Each entry is a full Tendermint peer address
 // using in-cluster DNS: <nodeID>@<name>-0.<name>.<namespace>.svc.cluster.local:26656
-func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg assembleConfig, nodes []string) error {
+func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg AssembleGenesisRequest, nodes []string) error {
 	s3Client, err := a.s3ClientFactory(ctx, cfg.Region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: building S3 client for peers: %w", err)

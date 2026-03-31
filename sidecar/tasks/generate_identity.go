@@ -18,8 +18,8 @@ var identityLog = seilog.NewLogger("seictl", "task", "generate-identity")
 
 const identityMarkerFile = ".sei-sidecar-identity-done"
 
-// identityParams holds the typed parameters for the generate-identity task.
-type identityParams struct {
+// GenerateIdentityRequest holds the typed parameters for the generate-identity task.
+type GenerateIdentityRequest struct {
 	ChainID string `json:"chainId"`
 	Moniker string `json:"moniker"`
 }
@@ -41,7 +41,7 @@ func NewIdentityGenerator(homeDir string, _ CommandRunner) *IdentityGenerator {
 //
 // Expected params: {"chainId": "...", "moniker": "..."}
 func (g *IdentityGenerator) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params identityParams) error {
+	return engine.TypedHandler(func(ctx context.Context, params GenerateIdentityRequest) error {
 		if markerExists(g.homeDir, identityMarkerFile) {
 			identityLog.Debug("already completed, skipping")
 			return nil

@@ -104,7 +104,7 @@ func TestExportRPCUnavailable(t *testing.T) {
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
 
-	err := e.Export(context.Background(), ResultExportConfig{
+	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
 		Region:      "us-east-1",
 		RPCEndpoint: srv.URL,
@@ -124,7 +124,7 @@ func TestExportRPCNon200Status(t *testing.T) {
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
 
-	err := e.Export(context.Background(), ResultExportConfig{
+	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
 		Region:      "us-east-1",
 		RPCEndpoint: srv.URL,
@@ -157,7 +157,7 @@ func TestExportS3UploaderFactoryError(t *testing.T) {
 
 	e := NewResultExporter(tmpDir, failingUploaderFactory("simulated AWS error"))
 
-	err := e.Export(context.Background(), ResultExportConfig{
+	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
 		Region:      "us-east-1",
 		RPCEndpoint: srv.URL,
@@ -179,7 +179,7 @@ func TestExportWritesStateAfterPage(t *testing.T) {
 	}
 
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
-	err := e.Export(context.Background(), ResultExportConfig{
+	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
 		Prefix:      "results",
 		Region:      "us-east-1",
@@ -218,7 +218,7 @@ func TestExportHandler_MissingParams(t *testing.T) {
 }
 
 func TestExportConfigJSONRoundTrip(t *testing.T) {
-	cfg := ResultExportConfig{
+	cfg := ResultExportRequest{
 		Bucket:       "my-bucket",
 		Region:       "us-east-1",
 		RPCEndpoint:  "http://custom:26657",
@@ -228,7 +228,7 @@ func TestExportConfigJSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshaling: %v", err)
 	}
-	var decoded ResultExportConfig
+	var decoded ResultExportRequest
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshaling: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestExportAndCompare_DivergenceDetected(t *testing.T) {
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
 
-	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
 		Prefix:       "compare/",
 		Region:       "us-east-1",
@@ -326,7 +326,7 @@ func TestExportAndCompare_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	err := e.ExportAndCompare(ctx, ResultExportConfig{
+	err := e.ExportAndCompare(ctx, ResultExportRequest{
 		Bucket:       "test-bucket",
 		Region:       "us-east-1",
 		RPCEndpoint:  srv.URL,
@@ -344,7 +344,7 @@ func TestExportAndCompare_S3UploaderError(t *testing.T) {
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, failingUploaderFactory("AWS creds expired"))
 
-	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
 		Region:       "us-east-1",
 		RPCEndpoint:  srv.URL,
@@ -371,7 +371,7 @@ func TestExportAndCompare_ResumesFromExportState(t *testing.T) {
 	}
 
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
-	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
 		Region:       "us-east-1",
 		RPCEndpoint:  shadowSrv.URL,
@@ -401,7 +401,7 @@ func TestExportAndCompare_UploadsDivergenceReport(t *testing.T) {
 		return recorder, nil
 	})
 
-	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
 		Prefix:       "shadow/pacific-1/",
 		Region:       "us-east-1",

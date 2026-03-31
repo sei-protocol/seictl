@@ -1,2 +1,6 @@
 # Added by goreleaser init:
 dist/
+
+build/
+seictl
+report_scan.go
