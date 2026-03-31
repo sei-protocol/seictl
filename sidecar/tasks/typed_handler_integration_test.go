@@ -388,4 +388,3 @@ func TestDeserialize_GenerateGentx(t *testing.T) {
 		t.Errorf("expected chainId validation error, got: %v", err)
 	}
 }
-

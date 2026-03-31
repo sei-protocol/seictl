@@ -303,7 +303,6 @@ func addFileToTar(tw *tar.Writer, path, name string, info os.FileInfo) error {
 	return err
 }
 
-
 func normalizePrefix(prefix string) string {
 	if prefix == "" {
 		return ""

@@ -63,7 +63,7 @@ func (s *StateSyncConfigurer) Handler() engine.TaskHandler {
 
 // StateSyncRequest groups the caller-provided parameters for state-sync configuration.
 type StateSyncRequest struct {
-	UseLocalSnapshot bool  `json:"useLocalSnapshot"`
+	UseLocalSnapshot bool   `json:"useLocalSnapshot"`
 	TrustPeriod      string `json:"trustPeriod"`
 	BackfillBlocks   int64  `json:"backfillBlocks"`
 }
