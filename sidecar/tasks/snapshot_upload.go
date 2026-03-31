@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
@@ -23,7 +24,10 @@ import (
 
 var uploadLog = seilog.NewLogger("seictl", "task", "snapshot-upload")
 
-const uploadStateFile = ".sei-sidecar-last-upload.json"
+const (
+	uploadStateFile       = ".sei-sidecar-last-upload.json"
+	defaultUploadInterval = 7 * 24 * time.Hour // weekly
+)
 
 // SnapshotUploadConfig holds the parameters for the snapshot upload task.
 type SnapshotUploadConfig struct {
@@ -38,31 +42,62 @@ type uploadState struct {
 }
 
 // SnapshotUploader scans for locally produced Tendermint state-sync snapshots
-// and uploads new ones to S3.
+// and uploads new ones to S3. When submitted as a task, it runs in a loop
+// at the configured interval until the context is cancelled.
 type SnapshotUploader struct {
 	homeDir           string
+	uploadInterval    time.Duration
 	s3UploaderFactory seis3.UploaderFactory
 }
 
 // NewSnapshotUploader creates an uploader targeting the given home directory.
+// The upload interval is read from the SEI_SNAPSHOT_UPLOAD_INTERVAL env var
+// (e.g., "1h", "30m"). Defaults to 24h if unset or unparseable.
 func NewSnapshotUploader(homeDir string, factory seis3.UploaderFactory) *SnapshotUploader {
 	if factory == nil {
 		factory = seis3.DefaultUploaderFactory
 	}
+	interval := defaultUploadInterval
+	if raw := os.Getenv("SEI_SNAPSHOT_UPLOAD_INTERVAL"); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil {
+			interval = parsed
+		} else {
+			uploadLog.Warn("invalid SEI_SNAPSHOT_UPLOAD_INTERVAL, using default", "value", raw, "default", defaultUploadInterval)
+		}
+	}
 	return &SnapshotUploader{
 		homeDir:           homeDir,
+		uploadInterval:    interval,
 		s3UploaderFactory: factory,
 	}
 }
 
 // Handler returns an engine.TaskHandler for the snapshot-upload task.
+// The handler runs in a loop, attempting an upload on each tick and
+// sleeping for the configured interval between attempts. It stays
+// running until the context is cancelled.
 func (u *SnapshotUploader) Handler() engine.TaskHandler {
 	return func(ctx context.Context, params map[string]any) error {
 		cfg, err := parseUploadConfig(params)
 		if err != nil {
 			return err
 		}
-		return u.Upload(ctx, cfg)
+		return u.runLoop(ctx, cfg)
+	}
+}
+
+func (u *SnapshotUploader) runLoop(ctx context.Context, cfg SnapshotUploadConfig) error {
+	uploadLog.Info("starting snapshot upload loop", "interval", u.uploadInterval, "bucket", cfg.Bucket)
+	for {
+		if err := u.Upload(ctx, cfg); err != nil {
+			uploadLog.Warn("upload attempt failed, will retry next interval", "error", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(u.uploadInterval):
+		}
 	}
 }
 

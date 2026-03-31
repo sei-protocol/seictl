@@ -85,8 +85,7 @@ func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportConfig) err
 
 	latestHeight, err := queryLatestHeight(ctx, cfg.RPCEndpoint)
 	if err != nil {
-		exportLog.Warn("RPC unavailable, deferring to next scheduled run", "err", err)
-		return nil
+		return fmt.Errorf("querying latest height: %w", err)
 	}
 
 	if startHeight > latestHeight {
@@ -98,8 +97,7 @@ func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportConfig) err
 
 	uploader, err := e.s3UploaderFactory(ctx, cfg.Region)
 	if err != nil {
-		exportLog.Warn("failed to build S3 uploader, deferring to next scheduled run", "err", err)
-		return nil
+		return fmt.Errorf("building S3 uploader: %w", err)
 	}
 
 	prefix := normalizePrefix(cfg.Prefix)
@@ -124,9 +122,7 @@ func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportConfig) err
 			"bucket", cfg.Bucket)
 
 		if err := e.exportPage(ctx, cfg.RPCEndpoint, uploader, cfg.Bucket, prefix, pageStart, pageEnd); err != nil {
-			exportLog.Warn("page export failed, deferring remaining pages to next scheduled run",
-				"start", pageStart, "end", pageEnd, "err", err)
-			return nil
+			return fmt.Errorf("exporting page %d-%d: %w", pageStart, pageEnd, err)
 		}
 
 		if err := e.writeExportState(exportState{LastExportedHeight: pageEnd}); err != nil {
