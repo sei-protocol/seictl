@@ -611,23 +611,15 @@ func (t GenerateGentxTask) ToTaskRequest() TaskRequest {
 }
 
 // UploadGenesisArtifactsTask uploads identity.json and gentx.json to S3.
+// S3 coordinates are derived by the sidecar from its environment.
 type UploadGenesisArtifactsTask struct {
 	TaskMeta
-	S3Bucket string
-	S3Prefix string
-	S3Region string
 	NodeName string
 }
 
 func (t UploadGenesisArtifactsTask) TaskType() string { return TaskTypeUploadGenesisArtifacts }
 
 func (t UploadGenesisArtifactsTask) Validate() error {
-	if t.S3Bucket == "" {
-		return fmt.Errorf("upload-genesis-artifacts: missing required field S3Bucket")
-	}
-	if t.S3Region == "" {
-		return fmt.Errorf("upload-genesis-artifacts: missing required field S3Region")
-	}
 	if t.NodeName == "" {
 		return fmt.Errorf("upload-genesis-artifacts: missing required field NodeName")
 	}
@@ -636,9 +628,6 @@ func (t UploadGenesisArtifactsTask) Validate() error {
 
 func (t UploadGenesisArtifactsTask) ToTaskRequest() TaskRequest {
 	p := map[string]interface{}{
-		"s3Bucket": t.S3Bucket,
-		"s3Prefix": t.S3Prefix,
-		"s3Region": t.S3Region,
 		"nodeName": t.NodeName,
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
@@ -652,27 +641,15 @@ type GenesisNodeParam struct {
 }
 
 // AssembleAndUploadGenesisTask collects per-node artifacts and produces final genesis.json.
+// S3 coordinates are derived by the sidecar from its environment.
 type AssembleAndUploadGenesisTask struct {
 	TaskMeta
-	S3Bucket string
-	S3Prefix string
-	S3Region string
-	ChainID  string
-	Nodes    []GenesisNodeParam
+	Nodes []GenesisNodeParam
 }
 
 func (t AssembleAndUploadGenesisTask) TaskType() string { return TaskTypeAssembleGenesis }
 
 func (t AssembleAndUploadGenesisTask) Validate() error {
-	if t.S3Bucket == "" {
-		return fmt.Errorf("assemble-and-upload-genesis: missing required field S3Bucket")
-	}
-	if t.S3Region == "" {
-		return fmt.Errorf("assemble-and-upload-genesis: missing required field S3Region")
-	}
-	if t.ChainID == "" {
-		return fmt.Errorf("assemble-and-upload-genesis: missing required field ChainID")
-	}
 	if len(t.Nodes) == 0 {
 		return fmt.Errorf("assemble-and-upload-genesis: at least one node is required")
 	}
@@ -685,11 +662,7 @@ func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
 		nodes[i] = map[string]interface{}{"name": n.Name}
 	}
 	p := map[string]interface{}{
-		"s3Bucket": t.S3Bucket,
-		"s3Prefix": t.S3Prefix,
-		"s3Region": t.S3Region,
-		"chainId":  t.ChainID,
-		"nodes":    nodes,
+		"nodes": nodes,
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	t.applyMeta(&req)
