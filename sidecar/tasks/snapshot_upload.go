@@ -51,23 +51,16 @@ type SnapshotUploader struct {
 }
 
 // NewSnapshotUploader creates an uploader targeting the given home directory.
-// The upload interval is read from the SEI_SNAPSHOT_UPLOAD_INTERVAL env var
-// (e.g., "1h", "30m"). Defaults to 24h if unset or unparseable.
-func NewSnapshotUploader(homeDir string, factory seis3.UploaderFactory) *SnapshotUploader {
+func NewSnapshotUploader(homeDir string, uploadInterval time.Duration, factory seis3.UploaderFactory) *SnapshotUploader {
 	if factory == nil {
 		factory = seis3.DefaultUploaderFactory
 	}
-	interval := defaultUploadInterval
-	if raw := os.Getenv("SEI_SNAPSHOT_UPLOAD_INTERVAL"); raw != "" {
-		if parsed, err := time.ParseDuration(raw); err == nil {
-			interval = parsed
-		} else {
-			uploadLog.Warn("invalid SEI_SNAPSHOT_UPLOAD_INTERVAL, using default", "value", raw, "default", defaultUploadInterval)
-		}
+	if uploadInterval <= 0 {
+		uploadInterval = defaultUploadInterval
 	}
 	return &SnapshotUploader{
 		homeDir:           homeDir,
-		uploadInterval:    interval,
+		uploadInterval:    uploadInterval,
 		s3UploaderFactory: factory,
 	}
 }

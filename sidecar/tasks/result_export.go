@@ -85,7 +85,8 @@ func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportConfig) err
 
 	latestHeight, err := queryLatestHeight(ctx, cfg.RPCEndpoint)
 	if err != nil {
-		return fmt.Errorf("querying latest height: %w", err)
+		exportLog.Info("RPC unavailable, will retry", "err", err)
+		return nil
 	}
 
 	if startHeight > latestHeight {
