@@ -18,53 +18,48 @@ import (
 var genesisPeersLog = seilog.NewLogger("seictl", "task", "set-genesis-peers")
 
 // SetGenesisPeersRequest holds the typed parameters for the set-genesis-peers task.
-type SetGenesisPeersRequest struct {
-	Bucket string `json:"s3Bucket"`
-	Key    string `json:"s3Key"`
-	Region string `json:"s3Region"`
-}
+// S3 coordinates are derived from the sidecar's environment.
+type SetGenesisPeersRequest struct{}
 
 // GenesisPeersSetter downloads a peers.json file produced by the genesis
 // assembler and writes the entries into config.toml as persistent_peers,
 // filtering out the current node's own entry.
 type GenesisPeersSetter struct {
 	homeDir         string
+	bucket          string
+	region          string
+	chainID         string
 	s3ClientFactory S3ClientFactory
 }
 
 // NewGenesisPeersSetter creates a setter targeting the given home directory.
-func NewGenesisPeersSetter(homeDir string, s3Factory S3ClientFactory) *GenesisPeersSetter {
+func NewGenesisPeersSetter(homeDir, bucket, region, chainID string, s3Factory S3ClientFactory) *GenesisPeersSetter {
 	if s3Factory == nil {
 		s3Factory = DefaultS3ClientFactory
 	}
-	return &GenesisPeersSetter{homeDir: homeDir, s3ClientFactory: s3Factory}
+	return &GenesisPeersSetter{
+		homeDir:         homeDir,
+		bucket:          bucket,
+		region:          region,
+		chainID:         chainID,
+		s3ClientFactory: s3Factory,
+	}
 }
 
 // Handler returns an engine.TaskHandler for the set-genesis-peers task.
-//
-// Expected params:
-//
-//	{"s3Bucket": "...", "s3Key": "...", "s3Region": "..."}
+// The peers.json key is derived from the chain ID: {chainID}/peers.json.
 func (g *GenesisPeersSetter) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, cfg SetGenesisPeersRequest) error {
-		if cfg.Bucket == "" {
-			return fmt.Errorf("set-genesis-peers: missing required param 's3Bucket'")
-		}
-		if cfg.Key == "" {
-			return fmt.Errorf("set-genesis-peers: missing required param 's3Key'")
-		}
-		if cfg.Region == "" {
-			return fmt.Errorf("set-genesis-peers: missing required param 's3Region'")
-		}
+	return engine.TypedHandler(func(ctx context.Context, _ SetGenesisPeersRequest) error {
+		key := g.chainID + "/peers.json"
 
-		s3Client, err := g.s3ClientFactory(ctx, cfg.Region)
+		s3Client, err := g.s3ClientFactory(ctx, g.region)
 		if err != nil {
 			return fmt.Errorf("set-genesis-peers: building S3 client: %w", err)
 		}
 
 		output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
-			Bucket: aws.String(cfg.Bucket),
-			Key:    aws.String(cfg.Key),
+			Bucket: aws.String(g.bucket),
+			Key:    aws.String(key),
 		})
 		if err != nil {
 			return fmt.Errorf("set-genesis-peers: downloading peers.json: %w", err)

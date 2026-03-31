@@ -84,9 +84,9 @@ var serveCmd = cli.Command{
 			engine.TaskAwaitCondition:           tasks.NewConditionWaiter(nil).Handler(),
 			engine.TaskGenerateIdentity:         tasks.NewIdentityGenerator(homeDir, nil).Handler(),
 			engine.TaskGenerateGentx:            tasks.NewGentxGenerator(homeDir, nil).Handler(),
-			engine.TaskUploadGenesisArtifacts:   tasks.NewGenesisArtifactUploader(homeDir, nil).Handler(),
-			engine.TaskAssembleAndUploadGenesis: tasks.NewGenesisAssembler(homeDir, nil, nil, nil).Handler(),
-			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, nil).Handler(),
+			engine.TaskUploadGenesisArtifacts:   tasks.NewGenesisArtifactUploader(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
+			engine.TaskAssembleAndUploadGenesis: tasks.NewGenesisAssembler(homeDir, genesisBucket, genesisRegion, chainID, nil, nil, nil).Handler(),
+			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)
