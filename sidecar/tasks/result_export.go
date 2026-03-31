@@ -34,15 +34,15 @@ var defaultRPCEndpoint = fmt.Sprintf("http://localhost:%d", seiconfig.PortRPC)
 
 // ResultExportConfig holds the parameters for the result-export task.
 type ResultExportConfig struct {
-	Bucket      string
-	Prefix      string
-	Region      string
-	RPCEndpoint string
+	Bucket      string `json:"bucket"`
+	Prefix      string `json:"prefix"`
+	Region      string `json:"region"`
+	RPCEndpoint string `json:"rpcEndpoint"`
 
 	// CanonicalRPC enables comparison mode. When set, the exporter compares
 	// local block execution against this canonical RPC endpoint and completes
 	// when app-hash divergence is detected.
-	CanonicalRPC string
+	CanonicalRPC string `json:"canonicalRpc"`
 }
 
 type exportState struct {
@@ -64,16 +64,21 @@ func NewResultExporter(homeDir string, factory seis3.UploaderFactory) *ResultExp
 }
 
 func (e *ResultExporter) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
-		cfg, err := parseExportConfig(params)
-		if err != nil {
-			return err
+	return engine.TypedHandler(func(ctx context.Context, cfg ResultExportConfig) error {
+		if cfg.Bucket == "" {
+			return fmt.Errorf("result-export: missing required param 'bucket'")
+		}
+		if cfg.Region == "" {
+			return fmt.Errorf("result-export: missing required param 'region'")
+		}
+		if cfg.RPCEndpoint == "" {
+			cfg.RPCEndpoint = defaultRPCEndpoint
 		}
 		if cfg.CanonicalRPC != "" {
 			return e.ExportAndCompare(ctx, cfg)
 		}
 		return e.Export(ctx, cfg)
-	}
+	})
 }
 
 // Export queries the local node for block results and uploads pages to S3.
@@ -294,32 +299,6 @@ func queryBlockResults(ctx context.Context, rpcEndpoint string, height int64) (j
 	}
 
 	return json.RawMessage(body), nil
-}
-
-func parseExportConfig(params map[string]any) (ResultExportConfig, error) {
-	bucket, _ := params["bucket"].(string)
-	prefix, _ := params["prefix"].(string)
-	region, _ := params["region"].(string)
-	rpcEndpoint, _ := params["rpcEndpoint"].(string)
-	canonicalRPC, _ := params["canonicalRpc"].(string)
-
-	if bucket == "" {
-		return ResultExportConfig{}, fmt.Errorf("result-export: missing required param 'bucket'")
-	}
-	if region == "" {
-		return ResultExportConfig{}, fmt.Errorf("result-export: missing required param 'region'")
-	}
-	if rpcEndpoint == "" {
-		rpcEndpoint = defaultRPCEndpoint
-	}
-
-	return ResultExportConfig{
-		Bucket:       bucket,
-		Prefix:       prefix,
-		Region:       region,
-		RPCEndpoint:  rpcEndpoint,
-		CanonicalRPC: canonicalRPC,
-	}, nil
 }
 
 func (e *ResultExporter) readExportState() exportState {

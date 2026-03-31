@@ -61,6 +61,19 @@ type StaticSource struct {
 	Addresses []string
 }
 
+// peerDiscoverParams holds the typed parameters for the discover-peers task.
+type peerDiscoverParams struct {
+	Sources []peerSourceConfig `json:"sources"`
+}
+
+// peerSourceConfig represents a single peer source in the params JSON.
+type peerSourceConfig struct {
+	Type      string            `json:"type"`
+	Region    string            `json:"region,omitempty"`
+	Tags      map[string]string `json:"tags,omitempty"`
+	Addresses []string          `json:"addresses,omitempty"`
+}
+
 // PeerDiscoverer resolves peers from multiple sources and writes them to a file.
 type PeerDiscoverer struct {
 	homeDir          string
@@ -155,13 +168,12 @@ func NewPeerDiscoverer(homeDir string, ec2Factory EC2ClientFactory, nodeIDQuerie
 //
 //	{"sources": [{"type": "ec2Tags", "region": "...", "tags": {...}}, ...]}
 func (d *PeerDiscoverer) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
-		rawSources, ok := params["sources"]
-		if !ok {
+	return engine.TypedHandler(func(ctx context.Context, params peerDiscoverParams) error {
+		if len(params.Sources) == 0 {
 			return fmt.Errorf("discover-peers: missing required param 'sources'")
 		}
 
-		sources, err := d.parseSources(rawSources)
+		sources, err := d.buildSources(params.Sources)
 		if err != nil {
 			return fmt.Errorf("discover-peers: %w", err)
 		}
@@ -172,7 +184,7 @@ func (d *PeerDiscoverer) Handler() engine.TaskHandler {
 		}
 
 		return writePeersToConfig(d.homeDir, peers)
-	}
+	})
 }
 
 // discoverFromSources iterates all sources, collects peers, and deduplicates.
@@ -202,87 +214,34 @@ func discoverFromSources(ctx context.Context, sources []PeerSource) ([]string, e
 	return all, nil
 }
 
-// parseSources converts the raw "sources" param into typed PeerSource instances.
-func (d *PeerDiscoverer) parseSources(raw any) ([]PeerSource, error) {
-	items, ok := raw.([]any)
-	if !ok {
-		return nil, fmt.Errorf("sources must be a list")
-	}
-	if len(items) == 0 {
-		return nil, fmt.Errorf("sources list is empty")
-	}
-
+// buildSources converts typed source configs into PeerSource instances.
+func (d *PeerDiscoverer) buildSources(configs []peerSourceConfig) ([]PeerSource, error) {
 	var sources []PeerSource
-	for i, item := range items {
-		m, ok := item.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("source[%d] is not an object", i)
-		}
-
-		typ, _ := m["type"].(string)
-		switch typ {
+	for i, cfg := range configs {
+		switch cfg.Type {
 		case "ec2Tags":
-			src, err := d.parseEC2TagsSource(m)
-			if err != nil {
-				return nil, fmt.Errorf("source[%d]: %w", i, err)
+			if cfg.Region == "" {
+				return nil, fmt.Errorf("source[%d]: ec2Tags source missing required field 'region'", i)
 			}
-			sources = append(sources, src)
+			if len(cfg.Tags) == 0 {
+				return nil, fmt.Errorf("source[%d]: ec2Tags source has empty tags", i)
+			}
+			sources = append(sources, &EC2TagsSource{
+				Region:      cfg.Region,
+				Tags:        cfg.Tags,
+				EC2Factory:  d.ec2ClientFactory,
+				QueryNodeID: d.queryNodeID,
+			})
 		case "static":
-			src, err := parseStaticSource(m)
-			if err != nil {
-				return nil, fmt.Errorf("source[%d]: %w", i, err)
+			if len(cfg.Addresses) == 0 {
+				return nil, fmt.Errorf("source[%d]: static source has empty addresses", i)
 			}
-			sources = append(sources, src)
+			sources = append(sources, &StaticSource{Addresses: cfg.Addresses})
 		default:
-			return nil, fmt.Errorf("source[%d]: unknown type %q", i, typ)
+			return nil, fmt.Errorf("source[%d]: unknown type %q", i, cfg.Type)
 		}
 	}
-
 	return sources, nil
-}
-
-func (d *PeerDiscoverer) parseEC2TagsSource(m map[string]any) (*EC2TagsSource, error) {
-	region, _ := m["region"].(string)
-	if region == "" {
-		return nil, fmt.Errorf("ec2Tags source missing required field 'region'")
-	}
-
-	rawTags, ok := m["tags"]
-	if !ok {
-		return nil, fmt.Errorf("ec2Tags source missing required field 'tags'")
-	}
-
-	tags, err := toStringMap(rawTags)
-	if err != nil {
-		return nil, fmt.Errorf("ec2Tags tags: %w", err)
-	}
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("ec2Tags source has empty tags")
-	}
-
-	return &EC2TagsSource{
-		Region:      region,
-		Tags:        tags,
-		EC2Factory:  d.ec2ClientFactory,
-		QueryNodeID: d.queryNodeID,
-	}, nil
-}
-
-func parseStaticSource(m map[string]any) (*StaticSource, error) {
-	rawAddrs, ok := m["addresses"]
-	if !ok {
-		return nil, fmt.Errorf("static source missing required field 'addresses'")
-	}
-
-	addrs, err := toStringSlice(rawAddrs)
-	if err != nil {
-		return nil, fmt.Errorf("static addresses: %w", err)
-	}
-	if len(addrs) == 0 {
-		return nil, fmt.Errorf("static source has empty addresses")
-	}
-
-	return &StaticSource{Addresses: addrs}, nil
 }
 
 func buildPeerAddress(ctx context.Context, querier NodeIDQuerier, instance ec2types.Instance) (string, error) {
@@ -353,44 +312,4 @@ func writePeersToConfig(homeDir string, peers []string) error {
 		},
 	}
 	return mergeAndWrite(configPath, peersPatch)
-}
-
-// toStringMap converts an any to map[string]string.
-func toStringMap(raw any) (map[string]string, error) {
-	switch v := raw.(type) {
-	case map[string]string:
-		return v, nil
-	case map[string]any:
-		result := make(map[string]string, len(v))
-		for k, val := range v {
-			s, ok := val.(string)
-			if !ok {
-				return nil, fmt.Errorf("value for key %q is not a string", k)
-			}
-			result[k] = s
-		}
-		return result, nil
-	default:
-		return nil, fmt.Errorf("expected a map, got %T", raw)
-	}
-}
-
-// toStringSlice converts an any to []string.
-func toStringSlice(raw any) ([]string, error) {
-	switch v := raw.(type) {
-	case []string:
-		return v, nil
-	case []any:
-		result := make([]string, 0, len(v))
-		for _, item := range v {
-			s, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("list item is not a string")
-			}
-			result = append(result, s)
-		}
-		return result, nil
-	default:
-		return nil, fmt.Errorf("expected a list, got %T", raw)
-	}
 }

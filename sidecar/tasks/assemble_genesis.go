@@ -41,13 +41,28 @@ type GenesisAssembler struct {
 	s3UploaderFactory seis3.UploaderFactory
 }
 
+// assembleNodeEntry represents a single node in the "nodes" list param.
+type assembleNodeEntry struct {
+	Name string `json:"name"`
+}
+
+// assembleConfig holds the typed parameters for the assemble-and-upload-genesis task.
 type assembleConfig struct {
-	bucket         string
-	prefix         string
-	region         string
-	accountBalance string
-	namespace      string
-	nodes          []string
+	Bucket         string              `json:"s3Bucket"`
+	Prefix         string              `json:"s3Prefix"`
+	Region         string              `json:"s3Region"`
+	AccountBalance string              `json:"accountBalance"`
+	Namespace      string              `json:"namespace"`
+	Nodes          []assembleNodeEntry `json:"nodes"`
+}
+
+// nodeNames returns the list of node name strings from the Nodes entries.
+func (c assembleConfig) nodeNames() []string {
+	names := make([]string, len(c.Nodes))
+	for i, n := range c.Nodes {
+		names[i] = n.Name
+	}
+	return names
 }
 
 // NewGenesisAssembler creates an assembler targeting the given home directory.
@@ -80,22 +95,40 @@ func NewGenesisAssembler(homeDir string, _ CommandRunner, s3Factory S3ClientFact
 //	  "nodes":      [{"name": "node-0"}, {"name": "node-1"}, ...]
 //	}
 func (a *GenesisAssembler) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
+	return engine.TypedHandler(func(ctx context.Context, cfg assembleConfig) error {
 		if markerExists(a.homeDir, assembleMarkerFile) {
 			assembleLog.Debug("already completed, skipping")
 			return nil
 		}
 
-		cfg, err := parseAssembleConfig(params)
-		if err != nil {
+		if cfg.Bucket == "" {
+			return fmt.Errorf("assemble-genesis: missing required param 's3Bucket'")
+		}
+		if cfg.Region == "" {
+			return fmt.Errorf("assemble-genesis: missing required param 's3Region'")
+		}
+		if cfg.AccountBalance == "" {
+			return fmt.Errorf("assemble-genesis: missing required param 'accountBalance'")
+		}
+		if cfg.Namespace == "" {
+			return fmt.Errorf("assemble-genesis: missing required param 'namespace'")
+		}
+		if len(cfg.Nodes) == 0 {
+			return fmt.Errorf("assemble-genesis: 'nodes' list is empty")
+		}
+		for i, n := range cfg.Nodes {
+			if n.Name == "" {
+				return fmt.Errorf("assemble-genesis: nodes[%d] missing required field 'name'", i)
+			}
+		}
+
+		nodes := cfg.nodeNames()
+
+		if err := a.downloadGentxFiles(ctx, cfg, nodes); err != nil {
 			return err
 		}
 
-		if err := a.downloadGentxFiles(ctx, cfg); err != nil {
-			return err
-		}
-
-		if err := a.addMissingGenesisAccounts(cfg.accountBalance); err != nil {
+		if err := a.addMissingGenesisAccounts(cfg.AccountBalance); err != nil {
 			return err
 		}
 
@@ -107,19 +140,19 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return err
 		}
 
-		if err := a.uploadPeers(ctx, cfg); err != nil {
+		if err := a.uploadPeers(ctx, cfg, nodes); err != nil {
 			return err
 		}
 
-		assembleLog.Info("genesis assembled and uploaded", "nodes", len(cfg.nodes))
+		assembleLog.Info("genesis assembled and uploaded", "nodes", len(nodes))
 		return writeMarker(a.homeDir, assembleMarkerFile)
-	}
+	})
 }
 
 // downloadGentxFiles fetches each node's gentx.json from S3 and writes
 // it to the local config/gentx/ directory.
-func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg assembleConfig) error {
-	s3Client, err := a.s3ClientFactory(ctx, cfg.region)
+func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg assembleConfig, nodes []string) error {
+	s3Client, err := a.s3ClientFactory(ctx, cfg.Region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: building S3 client: %w", err)
 	}
@@ -129,15 +162,15 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg assembleC
 		return fmt.Errorf("assemble-genesis: creating gentx dir: %w", err)
 	}
 
-	prefix := normalizePrefix(cfg.prefix)
+	prefix := normalizePrefix(cfg.Prefix)
 
-	downloaded := make(map[string]bool, len(cfg.nodes))
-	for _, nodeName := range cfg.nodes {
+	downloaded := make(map[string]bool, len(nodes))
+	for _, nodeName := range nodes {
 		key := fmt.Sprintf("%s%s/gentx.json", prefix, nodeName)
 		assembleLog.Info("downloading gentx", "node", nodeName, "key", key)
 
 		output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
-			Bucket: aws.String(cfg.bucket),
+			Bucket: aws.String(cfg.Bucket),
 			Key:    aws.String(key),
 		})
 		if err != nil {
@@ -168,7 +201,7 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg assembleC
 		}
 	}
 
-	assembleLog.Info("all gentx files downloaded", "count", len(cfg.nodes))
+	assembleLog.Info("all gentx files downloaded", "count", len(nodes))
 	return nil
 }
 
@@ -331,16 +364,16 @@ func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg assembleConfig
 		return fmt.Errorf("assemble-genesis: reading genesis.json: %w", err)
 	}
 
-	uploader, err := a.s3UploaderFactory(ctx, cfg.region)
+	uploader, err := a.s3UploaderFactory(ctx, cfg.Region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: building S3 uploader: %w", err)
 	}
 
-	key := normalizePrefix(cfg.prefix) + "genesis.json"
+	key := normalizePrefix(cfg.Prefix) + "genesis.json"
 	assembleLog.Info("uploading assembled genesis", "key", key)
 
 	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket:      aws.String(cfg.bucket),
+		Bucket:      aws.String(cfg.Bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(data),
 		ContentType: aws.String("application/json"),
@@ -354,19 +387,19 @@ func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg assembleConfig
 // uploadPeers builds a peers.json from each node's identity.json and uploads
 // it to S3 alongside genesis.json. Each entry is a full Tendermint peer address
 // using in-cluster DNS: <nodeID>@<name>-0.<name>.<namespace>.svc.cluster.local:26656
-func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg assembleConfig) error {
-	s3Client, err := a.s3ClientFactory(ctx, cfg.region)
+func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg assembleConfig, nodes []string) error {
+	s3Client, err := a.s3ClientFactory(ctx, cfg.Region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: building S3 client for peers: %w", err)
 	}
 
-	prefix := normalizePrefix(cfg.prefix)
+	prefix := normalizePrefix(cfg.Prefix)
 	var peers []string
 
-	for _, nodeName := range cfg.nodes {
+	for _, nodeName := range nodes {
 		key := fmt.Sprintf("%s%s/identity.json", prefix, nodeName)
 		output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
-			Bucket: aws.String(cfg.bucket),
+			Bucket: aws.String(cfg.Bucket),
 			Key:    aws.String(key),
 		})
 		if err != nil {
@@ -395,7 +428,7 @@ func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg assembleConfig) 
 			return fmt.Errorf("assemble-genesis: empty node ID for %s", nodeName)
 		}
 
-		dns := fmt.Sprintf("%s-0.%s.%s.svc.cluster.local", nodeName, nodeName, cfg.namespace)
+		dns := fmt.Sprintf("%s-0.%s.%s.svc.cluster.local", nodeName, nodeName, cfg.Namespace)
 		peers = append(peers, fmt.Sprintf("%s@%s:26656", nodeKey.ID, dns))
 	}
 
@@ -404,7 +437,7 @@ func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg assembleConfig) 
 		return fmt.Errorf("assemble-genesis: marshaling peers.json: %w", err)
 	}
 
-	uploader, err := a.s3UploaderFactory(ctx, cfg.region)
+	uploader, err := a.s3UploaderFactory(ctx, cfg.Region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: building S3 uploader for peers: %w", err)
 	}
@@ -413,7 +446,7 @@ func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg assembleConfig) 
 	assembleLog.Info("uploading peers.json", "key", peersKey, "count", len(peers))
 
 	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket:      aws.String(cfg.bucket),
+		Bucket:      aws.String(cfg.Bucket),
 		Key:         aws.String(peersKey),
 		Body:        bytes.NewReader(peersJSON),
 		ContentType: aws.String("application/json"),
@@ -422,61 +455,4 @@ func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg assembleConfig) 
 		return fmt.Errorf("assemble-genesis: uploading peers.json: %w", err)
 	}
 	return nil
-}
-
-func parseAssembleConfig(params map[string]any) (assembleConfig, error) {
-	bucket, _ := params["s3Bucket"].(string)
-	prefix, _ := params["s3Prefix"].(string)
-	region, _ := params["s3Region"].(string)
-	accountBalance, _ := params["accountBalance"].(string)
-	namespace, _ := params["namespace"].(string)
-
-	if bucket == "" {
-		return assembleConfig{}, fmt.Errorf("assemble-genesis: missing required param 's3Bucket'")
-	}
-	if region == "" {
-		return assembleConfig{}, fmt.Errorf("assemble-genesis: missing required param 's3Region'")
-	}
-	if accountBalance == "" {
-		return assembleConfig{}, fmt.Errorf("assemble-genesis: missing required param 'accountBalance'")
-	}
-	if namespace == "" {
-		return assembleConfig{}, fmt.Errorf("assemble-genesis: missing required param 'namespace'")
-	}
-
-	rawNodes, ok := params["nodes"]
-	if !ok {
-		return assembleConfig{}, fmt.Errorf("assemble-genesis: missing required param 'nodes'")
-	}
-
-	nodes, err := parseNodeNames(rawNodes)
-	if err != nil {
-		return assembleConfig{}, fmt.Errorf("assemble-genesis: %w", err)
-	}
-	if len(nodes) == 0 {
-		return assembleConfig{}, fmt.Errorf("assemble-genesis: 'nodes' list is empty")
-	}
-
-	return assembleConfig{bucket: bucket, prefix: prefix, region: region, accountBalance: accountBalance, namespace: namespace, nodes: nodes}, nil
-}
-
-func parseNodeNames(raw any) ([]string, error) {
-	items, ok := raw.([]any)
-	if !ok {
-		return nil, fmt.Errorf("'nodes' must be a list, got %T", raw)
-	}
-
-	names := make([]string, 0, len(items))
-	for i, item := range items {
-		m, ok := item.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("nodes[%d] is not an object", i)
-		}
-		name, _ := m["name"].(string)
-		if name == "" {
-			return nil, fmt.Errorf("nodes[%d] missing required field 'name'", i)
-		}
-		names = append(names, name)
-	}
-	return names, nil
 }

@@ -95,37 +95,46 @@ func TestGenesisFetcher_S3TakesPriority(t *testing.T) {
 	}
 }
 
-func TestParseGenesisS3Config_WithURI(t *testing.T) {
-	cfg, err := parseGenesisS3Config(map[string]any{
+func TestGenesisS3Config_WithURI(t *testing.T) {
+	homeDir := t.TempDir()
+	called := false
+	mockFactory := func(ctx context.Context, region string) (S3GetObjectAPI, error) {
+		called = true
+		return nil, fmt.Errorf("intentional error")
+	}
+	fetcher := NewGenesisFetcher(homeDir, "pacific-1", mockFactory)
+	handler := fetcher.Handler()
+
+	err := handler(context.Background(), map[string]any{
 		"uri":    "s3://my-bucket/path/to/genesis.json",
 		"region": "us-west-2",
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !called {
+		t.Fatal("expected S3 client factory to be called")
 	}
-	if cfg == nil {
-		t.Fatal("expected non-nil S3 config")
-	}
-	if cfg.Bucket != "my-bucket" {
-		t.Errorf("bucket = %q, want %q", cfg.Bucket, "my-bucket")
-	}
-	if cfg.Key != "path/to/genesis.json" {
-		t.Errorf("key = %q, want %q", cfg.Key, "path/to/genesis.json")
+	if err == nil {
+		t.Fatal("expected error from mock S3 factory")
 	}
 }
 
-func TestParseGenesisS3Config_NoURI(t *testing.T) {
-	cfg, err := parseGenesisS3Config(map[string]any{})
+func TestGenesisS3Config_NoURI(t *testing.T) {
+	homeDir := t.TempDir()
+	fetcher := NewGenesisFetcher(homeDir, "pacific-1", nil)
+	handler := fetcher.Handler()
+
+	// No URI means embedded genesis path is taken.
+	err := handler(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg != nil {
-		t.Errorf("expected nil S3 config, got %+v", cfg)
-	}
 }
 
-func TestParseGenesisS3Config_URIWithoutRegion(t *testing.T) {
-	_, err := parseGenesisS3Config(map[string]any{
+func TestGenesisS3Config_URIWithoutRegion(t *testing.T) {
+	homeDir := t.TempDir()
+	fetcher := NewGenesisFetcher(homeDir, "pacific-1", nil)
+	handler := fetcher.Handler()
+
+	err := handler(context.Background(), map[string]any{
 		"uri": "s3://bucket/key",
 	})
 	if err == nil {

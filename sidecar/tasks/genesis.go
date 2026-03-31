@@ -45,6 +45,12 @@ type GenesisS3Config struct {
 	Region string
 }
 
+// genesisParams holds the typed parameters for the configure-genesis task.
+type genesisParams struct {
+	URI    string `json:"uri"`
+	Region string `json:"region"`
+}
+
 // GenesisFetcher writes genesis.json to the config directory. When S3 params
 // are provided in the task, it downloads from S3. Otherwise it writes the
 // embedded genesis for the configured chain ID (from SEI_CHAIN_ID).
@@ -71,21 +77,36 @@ func NewGenesisFetcher(homeDir string, chainID string, factory S3ClientFactory) 
 // Handler returns an engine.TaskHandler that parses params and delegates to
 // the appropriate genesis source.
 func (g *GenesisFetcher) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
+	return engine.TypedHandler(func(ctx context.Context, params genesisParams) error {
 		if markerExists(g.homeDir, genesisMarkerFile) {
 			genesisLog.Debug("already completed, skipping")
 			return nil
 		}
 
-		s3Cfg, err := parseGenesisS3Config(params)
+		if params.URI == "" {
+			return g.writeEmbeddedGenesis()
+		}
+
+		if params.Region == "" {
+			return fmt.Errorf("configure-genesis: 'region' is required when 'uri' is set")
+		}
+
+		parsed, err := url.Parse(params.URI)
 		if err != nil {
-			return err
+			return fmt.Errorf("configure-genesis: invalid uri %q: %w", params.URI, err)
 		}
-		if s3Cfg != nil {
-			return g.fetchFromS3(ctx, *s3Cfg)
+		if parsed.Scheme != "s3" {
+			return fmt.Errorf("configure-genesis: uri must use s3:// scheme, got %q", parsed.Scheme)
 		}
-		return g.writeEmbeddedGenesis()
-	}
+
+		bucket := parsed.Host
+		key := strings.TrimPrefix(parsed.Path, "/")
+		if bucket == "" || key == "" {
+			return fmt.Errorf("configure-genesis: uri must be s3://bucket/key, got %q", params.URI)
+		}
+
+		return g.fetchFromS3(ctx, GenesisS3Config{Bucket: bucket, Key: key, Region: params.Region})
+	})
 }
 
 // Fetch downloads genesis.json from S3, skipping if the marker file exists.
@@ -167,35 +188,4 @@ func (g *GenesisFetcher) writeGenesisFile(writeFn func(*os.File) error) error {
 		return fmt.Errorf("writing %s: %w", destPath, err)
 	}
 	return nil
-}
-
-// parseGenesisS3Config extracts S3 configuration from task params. Returns nil
-// (not an error) when no S3 params are present, indicating the handler should
-// use the embedded genesis.
-func parseGenesisS3Config(params map[string]any) (*GenesisS3Config, error) {
-	uri, _ := params["uri"].(string)
-	if uri == "" {
-		return nil, nil
-	}
-
-	region, _ := params["region"].(string)
-	if region == "" {
-		return nil, fmt.Errorf("configure-genesis: 'region' is required when 'uri' is set")
-	}
-
-	parsed, err := url.Parse(uri)
-	if err != nil {
-		return nil, fmt.Errorf("configure-genesis: invalid uri %q: %w", uri, err)
-	}
-	if parsed.Scheme != "s3" {
-		return nil, fmt.Errorf("configure-genesis: uri must use s3:// scheme, got %q", parsed.Scheme)
-	}
-
-	bucket := parsed.Host
-	key := strings.TrimPrefix(parsed.Path, "/")
-	if bucket == "" || key == "" {
-		return nil, fmt.Errorf("configure-genesis: uri must be s3://bucket/key, got %q", uri)
-	}
-
-	return &GenesisS3Config{Bucket: bucket, Key: key, Region: region}, nil
 }

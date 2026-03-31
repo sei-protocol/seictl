@@ -24,7 +24,7 @@ func NewConfigValidator(homeDir string) *ConfigValidator {
 
 // Handler returns an engine.TaskHandler for the config-validate task type.
 func (v *ConfigValidator) Handler() engine.TaskHandler {
-	return func(_ context.Context, _ map[string]any) error {
+	return engine.TypedHandler(func(_ context.Context, _ struct{}) error {
 		cfg, err := seiconfig.ReadConfigFromDir(v.homeDir)
 		if err != nil {
 			return fmt.Errorf("config-validate: reading config: %w", err)
@@ -72,5 +72,5 @@ func (v *ConfigValidator) Handler() engine.TaskHandler {
 			"diagnostics", len(result.Diagnostics),
 		)
 		return nil
-	}
+	})
 }

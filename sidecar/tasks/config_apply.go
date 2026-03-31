@@ -27,14 +27,12 @@ func NewConfigApplier(homeDir string) *ConfigApplier {
 
 // Handler returns an engine.TaskHandler for the config-apply task type.
 func (a *ConfigApplier) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
-		intent := intentFromParams(params)
-
+	return engine.TypedHandler(func(ctx context.Context, intent seiconfig.ConfigIntent) error {
 		if intent.Incremental {
 			return a.applyIncremental(ctx, intent)
 		}
 		return a.applyFull(ctx, intent)
-	}
+	})
 }
 
 // applyFull resolves an intent from mode defaults and writes the result.
@@ -136,36 +134,4 @@ func diagnosticsError(diags []seiconfig.Diagnostic) error {
 	}
 	data, _ := json.Marshal(out)
 	return fmt.Errorf("config validation failed: %s", data)
-}
-
-// intentFromParams constructs a ConfigIntent from a generic task params map.
-func intentFromParams(params map[string]any) seiconfig.ConfigIntent {
-	mode, _ := params["mode"].(string)
-	incremental, _ := params["incremental"].(bool)
-	tv := 0
-	if raw, ok := params["targetVersion"].(float64); ok {
-		tv = int(raw)
-	}
-	overrides := extractStringMap(params, "overrides")
-
-	return seiconfig.ConfigIntent{
-		Mode:          seiconfig.NodeMode(mode),
-		Overrides:     overrides,
-		Incremental:   incremental,
-		TargetVersion: tv,
-	}
-}
-
-// extractStringMap pulls a map[string]string from a params map[string]any
-// where the inner map may have been deserialized as map[string]interface{}.
-func extractStringMap(params map[string]any, key string) map[string]string {
-	raw, ok := params[key].(map[string]any)
-	if !ok || len(raw) == 0 {
-		return nil
-	}
-	result := make(map[string]string, len(raw))
-	for k, v := range raw {
-		result[k], _ = v.(string)
-	}
-	return result
 }

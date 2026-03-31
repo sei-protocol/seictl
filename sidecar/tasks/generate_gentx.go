@@ -46,8 +46,16 @@ const (
 	validatorKeyName = "validator"
 )
 
+// gentxParams holds the typed parameters for the generate-gentx task.
+type gentxParams struct {
+	ChainID        string `json:"chainId"`
+	StakingAmount  string `json:"stakingAmount"`
+	AccountBalance string `json:"accountBalance"`
+	GenesisParams  string `json:"genesisParams"`
+}
+
 // GentxGenerator produces a genesis transaction by calling the same SDK
-// functions as seid keys add → seid add-genesis-account → seid gentx.
+// functions as seid keys add -> seid add-genesis-account -> seid gentx.
 type GentxGenerator struct {
 	homeDir string
 }
@@ -69,22 +77,19 @@ func NewGentxGenerator(homeDir string, _ CommandRunner) *GentxGenerator {
 //	  "genesisParams":  "" (optional, reserved for future genesis customization)
 //	}
 func (g *GentxGenerator) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
+	return engine.TypedHandler(func(ctx context.Context, params gentxParams) error {
 		if markerExists(g.homeDir, gentxMarkerFile) {
 			gentxLog.Debug("already completed, skipping")
 			return nil
 		}
 
-		chainID, _ := params["chainId"].(string)
-		if chainID == "" {
+		if params.ChainID == "" {
 			return fmt.Errorf("generate-gentx: missing required param 'chainId'")
 		}
-		stakingAmount, _ := params["stakingAmount"].(string)
-		if stakingAmount == "" {
+		if params.StakingAmount == "" {
 			return fmt.Errorf("generate-gentx: missing required param 'stakingAmount'")
 		}
-		accountBalance, _ := params["accountBalance"].(string)
-		if accountBalance == "" {
+		if params.AccountBalance == "" {
 			return fmt.Errorf("generate-gentx: missing required param 'accountBalance'")
 		}
 
@@ -96,17 +101,17 @@ func (g *GentxGenerator) Handler() engine.TaskHandler {
 			return err
 		}
 
-		if err := g.addGenesisAccount(cdc, address, accountBalance); err != nil {
+		if err := g.addGenesisAccount(cdc, address, params.AccountBalance); err != nil {
 			return err
 		}
 
-		if err := g.generateGentx(cdc, txCfg, chainID, stakingAmount); err != nil {
+		if err := g.generateGentx(cdc, txCfg, params.ChainID, params.StakingAmount); err != nil {
 			return err
 		}
 
 		gentxLog.Info("gentx generated", "address", address)
 		return writeMarker(g.homeDir, gentxMarkerFile)
-	}
+	})
 }
 
 // addValidatorKey creates a local key and returns its bech32 address.

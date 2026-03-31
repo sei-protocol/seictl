@@ -14,6 +14,13 @@ import (
 
 var patchLog = seilog.NewLogger("seictl", "task", "config-patch")
 
+// configPatchParams holds the typed parameters for the config-patch task.
+// Files is intentionally map[string]map[string]any because TOML patches
+// are inherently untyped.
+type configPatchParams struct {
+	Files map[string]map[string]any `json:"files"`
+}
+
 // ConfigPatcher applies generic TOML merge-patches to seid configuration files.
 type ConfigPatcher struct {
 	homeDir string
@@ -36,13 +43,17 @@ func NewConfigPatcher(homeDir string) *ConfigPatcher {
 //	  }
 //	}
 func (p *ConfigPatcher) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
-		files, _ := params["files"].(map[string]any)
-		if len(files) == 0 {
+	return engine.TypedHandler(func(ctx context.Context, params configPatchParams) error {
+		if len(params.Files) == 0 {
 			return nil
 		}
+		// Convert to map[string]any for PatchFiles (public API).
+		files := make(map[string]any, len(params.Files))
+		for k, v := range params.Files {
+			files[k] = v
+		}
 		return p.PatchFiles(ctx, files)
-	}
+	})
 }
 
 // PatchFiles merge-patches each named TOML file under homeDir/config/.

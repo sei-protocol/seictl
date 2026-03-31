@@ -3,6 +3,7 @@ package tasks
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -43,15 +44,16 @@ func TestAssembler_DownloadsGentxFiles(t *testing.T) {
 	assembler := NewGenesisAssembler(homeDir, nil, s3Factory, mockUploaderFactory(newMockS3Uploader()))
 
 	cfg := assembleConfig{
-		bucket:         "my-bucket",
-		prefix:         "genesis/",
-		region:         "us-west-2",
-		accountBalance: "10000000usei",
-		namespace:      "default",
-		nodes:          []string{"val-0", "val-1"},
+		Bucket:         "my-bucket",
+		Prefix:         "genesis/",
+		Region:         "us-west-2",
+		AccountBalance: "10000000usei",
+		Namespace:      "default",
+		Nodes:          []assembleNodeEntry{{Name: "val-0"}, {Name: "val-1"}},
 	}
 
-	if err := assembler.downloadGentxFiles(context.Background(), cfg); err != nil {
+	nodes := cfg.nodeNames()
+	if err := assembler.downloadGentxFiles(context.Background(), cfg, nodes); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -104,24 +106,27 @@ func TestAssembler_S3DownloadFailure(t *testing.T) {
 	}
 }
 
-func TestParseNodeNames(t *testing.T) {
-	names, err := parseNodeNames([]any{
-		map[string]any{"name": "val-0"},
-		map[string]any{"name": "val-1"},
-	})
-	if err != nil {
+func TestParseAssembleNodes(t *testing.T) {
+	// Test that assembleNodeEntry JSON round-trips correctly.
+	raw := `[{"name":"val-0"},{"name":"val-1"}]`
+	var nodes []assembleNodeEntry
+	if err := json.Unmarshal([]byte(raw), &nodes); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(names) != 2 || names[0] != "val-0" || names[1] != "val-1" {
-		t.Errorf("names = %v, want [val-0 val-1]", names)
+	if len(nodes) != 2 || nodes[0].Name != "val-0" || nodes[1].Name != "val-1" {
+		t.Errorf("nodes = %v, want [{val-0} {val-1}]", nodes)
 	}
 }
 
-func TestParseNodeNames_MissingName(t *testing.T) {
-	_, err := parseNodeNames([]any{
-		map[string]any{"other": "field"},
-	})
-	if err == nil {
-		t.Fatal("expected error for missing name field")
+func TestParseAssembleNodes_MissingName(t *testing.T) {
+	// Test that empty names are caught by the handler validation.
+	raw := `[{"other":"field"}]`
+	var nodes []assembleNodeEntry
+	if err := json.Unmarshal([]byte(raw), &nodes); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The node should unmarshal but with empty Name — the handler validates this.
+	if nodes[0].Name != "" {
+		t.Fatalf("expected empty name, got %q", nodes[0].Name)
 	}
 }

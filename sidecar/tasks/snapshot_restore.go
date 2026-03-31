@@ -32,10 +32,10 @@ var snapshotHeightRe = regexp.MustCompile(`snapshot_(\d+)_`)
 
 // SnapshotConfig holds S3 coordinates for snapshot download.
 type SnapshotConfig struct {
-	Bucket  string
-	Prefix  string
-	Region  string
-	ChainID string
+	Bucket  string `json:"bucket"`
+	Prefix  string `json:"prefix"`
+	Region  string `json:"region"`
+	ChainID string `json:"chainId"`
 }
 
 // SnapshotRestorer downloads and extracts a snapshot archive from S3.
@@ -56,16 +56,23 @@ func NewSnapshotRestorer(homeDir string, factory seis3.TransferClientFactory) *S
 	}
 }
 
-// Handler returns an engine.TaskHandler that adapts the map[string]any params
-// to a typed SnapshotConfig and delegates to Restore.
+// Handler returns an engine.TaskHandler for the snapshot-restore task.
 func (r *SnapshotRestorer) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
-		cfg, err := parseSnapshotConfig(params)
-		if err != nil {
-			return err
+	return engine.TypedHandler(func(ctx context.Context, cfg SnapshotConfig) error {
+		if cfg.Bucket == "" {
+			return fmt.Errorf("snapshot-restore: missing required param 'bucket'")
+		}
+		if cfg.Prefix == "" {
+			return fmt.Errorf("snapshot-restore: missing required param 'prefix'")
+		}
+		if cfg.Region == "" {
+			return fmt.Errorf("snapshot-restore: missing required param 'region'")
+		}
+		if cfg.ChainID == "" {
+			return fmt.Errorf("snapshot-restore: missing required param 'chainId'")
 		}
 		return r.Restore(ctx, cfg)
-	}
+	})
 }
 
 // Restore downloads and extracts the snapshot, skipping if the marker file exists.
@@ -160,28 +167,6 @@ func resolveSnapshotKey(ctx context.Context, client seis3.TransferClient, cfg Sn
 
 	filename := fmt.Sprintf("snapshot_%s_%s_%s.tar.gz", height, cfg.ChainID, cfg.Region)
 	return cfg.Prefix + filename, nil
-}
-
-func parseSnapshotConfig(params map[string]any) (SnapshotConfig, error) {
-	bucket, _ := params["bucket"].(string)
-	prefix, _ := params["prefix"].(string)
-	region, _ := params["region"].(string)
-	chainID, _ := params["chainId"].(string)
-
-	if bucket == "" {
-		return SnapshotConfig{}, fmt.Errorf("snapshot-restore: missing required param 'bucket'")
-	}
-	if prefix == "" {
-		return SnapshotConfig{}, fmt.Errorf("snapshot-restore: missing required param 'prefix'")
-	}
-	if region == "" {
-		return SnapshotConfig{}, fmt.Errorf("snapshot-restore: missing required param 'region'")
-	}
-	if chainID == "" {
-		return SnapshotConfig{}, fmt.Errorf("snapshot-restore: missing required param 'chainId'")
-	}
-
-	return SnapshotConfig{Bucket: bucket, Prefix: prefix, Region: region, ChainID: chainID}, nil
 }
 
 func parseHeightFromKey(key string) int64 {

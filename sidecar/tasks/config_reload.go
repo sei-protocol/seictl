@@ -11,6 +11,11 @@ import (
 
 var reloadLog = seilog.NewLogger("seictl", "task", "config-reload")
 
+// configReloadParams holds the typed parameters for the config-reload task.
+type configReloadParams struct {
+	Fields map[string]string `json:"fields"`
+}
+
 // ConfigReloader patches hot-reloadable fields on disk and signals seid
 // to re-read its configuration. The signal mechanism is deferred to a future
 // release; for now only the on-disk write is performed.
@@ -25,9 +30,8 @@ func NewConfigReloader(homeDir string) *ConfigReloader {
 
 // Handler returns an engine.TaskHandler for the config-reload task type.
 func (r *ConfigReloader) Handler() engine.TaskHandler {
-	return func(_ context.Context, params map[string]any) error {
-		fields := extractStringMap(params, "fields")
-		if len(fields) == 0 {
+	return engine.TypedHandler(func(_ context.Context, params configReloadParams) error {
+		if len(params.Fields) == 0 {
 			return fmt.Errorf("config-reload: at least one field is required")
 		}
 
@@ -35,7 +39,7 @@ func (r *ConfigReloader) Handler() engine.TaskHandler {
 		registry.EnrichAll(seiconfig.DefaultEnrichments())
 
 		var nonHotReload []string
-		for key := range fields {
+		for key := range params.Fields {
 			f := registry.Field(key)
 			if f == nil {
 				return fmt.Errorf("config-reload: unknown field %q", key)
@@ -55,7 +59,7 @@ func (r *ConfigReloader) Handler() engine.TaskHandler {
 			return fmt.Errorf("config-reload: reading config: %w", err)
 		}
 
-		if err := seiconfig.ApplyOverrides(cfg, fields); err != nil {
+		if err := seiconfig.ApplyOverrides(cfg, params.Fields); err != nil {
 			return fmt.Errorf("config-reload: applying fields: %w", err)
 		}
 
@@ -70,8 +74,8 @@ func (r *ConfigReloader) Handler() engine.TaskHandler {
 
 		// TODO: signal seid to re-read config (SIGHUP or API call)
 		reloadLog.Info("hot-reloadable fields written, seid signal pending implementation",
-			"fields", len(fields))
+			"fields", len(params.Fields))
 
 		return nil
-	}
+	})
 }

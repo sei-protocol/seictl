@@ -18,6 +18,12 @@ var identityLog = seilog.NewLogger("seictl", "task", "generate-identity")
 
 const identityMarkerFile = ".sei-sidecar-identity-done"
 
+// identityParams holds the typed parameters for the generate-identity task.
+type identityParams struct {
+	ChainID string `json:"chainId"`
+	Moniker string `json:"moniker"`
+}
+
 // IdentityGenerator creates the validator identity by calling the same
 // SDK functions as seid init: genutil.InitializeNodeValidatorFilesFromMnemonic
 // for keys, tmcfg.WriteConfigFile for config.toml, and genutil.ExportGenesisFile
@@ -35,22 +41,20 @@ func NewIdentityGenerator(homeDir string, _ CommandRunner) *IdentityGenerator {
 //
 // Expected params: {"chainId": "...", "moniker": "..."}
 func (g *IdentityGenerator) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
+	return engine.TypedHandler(func(ctx context.Context, params identityParams) error {
 		if markerExists(g.homeDir, identityMarkerFile) {
 			identityLog.Debug("already completed, skipping")
 			return nil
 		}
 
-		chainID, _ := params["chainId"].(string)
-		if chainID == "" {
+		if params.ChainID == "" {
 			return fmt.Errorf("generate-identity: missing required param 'chainId'")
 		}
-		moniker, _ := params["moniker"].(string)
-		if moniker == "" {
+		if params.Moniker == "" {
 			return fmt.Errorf("generate-identity: missing required param 'moniker'")
 		}
 
-		identityLog.Info("generating identity", "chainId", chainID, "moniker", moniker)
+		identityLog.Info("generating identity", "chainId", params.ChainID, "moniker", params.Moniker)
 
 		cfg := tmcfg.DefaultConfig()
 		cfg.SetRoot(g.homeDir)
@@ -63,7 +67,7 @@ func (g *IdentityGenerator) Handler() engine.TaskHandler {
 			return fmt.Errorf("generate-identity: initializing validator files: %w", err)
 		}
 
-		cfg.Moniker = moniker
+		cfg.Moniker = params.Moniker
 
 		if err := tmcfg.WriteConfigFile(cfg.RootDir, cfg); err != nil {
 			return fmt.Errorf("generate-identity: writing config.toml: %w", err)
@@ -77,7 +81,7 @@ func (g *IdentityGenerator) Handler() engine.TaskHandler {
 		genFile := cfg.GenesisFile()
 		if _, err := os.Stat(genFile); os.IsNotExist(err) {
 			genDoc := &tmtypes.GenesisDoc{
-				ChainID:  chainID,
+				ChainID:  params.ChainID,
 				AppState: []byte("{}"),
 			}
 			if err := genutil.ExportGenesisFile(genDoc, genFile); err != nil {
@@ -85,7 +89,7 @@ func (g *IdentityGenerator) Handler() engine.TaskHandler {
 			}
 		}
 
-		identityLog.Info("identity generated", "nodeId", nodeID, "moniker", moniker)
+		identityLog.Info("identity generated", "nodeId", nodeID, "moniker", params.Moniker)
 		return writeMarker(g.homeDir, identityMarkerFile)
-	}
+	})
 }
