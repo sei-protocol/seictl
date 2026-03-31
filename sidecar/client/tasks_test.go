@@ -44,16 +44,7 @@ func genSnapshotUploadTask() gopter.Gen {
 }
 
 func genConfigureGenesisTask() gopter.Gen {
-	return gopter.CombineGens(
-		genNonEmptyString(),
-		genNonEmptyString(),
-		genNonEmptyString(),
-	).Map(func(v []interface{}) ConfigureGenesisTask {
-		return ConfigureGenesisTask{
-			URI:    "s3://" + v[0].(string) + "/" + v[1].(string),
-			Region: v[2].(string),
-		}
-	})
+	return gen.Const(ConfigureGenesisTask{})
 }
 
 func genEC2TagsSource() gopter.Gen {
@@ -154,35 +145,17 @@ func TestSnapshotUploadRoundTrip(t *testing.T) {
 
 func TestConfigureGenesisRoundTrip_S3(t *testing.T) {
 	properties := gopter.NewProperties(gopter.DefaultTestParameters())
-	properties.Property("ConfigureGenesisTask (S3) round-trips through TaskRequest", prop.ForAll(
+	properties.Property("ConfigureGenesisTask round-trips through TaskRequest", prop.ForAll(
 		func(task ConfigureGenesisTask) bool {
 			if err := task.Validate(); err != nil {
 				return false
 			}
 			req := task.ToTaskRequest()
-			if req.Type != TaskTypeConfigureGenesis {
-				return false
-			}
-			rebuilt := ConfigureGenesisTaskFromParams(*req.Params)
-			return rebuilt.URI == task.URI && rebuilt.Region == task.Region
+			return req.Type == TaskTypeConfigureGenesis && req.Params == nil
 		},
 		genConfigureGenesisTask(),
 	))
 	properties.TestingRun(t)
-}
-
-func TestConfigureGenesisRoundTrip_Empty(t *testing.T) {
-	task := ConfigureGenesisTask{}
-	if err := task.Validate(); err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	req := task.ToTaskRequest()
-	if req.Type != TaskTypeConfigureGenesis {
-		t.Errorf("Type = %q, want %q", req.Type, TaskTypeConfigureGenesis)
-	}
-	if req.Params != nil {
-		t.Errorf("expected nil Params for empty genesis task, got %v", req.Params)
-	}
 }
 
 func TestDiscoverPeersRoundTrip(t *testing.T) {
@@ -342,28 +315,9 @@ func TestSnapshotUploadValidation(t *testing.T) {
 }
 
 func TestConfigureGenesisValidation(t *testing.T) {
-	cases := []struct {
-		name string
-		task ConfigureGenesisTask
-		ok   bool
-	}{
-		{"valid s3", ConfigureGenesisTask{URI: "s3://bucket/key", Region: "us-east-1"}, true},
-		{"empty (uses embedded)", ConfigureGenesisTask{}, true},
-		{"uri without region", ConfigureGenesisTask{URI: "s3://bucket/key"}, false},
-		{"wrong scheme", ConfigureGenesisTask{URI: "https://bucket/key", Region: "us-east-1"}, false},
-		{"no key", ConfigureGenesisTask{URI: "s3://bucket", Region: "us-east-1"}, false},
-		{"no key trailing slash", ConfigureGenesisTask{URI: "s3://bucket/", Region: "us-east-1"}, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.task.Validate()
-			if tc.ok && err != nil {
-				t.Errorf("expected no error, got %v", err)
-			}
-			if !tc.ok && err == nil {
-				t.Error("expected validation error, got nil")
-			}
-		})
+	task := ConfigureGenesisTask{}
+	if err := task.Validate(); err != nil {
+		t.Errorf("expected no error, got %v", err)
 	}
 }
 

@@ -2,7 +2,6 @@ package client
 
 import (
 	"fmt"
-	"net/url"
 
 	"github.com/google/uuid"
 	seiconfig "github.com/sei-protocol/sei-config"
@@ -156,61 +155,28 @@ func SnapshotUploadTaskFromParams(params map[string]interface{}) SnapshotUploadT
 	}
 }
 
-// ConfigureGenesisTask configures genesis.json for a node. When URI and Region
-// are set, the sidecar downloads from S3. When they are empty, the sidecar
-// falls back to writing the embedded genesis for the chain ID it was started
-// with (set via SEI_CHAIN_ID environment variable).
+// ConfigureGenesisTask instructs the sidecar to resolve and write genesis.json.
+// The sidecar resolves genesis from its chain ID: embedded config is checked
+// first, then S3 fallback at {bucket}/{chainID}/genesis.json using env vars.
+// No parameters are needed from the controller.
 type ConfigureGenesisTask struct {
 	TaskMeta
-	URI    string
-	Region string
 }
 
 func (t ConfigureGenesisTask) TaskType() string { return TaskTypeConfigureGenesis }
 
-func (t ConfigureGenesisTask) Validate() error {
-	if t.URI == "" {
-		return nil
-	}
-	if t.Region == "" {
-		return fmt.Errorf("configure-genesis: Region is required when URI is set")
-	}
-	parsed, err := url.Parse(t.URI)
-	if err != nil {
-		return fmt.Errorf("configure-genesis: invalid URI %q: %w", t.URI, err)
-	}
-	if parsed.Scheme != "s3" {
-		return fmt.Errorf("configure-genesis: URI must use s3:// scheme, got %q", parsed.Scheme)
-	}
-	if parsed.Host == "" || parsed.Path == "" || parsed.Path == "/" {
-		return fmt.Errorf("configure-genesis: URI must be s3://bucket/key, got %q", t.URI)
-	}
-	return nil
-}
+func (t ConfigureGenesisTask) Validate() error { return nil }
 
 func (t ConfigureGenesisTask) ToTaskRequest() TaskRequest {
-	var req TaskRequest
-	if t.URI == "" {
-		req = TaskRequest{Type: t.TaskType()}
-	} else {
-		p := map[string]interface{}{
-			"uri":    t.URI,
-			"region": t.Region,
-		}
-		req = TaskRequest{Type: t.TaskType(), Params: &p}
-	}
+	req := TaskRequest{Type: t.TaskType()}
 	t.applyMeta(&req)
 	return req
 }
 
 // ConfigureGenesisTaskFromParams reconstructs a ConfigureGenesisTask from
 // a generic params map.
-func ConfigureGenesisTaskFromParams(params map[string]interface{}) ConfigureGenesisTask {
-	s := func(k string) string { v, _ := params[k].(string); return v }
-	return ConfigureGenesisTask{
-		URI:    s("uri"),
-		Region: s("region"),
-	}
+func ConfigureGenesisTaskFromParams(_ map[string]interface{}) ConfigureGenesisTask {
+	return ConfigureGenesisTask{}
 }
 
 // PeerSourceType identifies the peer discovery mechanism.
