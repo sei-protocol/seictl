@@ -55,9 +55,11 @@ var serveCmd = cli.Command{
 
 		var snapshotUploadInterval time.Duration
 		if raw := os.Getenv("SEI_SNAPSHOT_UPLOAD_INTERVAL"); raw != "" {
-			if parsed, err := time.ParseDuration(raw); err == nil {
-				snapshotUploadInterval = parsed
+			parsed, err := time.ParseDuration(raw)
+			if err != nil {
+				return fmt.Errorf("invalid SEI_SNAPSHOT_UPLOAD_INTERVAL %q: %w", raw, err)
 			}
+			snapshotUploadInterval = parsed
 		}
 
 		if err := tasks.EnsureDefaultConfig(homeDir); err != nil {
@@ -82,10 +84,10 @@ var serveCmd = cli.Command{
 			engine.TaskSnapshotUpload:           tasks.NewSnapshotUploader(homeDir, snapshotUploadInterval, nil).Handler(),
 			engine.TaskResultExport:             tasks.NewResultExporter(homeDir, nil).Handler(),
 			engine.TaskAwaitCondition:           tasks.NewConditionWaiter(nil).Handler(),
-			engine.TaskGenerateIdentity:         tasks.NewIdentityGenerator(homeDir, nil).Handler(),
-			engine.TaskGenerateGentx:            tasks.NewGentxGenerator(homeDir, nil).Handler(),
+			engine.TaskGenerateIdentity:         tasks.NewIdentityGenerator(homeDir).Handler(),
+			engine.TaskGenerateGentx:            tasks.NewGentxGenerator(homeDir).Handler(),
 			engine.TaskUploadGenesisArtifacts:   tasks.NewGenesisArtifactUploader(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
-			engine.TaskAssembleAndUploadGenesis: tasks.NewGenesisAssembler(homeDir, genesisBucket, genesisRegion, chainID, nil, nil, nil).Handler(),
+			engine.TaskAssembleAndUploadGenesis: tasks.NewGenesisAssembler(homeDir, genesisBucket, genesisRegion, chainID, nil, nil).Handler(),
 			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
 		}
 

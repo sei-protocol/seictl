@@ -61,8 +61,7 @@ type GentxGenerator struct {
 }
 
 // NewGentxGenerator creates a generator targeting the given home directory.
-// The CommandRunner parameter is ignored (kept for call-site compatibility).
-func NewGentxGenerator(homeDir string, _ CommandRunner) *GentxGenerator {
+func NewGentxGenerator(homeDir string) *GentxGenerator {
 	return &GentxGenerator{homeDir: homeDir}
 }
 

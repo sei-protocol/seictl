@@ -41,7 +41,7 @@ func TestAssembler_DownloadsGentxFiles(t *testing.T) {
 		return s3Objects, nil
 	}
 
-	assembler := NewGenesisAssembler(homeDir, "my-bucket", "us-west-2", "genesis", nil, s3Factory, mockUploaderFactory(newMockS3Uploader()))
+	assembler := NewGenesisAssembler(homeDir, "my-bucket", "us-west-2", "genesis", s3Factory, mockUploaderFactory(newMockS3Uploader()))
 
 	cfg := AssembleGenesisRequest{
 		AccountBalance: "10000000usei",
@@ -64,7 +64,7 @@ func TestAssembler_DownloadsGentxFiles(t *testing.T) {
 }
 
 func TestAssembler_MissingParams(t *testing.T) {
-	handler := NewGenesisAssembler(t.TempDir(), "b", "r", "chain", nil, nil, nil).Handler()
+	handler := NewGenesisAssembler(t.TempDir(), "b", "r", "chain", nil, nil).Handler()
 
 	tests := []struct {
 		name   string
@@ -90,7 +90,7 @@ func TestAssembler_S3DownloadFailure(t *testing.T) {
 		return &mockS3GetObject{objects: map[string][]byte{}}, nil
 	}
 
-	handler := NewGenesisAssembler(homeDir, "b", "r", "c", nil, s3Factory, nil).Handler()
+	handler := NewGenesisAssembler(homeDir, "b", "r", "c", s3Factory, nil).Handler()
 	err := handler(context.Background(), map[string]any{
 		"accountBalance": "10000000usei", "namespace": "default",
 		"nodes": []any{map[string]any{"name": "missing-node"}},

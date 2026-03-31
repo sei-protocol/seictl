@@ -644,12 +644,20 @@ type GenesisNodeParam struct {
 // S3 coordinates are derived by the sidecar from its environment.
 type AssembleAndUploadGenesisTask struct {
 	TaskMeta
-	Nodes []GenesisNodeParam
+	AccountBalance string
+	Namespace      string
+	Nodes          []GenesisNodeParam
 }
 
 func (t AssembleAndUploadGenesisTask) TaskType() string { return TaskTypeAssembleGenesis }
 
 func (t AssembleAndUploadGenesisTask) Validate() error {
+	if t.AccountBalance == "" {
+		return fmt.Errorf("assemble-and-upload-genesis: missing required field AccountBalance")
+	}
+	if t.Namespace == "" {
+		return fmt.Errorf("assemble-and-upload-genesis: missing required field Namespace")
+	}
 	if len(t.Nodes) == 0 {
 		return fmt.Errorf("assemble-and-upload-genesis: at least one node is required")
 	}
@@ -662,7 +670,9 @@ func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
 		nodes[i] = map[string]interface{}{"name": n.Name}
 	}
 	p := map[string]interface{}{
-		"nodes": nodes,
+		"accountBalance": t.AccountBalance,
+		"namespace":      t.Namespace,
+		"nodes":          nodes,
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	t.applyMeta(&req)

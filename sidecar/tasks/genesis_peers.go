@@ -2,6 +2,9 @@ package tasks
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +19,12 @@ import (
 )
 
 var genesisPeersLog = seilog.NewLogger("seictl", "task", "set-genesis-peers")
+
+const (
+	ed25519PrivKeyLen   = 64
+	ed25519PubKeyOffset = 32
+	cometbftAddressLen  = 20
+)
 
 // SetGenesisPeersRequest holds the typed parameters for the set-genesis-peers task.
 // S3 coordinates are derived from the sidecar's environment.
@@ -94,7 +103,9 @@ func (g *GenesisPeersSetter) Handler() engine.TaskHandler {
 	})
 }
 
-// readLocalNodeID reads the Tendermint node ID from the local node_key.json.
+// readLocalNodeID derives the Tendermint node ID from the Ed25519 key in
+// node_key.json. The ID is hex(SHA256(pubkey)[:20]), matching CometBFT's
+// p2p.PubKeyToID derivation.
 func readLocalNodeID(homeDir string) (string, error) {
 	path := filepath.Join(homeDir, "config", "node_key.json")
 	data, err := os.ReadFile(path)
@@ -102,14 +113,21 @@ func readLocalNodeID(homeDir string) (string, error) {
 		return "", fmt.Errorf("set-genesis-peers: reading node_key.json: %w", err)
 	}
 
-	var nodeKey struct {
-		ID string `json:"id"`
+	var keyFile struct {
+		PrivKey struct {
+			Value string `json:"value"`
+		} `json:"priv_key"`
 	}
-	if err := json.Unmarshal(data, &nodeKey); err != nil {
+	if err := json.Unmarshal(data, &keyFile); err != nil {
 		return "", fmt.Errorf("set-genesis-peers: parsing node_key.json: %w", err)
 	}
-	if nodeKey.ID == "" {
-		return "", fmt.Errorf("set-genesis-peers: node_key.json has empty id")
+
+	keyBytes, err := base64.StdEncoding.DecodeString(keyFile.PrivKey.Value)
+	if err != nil || len(keyBytes) != ed25519PrivKeyLen {
+		return "", fmt.Errorf("set-genesis-peers: invalid Ed25519 key in node_key.json")
 	}
-	return nodeKey.ID, nil
+
+	pubKey := keyBytes[ed25519PubKeyOffset:]
+	hash := sha256.Sum256(pubKey)
+	return hex.EncodeToString(hash[:cometbftAddressLen]), nil
 }

@@ -67,8 +67,7 @@ func (c AssembleGenesisRequest) nodeNames() []string {
 }
 
 // NewGenesisAssembler creates an assembler targeting the given home directory.
-// The CommandRunner parameter is ignored (kept for call-site compatibility).
-func NewGenesisAssembler(homeDir, bucket, region, chainID string, _ CommandRunner, s3Factory S3ClientFactory, uploaderFactory seis3.UploaderFactory) *GenesisAssembler {
+func NewGenesisAssembler(homeDir, bucket, region, chainID string, s3Factory S3ClientFactory, uploaderFactory seis3.UploaderFactory) *GenesisAssembler {
 	if s3Factory == nil {
 		s3Factory = DefaultS3ClientFactory
 	}

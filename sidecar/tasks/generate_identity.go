@@ -33,7 +33,7 @@ type IdentityGenerator struct {
 }
 
 // NewIdentityGenerator creates a generator targeting the given home directory.
-func NewIdentityGenerator(homeDir string, _ CommandRunner) *IdentityGenerator {
+func NewIdentityGenerator(homeDir string) *IdentityGenerator {
 	return &IdentityGenerator{homeDir: homeDir}
 }
 

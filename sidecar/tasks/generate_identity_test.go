@@ -11,7 +11,7 @@ func TestIdentityGenerator_CreatesNodeKey(t *testing.T) {
 	homeDir := t.TempDir()
 	os.MkdirAll(filepath.Join(homeDir, "config"), 0o755)
 
-	handler := NewIdentityGenerator(homeDir, nil).Handler()
+	handler := NewIdentityGenerator(homeDir).Handler()
 	err := handler(context.Background(), map[string]any{
 		"chainId": "test-chain-1",
 		"moniker": "val-0",
@@ -35,7 +35,7 @@ func TestIdentityGenerator_CreatesNodeKey(t *testing.T) {
 func TestIdentityGenerator_Idempotent(t *testing.T) {
 	homeDir := t.TempDir()
 
-	handler := NewIdentityGenerator(homeDir, nil).Handler()
+	handler := NewIdentityGenerator(homeDir).Handler()
 	params := map[string]any{"chainId": "test-chain-1", "moniker": "val-0"}
 
 	if err := handler(context.Background(), params); err != nil {
@@ -57,7 +57,7 @@ func TestIdentityGenerator_Idempotent(t *testing.T) {
 }
 
 func TestIdentityGenerator_MissingChainID(t *testing.T) {
-	handler := NewIdentityGenerator(t.TempDir(), nil).Handler()
+	handler := NewIdentityGenerator(t.TempDir()).Handler()
 	err := handler(context.Background(), map[string]any{"moniker": "val-0"})
 	if err == nil {
 		t.Fatal("expected error for missing chainId")
@@ -65,7 +65,7 @@ func TestIdentityGenerator_MissingChainID(t *testing.T) {
 }
 
 func TestIdentityGenerator_MissingMoniker(t *testing.T) {
-	handler := NewIdentityGenerator(t.TempDir(), nil).Handler()
+	handler := NewIdentityGenerator(t.TempDir()).Handler()
 	err := handler(context.Background(), map[string]any{"chainId": "test-chain-1"})
 	if err == nil {
 		t.Fatal("expected error for missing moniker")

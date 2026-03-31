@@ -132,7 +132,7 @@ func (c *SidecarClient) SubmitTask(ctx context.Context, task TaskRequest) (uuid.
 	}
 }
 
-// ListTasks returns recent task results and active scheduled tasks.
+// ListTasks returns recent task results.
 func (c *SidecarClient) ListTasks(ctx context.Context) ([]TaskResult, error) {
 	resp, err := c.inner.ListTasksWithResponse(ctx)
 	if err != nil {

@@ -103,7 +103,7 @@ persistent-peers = ""
 func TestDeserialize_AssembleGenesis(t *testing.T) {
 	// We only test deserialization, not the full S3 flow, so we expect
 	// a validation error for missing S3 bucket when bucket is empty.
-	handler := NewGenesisAssembler(t.TempDir(), "my-bucket", "us-east-1", "test-chain", nil, nil, nil).Handler()
+	handler := NewGenesisAssembler(t.TempDir(), "my-bucket", "us-east-1", "test-chain", nil, nil).Handler()
 
 	params := map[string]any{
 		"accountBalance": "10000000usei",
@@ -264,7 +264,7 @@ func TestDeserialize_UploadArtifacts(t *testing.T) {
 // TestDeserialize_GenerateIdentity verifies that the generate-identity handler
 // correctly deserializes chainId and moniker from the wire format.
 func TestDeserialize_GenerateIdentity(t *testing.T) {
-	handler := NewIdentityGenerator(t.TempDir(), nil).Handler()
+	handler := NewIdentityGenerator(t.TempDir()).Handler()
 
 	params := map[string]any{
 		"chainId": "",
@@ -349,7 +349,7 @@ func TestDeserialize_ResultExport(t *testing.T) {
 // TestDeserialize_GenerateGentx verifies that the generate-gentx handler
 // correctly deserializes all string params from the wire format.
 func TestDeserialize_GenerateGentx(t *testing.T) {
-	handler := NewGentxGenerator(t.TempDir(), nil).Handler()
+	handler := NewGentxGenerator(t.TempDir()).Handler()
 
 	params := map[string]any{
 		"chainId":        "",
