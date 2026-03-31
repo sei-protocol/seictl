@@ -40,6 +40,18 @@ var serveCmd = cli.Command{
 		}
 		port := cmd.String("port")
 		chainID := os.Getenv("SEI_CHAIN_ID")
+		genesisBucket := os.Getenv("SEI_GENESIS_BUCKET")
+		genesisRegion := os.Getenv("SEI_GENESIS_REGION")
+
+		for _, kv := range []struct{ name, val string }{
+			{"SEI_CHAIN_ID", chainID},
+			{"SEI_GENESIS_BUCKET", genesisBucket},
+			{"SEI_GENESIS_REGION", genesisRegion},
+		} {
+			if kv.val == "" {
+				return fmt.Errorf("required environment variable %s is not set", kv.name)
+			}
+		}
 
 		var snapshotUploadInterval time.Duration
 		if raw := os.Getenv("SEI_SNAPSHOT_UPLOAD_INTERVAL"); raw != "" {
@@ -65,7 +77,7 @@ var serveCmd = cli.Command{
 			engine.TaskConfigValidate:           tasks.NewConfigValidator(homeDir).Handler(),
 			engine.TaskConfigReload:             tasks.NewConfigReloader(homeDir).Handler(),
 			engine.TaskMarkReady:                tasks.MarkReadyHandler(),
-			engine.TaskConfigureGenesis:         tasks.NewGenesisFetcher(homeDir, chainID, nil).Handler(),
+			engine.TaskConfigureGenesis:         tasks.NewGenesisFetcher(homeDir, chainID, genesisBucket, genesisRegion, nil).Handler(),
 			engine.TaskConfigureStateSync:       tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
 			engine.TaskSnapshotUpload:           tasks.NewSnapshotUploader(homeDir, snapshotUploadInterval, nil).Handler(),
 			engine.TaskResultExport:             tasks.NewResultExporter(homeDir, nil).Handler(),

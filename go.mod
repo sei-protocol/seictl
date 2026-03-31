@@ -14,7 +14,7 @@ require (
 	github.com/oapi-codegen/runtime v1.2.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/sei-protocol/sei-chain v0.0.29-fix.0.20260326202429-c9b42951fef7
-	github.com/sei-protocol/sei-config v0.0.9-0.20260327015454-7cf35ff77daa
+	github.com/sei-protocol/sei-config v0.0.9
 	github.com/sei-protocol/seilog v0.0.3
 	github.com/urfave/cli/v3 v3.6.1
 	modernc.org/sqlite v1.18.1

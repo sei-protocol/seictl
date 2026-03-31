@@ -230,24 +230,15 @@ func TestDeserialize_SnapshotUpload(t *testing.T) {
 }
 
 // TestDeserialize_ConfigureGenesis verifies that the configure-genesis handler
-// correctly deserializes URI and region from the wire format.
+// works with empty params for an embedded chain.
 func TestDeserialize_ConfigureGenesis(t *testing.T) {
 	homeDir := t.TempDir()
-	fetcher := NewGenesisFetcher(homeDir, "pacific-1", nil)
+	fetcher := NewGenesisFetcher(homeDir, "pacific-1", "test-bucket", "us-east-2", nil)
 	handler := fetcher.Handler()
 
-	params := map[string]any{
-		"uri":    "s3://bucket/key",
-		"region": "us-east-1",
-	}
-
-	// This will fail at S3 download, but deserialization should succeed.
-	err := handler(context.Background(), params)
-	if err == nil {
-		t.Fatal("expected S3 error, got nil")
-	}
-	if strings.Contains(err.Error(), "parsing params") {
-		t.Fatalf("deserialization failed: %v", err)
+	err := handler(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error for embedded chain: %v", err)
 	}
 }
 
