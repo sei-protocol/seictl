@@ -17,6 +17,13 @@ import (
 
 var genesisPeersLog = seilog.NewLogger("seictl", "task", "set-genesis-peers")
 
+// SetGenesisPeersRequest holds the typed parameters for the set-genesis-peers task.
+type SetGenesisPeersRequest struct {
+	Bucket string `json:"s3Bucket"`
+	Key    string `json:"s3Key"`
+	Region string `json:"s3Region"`
+}
+
 // GenesisPeersSetter downloads a peers.json file produced by the genesis
 // assembler and writes the entries into config.toml as persistent_peers,
 // filtering out the current node's own entry.
@@ -39,20 +46,25 @@ func NewGenesisPeersSetter(homeDir string, s3Factory S3ClientFactory) *GenesisPe
 //
 //	{"s3Bucket": "...", "s3Key": "...", "s3Region": "..."}
 func (g *GenesisPeersSetter) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
-		cfg, err := parseGenesisPeersConfig(params)
-		if err != nil {
-			return err
+	return engine.TypedHandler(func(ctx context.Context, cfg SetGenesisPeersRequest) error {
+		if cfg.Bucket == "" {
+			return fmt.Errorf("set-genesis-peers: missing required param 's3Bucket'")
+		}
+		if cfg.Key == "" {
+			return fmt.Errorf("set-genesis-peers: missing required param 's3Key'")
+		}
+		if cfg.Region == "" {
+			return fmt.Errorf("set-genesis-peers: missing required param 's3Region'")
 		}
 
-		s3Client, err := g.s3ClientFactory(ctx, cfg.region)
+		s3Client, err := g.s3ClientFactory(ctx, cfg.Region)
 		if err != nil {
 			return fmt.Errorf("set-genesis-peers: building S3 client: %w", err)
 		}
 
 		output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
-			Bucket: aws.String(cfg.bucket),
-			Key:    aws.String(cfg.key),
+			Bucket: aws.String(cfg.Bucket),
+			Key:    aws.String(cfg.Key),
 		})
 		if err != nil {
 			return fmt.Errorf("set-genesis-peers: downloading peers.json: %w", err)
@@ -84,7 +96,7 @@ func (g *GenesisPeersSetter) Handler() engine.TaskHandler {
 			"total", len(allPeers), "self", selfID, "peers", len(filtered))
 
 		return writePeersToConfig(g.homeDir, filtered)
-	}
+	})
 }
 
 // readLocalNodeID reads the Tendermint node ID from the local node_key.json.
@@ -105,27 +117,4 @@ func readLocalNodeID(homeDir string) (string, error) {
 		return "", fmt.Errorf("set-genesis-peers: node_key.json has empty id")
 	}
 	return nodeKey.ID, nil
-}
-
-type genesisPeersConfig struct {
-	bucket string
-	key    string
-	region string
-}
-
-func parseGenesisPeersConfig(params map[string]any) (genesisPeersConfig, error) {
-	bucket, _ := params["s3Bucket"].(string)
-	key, _ := params["s3Key"].(string)
-	region, _ := params["s3Region"].(string)
-
-	if bucket == "" {
-		return genesisPeersConfig{}, fmt.Errorf("set-genesis-peers: missing required param 's3Bucket'")
-	}
-	if key == "" {
-		return genesisPeersConfig{}, fmt.Errorf("set-genesis-peers: missing required param 's3Key'")
-	}
-	if region == "" {
-		return genesisPeersConfig{}, fmt.Errorf("set-genesis-peers: missing required param 's3Region'")
-	}
-	return genesisPeersConfig{bucket: bucket, key: key, region: region}, nil
 }

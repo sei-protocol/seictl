@@ -104,7 +104,7 @@ func TestExportRPCUnavailable(t *testing.T) {
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
 
-	err := e.Export(context.Background(), ResultExportConfig{
+	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
 		Region:      "us-east-1",
 		RPCEndpoint: srv.URL,
@@ -124,7 +124,7 @@ func TestExportRPCNon200Status(t *testing.T) {
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
 
-	err := e.Export(context.Background(), ResultExportConfig{
+	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
 		Region:      "us-east-1",
 		RPCEndpoint: srv.URL,
@@ -157,7 +157,7 @@ func TestExportS3UploaderFactoryError(t *testing.T) {
 
 	e := NewResultExporter(tmpDir, failingUploaderFactory("simulated AWS error"))
 
-	err := e.Export(context.Background(), ResultExportConfig{
+	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
 		Region:      "us-east-1",
 		RPCEndpoint: srv.URL,
@@ -179,7 +179,7 @@ func TestExportWritesStateAfterPage(t *testing.T) {
 	}
 
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
-	err := e.Export(context.Background(), ResultExportConfig{
+	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
 		Prefix:      "results",
 		Region:      "us-east-1",
@@ -195,74 +195,54 @@ func TestExportWritesStateAfterPage(t *testing.T) {
 	}
 }
 
-func TestParseExportConfig(t *testing.T) {
+func TestExportHandler_MissingParams(t *testing.T) {
+	tmpDir := t.TempDir()
+	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+	handler := e.Handler()
+
 	cases := []struct {
-		name             string
-		params           map[string]any
-		wantErr          bool
-		wantBucket       string
-		wantRegion       string
-		wantRPCEndpoint  string
-		wantCanonicalRPC string
+		name   string
+		params map[string]any
 	}{
-		{
-			name:    "missing bucket",
-			params:  map[string]any{"region": "us-east-1"},
-			wantErr: true,
-		},
-		{
-			name:    "missing region",
-			params:  map[string]any{"bucket": "my-bucket"},
-			wantErr: true,
-		},
-		{
-			name:            "valid with defaults",
-			params:          map[string]any{"bucket": "my-bucket", "region": "us-east-1"},
-			wantBucket:      "my-bucket",
-			wantRegion:      "us-east-1",
-			wantRPCEndpoint: defaultRPCEndpoint,
-		},
-		{
-			name:            "valid with custom rpc",
-			params:          map[string]any{"bucket": "b", "region": "r", "rpcEndpoint": "http://custom:26657"},
-			wantBucket:      "b",
-			wantRegion:      "r",
-			wantRPCEndpoint: "http://custom:26657",
-		},
-		{
-			name:             "valid with canonicalRpc",
-			params:           map[string]any{"bucket": "b", "region": "r", "canonicalRpc": "http://canonical:26657"},
-			wantBucket:       "b",
-			wantRegion:       "r",
-			wantRPCEndpoint:  defaultRPCEndpoint,
-			wantCanonicalRPC: "http://canonical:26657",
-		},
+		{"missing bucket", map[string]any{"region": "us-east-1"}},
+		{"missing region", map[string]any{"bucket": "my-bucket"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := parseExportConfig(tc.params)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseExportConfig() error = %v", err)
-			}
-			if cfg.Bucket != tc.wantBucket {
-				t.Errorf("Bucket = %q, want %q", cfg.Bucket, tc.wantBucket)
-			}
-			if cfg.Region != tc.wantRegion {
-				t.Errorf("Region = %q, want %q", cfg.Region, tc.wantRegion)
-			}
-			if cfg.RPCEndpoint != tc.wantRPCEndpoint {
-				t.Errorf("RPCEndpoint = %q, want %q", cfg.RPCEndpoint, tc.wantRPCEndpoint)
-			}
-			if cfg.CanonicalRPC != tc.wantCanonicalRPC {
-				t.Errorf("CanonicalRPC = %q, want %q", cfg.CanonicalRPC, tc.wantCanonicalRPC)
+			err := handler(context.Background(), tc.params)
+			if err == nil {
+				t.Fatal("expected error, got nil")
 			}
 		})
+	}
+}
+
+func TestExportConfigJSONRoundTrip(t *testing.T) {
+	cfg := ResultExportRequest{
+		Bucket:       "my-bucket",
+		Region:       "us-east-1",
+		RPCEndpoint:  "http://custom:26657",
+		CanonicalRPC: "http://canonical:26657",
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshaling: %v", err)
+	}
+	var decoded ResultExportRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshaling: %v", err)
+	}
+	if decoded.Bucket != cfg.Bucket {
+		t.Errorf("Bucket = %q, want %q", decoded.Bucket, cfg.Bucket)
+	}
+	if decoded.Region != cfg.Region {
+		t.Errorf("Region = %q, want %q", decoded.Region, cfg.Region)
+	}
+	if decoded.RPCEndpoint != cfg.RPCEndpoint {
+		t.Errorf("RPCEndpoint = %q, want %q", decoded.RPCEndpoint, cfg.RPCEndpoint)
+	}
+	if decoded.CanonicalRPC != cfg.CanonicalRPC {
+		t.Errorf("CanonicalRPC = %q, want %q", decoded.CanonicalRPC, cfg.CanonicalRPC)
 	}
 }
 
@@ -318,7 +298,7 @@ func TestExportAndCompare_DivergenceDetected(t *testing.T) {
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
 
-	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
 		Prefix:       "compare/",
 		Region:       "us-east-1",
@@ -346,7 +326,7 @@ func TestExportAndCompare_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	err := e.ExportAndCompare(ctx, ResultExportConfig{
+	err := e.ExportAndCompare(ctx, ResultExportRequest{
 		Bucket:       "test-bucket",
 		Region:       "us-east-1",
 		RPCEndpoint:  srv.URL,
@@ -364,7 +344,7 @@ func TestExportAndCompare_S3UploaderError(t *testing.T) {
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, failingUploaderFactory("AWS creds expired"))
 
-	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
 		Region:       "us-east-1",
 		RPCEndpoint:  srv.URL,
@@ -391,7 +371,7 @@ func TestExportAndCompare_ResumesFromExportState(t *testing.T) {
 	}
 
 	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
-	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
 		Region:       "us-east-1",
 		RPCEndpoint:  shadowSrv.URL,
@@ -421,7 +401,7 @@ func TestExportAndCompare_UploadsDivergenceReport(t *testing.T) {
 		return recorder, nil
 	})
 
-	err := e.ExportAndCompare(context.Background(), ResultExportConfig{
+	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
 		Prefix:       "shadow/pacific-1/",
 		Region:       "us-east-1",

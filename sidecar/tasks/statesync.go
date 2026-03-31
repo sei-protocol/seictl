@@ -56,36 +56,23 @@ func NewStateSyncConfigurer(homeDir string, client HTTPDoer) *StateSyncConfigure
 
 // Handler returns an engine.TaskHandler.
 func (s *StateSyncConfigurer) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
-		useLocal, _ := params["useLocalSnapshot"].(bool)
-		trustPeriod, _ := params["trustPeriod"].(string)
-		var backfill int64
-		switch v := params["backfillBlocks"].(type) {
-		case float64:
-			backfill = int64(v)
-		case int64:
-			backfill = v
-		}
-		return s.Configure(ctx, StateSyncParams{
-			UseLocalSnapshot: useLocal,
-			TrustPeriod:      trustPeriod,
-			BackfillBlocks:   backfill,
-		})
-	}
+	return engine.TypedHandler(func(ctx context.Context, params StateSyncRequest) error {
+		return s.Configure(ctx, params)
+	})
 }
 
-// StateSyncParams groups the caller-provided parameters for state-sync configuration.
-type StateSyncParams struct {
-	UseLocalSnapshot bool
-	TrustPeriod      string
-	BackfillBlocks   int64
+// StateSyncRequest groups the caller-provided parameters for state-sync configuration.
+type StateSyncRequest struct {
+	UseLocalSnapshot bool   `json:"useLocalSnapshot"`
+	TrustPeriod      string `json:"trustPeriod"`
+	BackfillBlocks   int64  `json:"backfillBlocks"`
 }
 
 // Configure reads persistent-peers from config.toml, queries a peer for a
 // trust point, and writes the state sync settings back to config.toml.
 // When UseLocalSnapshot is true, the trust height is derived from the
 // locally-restored snapshot and use-local-snapshot is set in config.toml.
-func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncParams) error {
+func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncRequest) error {
 	if markerExists(s.homeDir, stateSyncMarkerFile) {
 		ssLog.Debug("already completed, skipping")
 		return nil

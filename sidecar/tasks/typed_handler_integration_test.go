@@ -1,0 +1,390 @@
+package tasks
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// TestDeserialize_SnapshotRestore verifies that the snapshot-restore handler
+// correctly deserializes simple string fields from the wire format.
+func TestDeserialize_SnapshotRestore(t *testing.T) {
+	homeDir := t.TempDir()
+	// Pre-write a marker so the handler returns early without S3 calls.
+	if err := writeMarker(homeDir, snapshotMarkerFile); err != nil {
+		t.Fatal(err)
+	}
+
+	restorer := NewSnapshotRestorer(homeDir, nil)
+	handler := restorer.Handler()
+
+	params := map[string]any{
+		"bucket":  "my-bucket",
+		"prefix":  "snapshots/",
+		"region":  "us-east-1",
+		"chainId": "pacific-1",
+	}
+
+	// The handler should succeed (skip via marker) without a parse error.
+	err := handler(context.Background(), params)
+	if err != nil {
+		t.Fatalf("snapshot-restore handler returned error: %v", err)
+	}
+}
+
+// TestDeserialize_DiscoverPeers verifies that the discover-peers handler
+// correctly deserializes nested sources arrays from the wire format.
+func TestDeserialize_DiscoverPeers(t *testing.T) {
+	homeDir := t.TempDir()
+	ensureConfigDir(t, homeDir)
+
+	discoverer := NewPeerDiscoverer(homeDir, nil, nil)
+	handler := discoverer.Handler()
+
+	params := map[string]any{
+		"sources": []any{
+			map[string]any{
+				"type":      "static",
+				"addresses": []any{"abc@1.2.3.4:26656"},
+			},
+		},
+	}
+
+	err := handler(context.Background(), params)
+	if err != nil {
+		t.Fatalf("discover-peers handler returned error: %v", err)
+	}
+
+	// Verify the peers were written to config.
+	got := readPeersFromConfigTOML(t, homeDir)
+	if got != "abc@1.2.3.4:26656" {
+		t.Errorf("peers = %q, want %q", got, "abc@1.2.3.4:26656")
+	}
+}
+
+// TestDeserialize_ConfigPatch verifies that the config-patch handler
+// correctly deserializes nested map[string]map[string]any from the wire format.
+func TestDeserialize_ConfigPatch(t *testing.T) {
+	homeDir := t.TempDir()
+	setupConfigFile(t, homeDir, `
+[p2p]
+persistent-peers = ""
+`)
+
+	patcher := NewConfigPatcher(homeDir)
+	handler := patcher.Handler()
+
+	params := map[string]any{
+		"files": map[string]any{
+			"config.toml": map[string]any{
+				"p2p": map[string]any{
+					"persistent-peers": "node1@1.2.3.4:26656",
+				},
+			},
+		},
+	}
+
+	err := handler(context.Background(), params)
+	if err != nil {
+		t.Fatalf("config-patch handler returned error: %v", err)
+	}
+
+	doc := readTOML(t, filepath.Join(homeDir, "config", "config.toml"))
+	p2p := doc["p2p"].(map[string]any)
+	if p2p["persistent-peers"] != "node1@1.2.3.4:26656" {
+		t.Errorf("peers = %q, want %q", p2p["persistent-peers"], "node1@1.2.3.4:26656")
+	}
+}
+
+// TestDeserialize_AssembleGenesis verifies that the assemble-genesis handler
+// correctly deserializes the nodes array with name fields from the wire format.
+func TestDeserialize_AssembleGenesis(t *testing.T) {
+	// We only test deserialization, not the full S3 flow, so we expect
+	// a validation error for missing S3 bucket when bucket is empty.
+	handler := NewGenesisAssembler(t.TempDir(), nil, nil, nil).Handler()
+
+	params := map[string]any{
+		"s3Bucket":       "my-bucket",
+		"s3Region":       "us-east-1",
+		"accountBalance": "10000000usei",
+		"namespace":      "default",
+		"nodes": []any{
+			map[string]any{"name": "val-0"},
+			map[string]any{"name": "val-1"},
+		},
+	}
+
+	// This will fail at the S3 download step (no real S3), but if it gets
+	// past param parsing without a "parsing params" error, deserialization worked.
+	err := handler(context.Background(), params)
+	if err == nil {
+		t.Fatal("expected error (no S3 client), got nil")
+	}
+	if strings.Contains(err.Error(), "parsing params") {
+		t.Fatalf("deserialization failed: %v", err)
+	}
+}
+
+// TestDeserialize_AwaitCondition verifies that the await-condition handler
+// correctly deserializes int64 from float64 (JSON number coercion) and
+// string fields from the wire format.
+func TestDeserialize_AwaitCondition(t *testing.T) {
+	handler := NewConditionWaiter(nil).Handler()
+
+	// float64(500) simulates what json.Unmarshal produces for JSON numbers
+	// when the target is map[string]any.
+	params := map[string]any{
+		"condition":    "height",
+		"targetHeight": float64(500),
+	}
+
+	// The handler will try to poll RPC (and fail because there's no server),
+	// but it should parse params without error. We use a context that
+	// cancels immediately to avoid blocking.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := handler(ctx, params)
+	if err == nil {
+		t.Fatal("expected context error, got nil")
+	}
+	// If we get a context error (not a parsing error), deserialization succeeded.
+	if strings.Contains(err.Error(), "parsing params") {
+		t.Fatalf("deserialization failed: %v", err)
+	}
+}
+
+// TestDeserialize_ConfigApply verifies that the config-apply handler
+// correctly deserializes the ConfigIntent (overrides map + mode string).
+func TestDeserialize_ConfigApply(t *testing.T) {
+	homeDir := t.TempDir()
+	applier := NewConfigApplier(homeDir)
+	handler := applier.Handler()
+
+	params := map[string]any{
+		"mode":        "full",
+		"incremental": false,
+		"overrides": map[string]any{
+			"evm.http_port": "9545",
+		},
+	}
+
+	err := handler(context.Background(), params)
+	if err != nil {
+		t.Fatalf("config-apply handler returned error: %v", err)
+	}
+
+	// Verify the config was actually written.
+	configPath := filepath.Join(homeDir, "config", "config.toml")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		t.Fatal("config.toml was not written")
+	}
+}
+
+// TestDeserialize_ConfigReload verifies that the config-reload handler
+// correctly deserializes the fields map from the wire format.
+func TestDeserialize_ConfigReload(t *testing.T) {
+	// config-reload needs a valid on-disk config to read.
+	// We just check that deserialization doesn't fail when fields is empty
+	// (it'll fail with a validation error, not a parse error).
+	handler := NewConfigReloader(t.TempDir()).Handler()
+
+	params := map[string]any{
+		"fields": map[string]any{},
+	}
+
+	err := handler(context.Background(), params)
+	if err == nil {
+		t.Fatal("expected error for empty fields, got nil")
+	}
+	if strings.Contains(err.Error(), "parsing params") {
+		t.Fatalf("deserialization failed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "at least one field") {
+		t.Errorf("expected 'at least one field' error, got: %v", err)
+	}
+}
+
+// TestDeserialize_SnapshotUpload verifies that the snapshot-upload handler
+// correctly deserializes simple string fields from the wire format.
+func TestDeserialize_SnapshotUpload(t *testing.T) {
+	handler := NewSnapshotUploader(t.TempDir(), 0, nil).Handler()
+
+	params := map[string]any{
+		"bucket": "",
+		"region": "us-east-1",
+	}
+
+	err := handler(context.Background(), params)
+	if err == nil {
+		t.Fatal("expected error for empty bucket, got nil")
+	}
+	if strings.Contains(err.Error(), "parsing params") {
+		t.Fatalf("deserialization failed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "missing required param 'bucket'") {
+		t.Errorf("expected bucket validation error, got: %v", err)
+	}
+}
+
+// TestDeserialize_ConfigureGenesis verifies that the configure-genesis handler
+// correctly deserializes URI and region from the wire format.
+func TestDeserialize_ConfigureGenesis(t *testing.T) {
+	homeDir := t.TempDir()
+	fetcher := NewGenesisFetcher(homeDir, "pacific-1", nil)
+	handler := fetcher.Handler()
+
+	params := map[string]any{
+		"uri":    "s3://bucket/key",
+		"region": "us-east-1",
+	}
+
+	// This will fail at S3 download, but deserialization should succeed.
+	err := handler(context.Background(), params)
+	if err == nil {
+		t.Fatal("expected S3 error, got nil")
+	}
+	if strings.Contains(err.Error(), "parsing params") {
+		t.Fatalf("deserialization failed: %v", err)
+	}
+}
+
+// TestDeserialize_UploadArtifacts verifies that the upload-genesis-artifacts handler
+// correctly deserializes the S3 and node name params from the wire format.
+func TestDeserialize_UploadArtifacts(t *testing.T) {
+	handler := NewGenesisArtifactUploader(t.TempDir(), nil).Handler()
+
+	params := map[string]any{
+		"s3Bucket": "",
+		"s3Region": "us-east-1",
+		"nodeName": "val-0",
+	}
+
+	err := handler(context.Background(), params)
+	if err == nil {
+		t.Fatal("expected error for empty bucket, got nil")
+	}
+	if strings.Contains(err.Error(), "parsing params") {
+		t.Fatalf("deserialization failed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "missing required param 's3Bucket'") {
+		t.Errorf("expected s3Bucket validation error, got: %v", err)
+	}
+}
+
+// TestDeserialize_GenerateIdentity verifies that the generate-identity handler
+// correctly deserializes chainId and moniker from the wire format.
+func TestDeserialize_GenerateIdentity(t *testing.T) {
+	handler := NewIdentityGenerator(t.TempDir(), nil).Handler()
+
+	params := map[string]any{
+		"chainId": "",
+		"moniker": "val-0",
+	}
+
+	err := handler(context.Background(), params)
+	if err == nil {
+		t.Fatal("expected error for empty chainId, got nil")
+	}
+	if strings.Contains(err.Error(), "parsing params") {
+		t.Fatalf("deserialization failed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "missing required param 'chainId'") {
+		t.Errorf("expected chainId validation error, got: %v", err)
+	}
+}
+
+// TestDeserialize_SetGenesisPeers verifies that the set-genesis-peers handler
+// correctly deserializes S3 coordinates from the wire format.
+func TestDeserialize_SetGenesisPeers(t *testing.T) {
+	handler := NewGenesisPeersSetter(t.TempDir(), nil).Handler()
+
+	params := map[string]any{
+		"s3Bucket": "",
+		"s3Key":    "peers.json",
+		"s3Region": "us-east-1",
+	}
+
+	err := handler(context.Background(), params)
+	if err == nil {
+		t.Fatal("expected error for empty bucket, got nil")
+	}
+	if strings.Contains(err.Error(), "parsing params") {
+		t.Fatalf("deserialization failed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "missing required param 's3Bucket'") {
+		t.Errorf("expected s3Bucket validation error, got: %v", err)
+	}
+}
+
+// TestDeserialize_StateSync verifies that the state-sync handler
+// correctly deserializes useLocalSnapshot (bool), trustPeriod (string),
+// and backfillBlocks (int64 from float64) from the wire format.
+func TestDeserialize_StateSync(t *testing.T) {
+	homeDir := t.TempDir()
+	setupPeersInConfig(t, homeDir, nil)
+
+	handler := NewStateSyncConfigurer(homeDir, nil).Handler()
+
+	params := map[string]any{
+		"useLocalSnapshot": true,
+		"trustPeriod":      "168h0m0s",
+		"backfillBlocks":   float64(6000),
+	}
+
+	// Will fail because there are no peers, but deserialization should succeed.
+	err := handler(context.Background(), params)
+	if err == nil {
+		t.Fatal("expected error (no peers), got nil")
+	}
+	if strings.Contains(err.Error(), "parsing params") {
+		t.Fatalf("deserialization failed: %v", err)
+	}
+}
+
+// TestDeserialize_ResultExport verifies that the result-export handler
+// correctly deserializes the bucket, region, and optional fields.
+func TestDeserialize_ResultExport(t *testing.T) {
+	handler := NewResultExporter(t.TempDir(), nil).Handler()
+
+	params := map[string]any{
+		"bucket": "",
+		"region": "us-east-1",
+	}
+
+	err := handler(context.Background(), params)
+	if err == nil {
+		t.Fatal("expected error for empty bucket, got nil")
+	}
+	if strings.Contains(err.Error(), "parsing params") {
+		t.Fatalf("deserialization failed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "missing required param 'bucket'") {
+		t.Errorf("expected bucket validation error, got: %v", err)
+	}
+}
+
+// TestDeserialize_GenerateGentx verifies that the generate-gentx handler
+// correctly deserializes all string params from the wire format.
+func TestDeserialize_GenerateGentx(t *testing.T) {
+	handler := NewGentxGenerator(t.TempDir(), nil).Handler()
+
+	params := map[string]any{
+		"chainId":        "",
+		"stakingAmount":  "1000usei",
+		"accountBalance": "10000usei",
+	}
+
+	err := handler(context.Background(), params)
+	if err == nil {
+		t.Fatal("expected error for empty chainId, got nil")
+	}
+	if strings.Contains(err.Error(), "parsing params") {
+		t.Fatalf("deserialization failed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "missing required param 'chainId'") {
+		t.Errorf("expected chainId validation error, got: %v", err)
+	}
+}

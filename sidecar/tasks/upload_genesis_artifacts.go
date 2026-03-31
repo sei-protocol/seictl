@@ -20,6 +20,14 @@ var artifactLog = seilog.NewLogger("seictl", "task", "upload-genesis-artifacts")
 
 const artifactUploadMarkerFile = ".sei-sidecar-artifact-upload-done"
 
+// UploadArtifactsRequest holds the typed parameters for the upload-genesis-artifacts task.
+type UploadArtifactsRequest struct {
+	Bucket   string `json:"s3Bucket"`
+	Prefix   string `json:"s3Prefix"`
+	Region   string `json:"s3Region"`
+	NodeName string `json:"nodeName"`
+}
+
 // GenesisArtifactUploader uploads the gentx file and a node identity
 // manifest to S3 so the assembler can collect them.
 type GenesisArtifactUploader struct {
@@ -46,36 +54,41 @@ func NewGenesisArtifactUploader(homeDir string, factory seis3.UploaderFactory) *
 //	<prefix>/<nodeName>/gentx.json   - the validator's genesis transaction
 //	<prefix>/<nodeName>/identity.json - node ID and validator pubkey metadata
 func (u *GenesisArtifactUploader) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
+	return engine.TypedHandler(func(ctx context.Context, cfg UploadArtifactsRequest) error {
 		if markerExists(u.homeDir, artifactUploadMarkerFile) {
 			artifactLog.Debug("already completed, skipping")
 			return nil
 		}
 
-		cfg, err := parseArtifactUploadConfig(params)
-		if err != nil {
-			return err
+		if cfg.Bucket == "" {
+			return fmt.Errorf("upload-genesis-artifacts: missing required param 's3Bucket'")
+		}
+		if cfg.Region == "" {
+			return fmt.Errorf("upload-genesis-artifacts: missing required param 's3Region'")
+		}
+		if cfg.NodeName == "" {
+			return fmt.Errorf("upload-genesis-artifacts: missing required param 'nodeName'")
 		}
 
-		uploader, err := u.s3UploaderFactory(ctx, cfg.region)
+		uploader, err := u.s3UploaderFactory(ctx, cfg.Region)
 		if err != nil {
 			return fmt.Errorf("upload-genesis-artifacts: building S3 uploader: %w", err)
 		}
 
-		prefix := normalizePrefix(cfg.prefix)
-		nodePrefix := prefix + cfg.nodeName + "/"
+		prefix := normalizePrefix(cfg.Prefix)
+		nodePrefix := prefix + cfg.NodeName + "/"
 
-		if err := u.uploadGentx(ctx, uploader, cfg.bucket, nodePrefix); err != nil {
+		if err := u.uploadGentx(ctx, uploader, cfg.Bucket, nodePrefix); err != nil {
 			return err
 		}
 
-		if err := u.uploadIdentity(ctx, uploader, cfg.bucket, nodePrefix); err != nil {
+		if err := u.uploadIdentity(ctx, uploader, cfg.Bucket, nodePrefix); err != nil {
 			return err
 		}
 
-		artifactLog.Info("artifacts uploaded", "bucket", cfg.bucket, "prefix", nodePrefix)
+		artifactLog.Info("artifacts uploaded", "bucket", cfg.Bucket, "prefix", nodePrefix)
 		return writeMarker(u.homeDir, artifactUploadMarkerFile)
-	}
+	})
 }
 
 // uploadGentx finds the single gentx file in config/gentx/ and uploads it.
@@ -146,30 +159,4 @@ func (u *GenesisArtifactUploader) uploadIdentity(ctx context.Context, uploader s
 		return fmt.Errorf("upload-genesis-artifacts: uploading identity: %w", err)
 	}
 	return nil
-}
-
-type artifactUploadConfig struct {
-	bucket   string
-	prefix   string
-	region   string
-	nodeName string
-}
-
-func parseArtifactUploadConfig(params map[string]any) (artifactUploadConfig, error) {
-	bucket, _ := params["s3Bucket"].(string)
-	prefix, _ := params["s3Prefix"].(string)
-	region, _ := params["s3Region"].(string)
-	nodeName, _ := params["nodeName"].(string)
-
-	if bucket == "" {
-		return artifactUploadConfig{}, fmt.Errorf("upload-genesis-artifacts: missing required param 's3Bucket'")
-	}
-	if region == "" {
-		return artifactUploadConfig{}, fmt.Errorf("upload-genesis-artifacts: missing required param 's3Region'")
-	}
-	if nodeName == "" {
-		return artifactUploadConfig{}, fmt.Errorf("upload-genesis-artifacts: missing required param 'nodeName'")
-	}
-
-	return artifactUploadConfig{bucket: bucket, prefix: prefix, region: region, nodeName: nodeName}, nil
 }

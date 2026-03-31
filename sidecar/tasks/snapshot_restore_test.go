@@ -86,7 +86,7 @@ func TestSnapshotRestoreExtractsArchive(t *testing.T) {
 		},
 	}
 	restorer := NewSnapshotRestorer(homeDir, mockFactory(client))
-	err := restorer.Restore(context.Background(), SnapshotConfig{
+	err := restorer.Restore(context.Background(), SnapshotRestoreRequest{
 		Bucket:  "test-bucket",
 		Prefix:  "snapshots/",
 		Region:  "us-east-1",
@@ -124,7 +124,7 @@ func TestSnapshotRestoreSkipsWhenMarkerExists(t *testing.T) {
 		errDefault: fmt.Errorf("should not be called"),
 	}))
 
-	err := restorer.Restore(context.Background(), SnapshotConfig{
+	err := restorer.Restore(context.Background(), SnapshotRestoreRequest{
 		Bucket:  "test-bucket",
 		Prefix:  "snapshots/",
 		Region:  "us-east-1",
@@ -142,7 +142,7 @@ func TestSnapshotRestoreNoMarkerOnLatestTxtError(t *testing.T) {
 		errDefault: fmt.Errorf("access denied"),
 	}))
 
-	err := restorer.Restore(context.Background(), SnapshotConfig{
+	err := restorer.Restore(context.Background(), SnapshotRestoreRequest{
 		Bucket:  "test-bucket",
 		Prefix:  "snapshots/",
 		Region:  "us-east-1",
@@ -168,7 +168,7 @@ func TestSnapshotRestoreNoMarkerOnDownloadError(t *testing.T) {
 	}
 	restorer := NewSnapshotRestorer(homeDir, mockFactory(client))
 
-	err := restorer.Restore(context.Background(), SnapshotConfig{
+	err := restorer.Restore(context.Background(), SnapshotRestoreRequest{
 		Bucket:  "test-bucket",
 		Prefix:  "snapshots/",
 		Region:  "us-east-1",
@@ -196,7 +196,7 @@ func TestSnapshotRestoreRejectsPathTraversal(t *testing.T) {
 		},
 	}
 	restorer := NewSnapshotRestorer(homeDir, mockFactory(client))
-	err := restorer.Restore(context.Background(), SnapshotConfig{
+	err := restorer.Restore(context.Background(), SnapshotRestoreRequest{
 		Bucket:  "test-bucket",
 		Prefix:  "snapshots/",
 		Region:  "us-east-1",
@@ -221,7 +221,7 @@ func TestSnapshotRestoreCleansUpTempFile(t *testing.T) {
 	}
 
 	restorer := NewSnapshotRestorer(homeDir, mockFactory(client))
-	err := restorer.Restore(context.Background(), SnapshotConfig{
+	err := restorer.Restore(context.Background(), SnapshotRestoreRequest{
 		Bucket:  "test-bucket",
 		Prefix:  "snapshots/",
 		Region:  "us-east-1",
@@ -280,7 +280,7 @@ func TestSnapshotRestoreWritesHeightFile(t *testing.T) {
 		},
 	}
 	restorer := NewSnapshotRestorer(homeDir, mockFactory(client))
-	err := restorer.Restore(context.Background(), SnapshotConfig{
+	err := restorer.Restore(context.Background(), SnapshotRestoreRequest{
 		Bucket:  "test-bucket",
 		Prefix:  "snapshots/",
 		Region:  "us-east-1",

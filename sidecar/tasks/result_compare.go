@@ -25,7 +25,7 @@ type comparisonLoop struct {
 	exporter     *ResultExporter
 	comparator   *shadow.Comparator
 	uploader     seis3.Uploader
-	cfg          ResultExportConfig
+	cfg          ResultExportRequest
 	prefix       string
 	height       int64
 	pageBuf      []shadow.CompareResult
@@ -35,7 +35,7 @@ type comparisonLoop struct {
 // ExportAndCompare runs a continuous comparison between the local shadow node
 // and a canonical chain. It completes successfully when app-hash divergence is
 // detected, uploading a DivergenceReport alongside the comparison pages.
-func (e *ResultExporter) ExportAndCompare(ctx context.Context, cfg ResultExportConfig) error {
+func (e *ResultExporter) ExportAndCompare(ctx context.Context, cfg ResultExportRequest) error {
 	loop, err := e.newComparisonLoop(ctx, cfg)
 	if err != nil {
 		return err
@@ -49,7 +49,7 @@ func (e *ResultExporter) ExportAndCompare(ctx context.Context, cfg ResultExportC
 	return loop.run(ctx)
 }
 
-func (e *ResultExporter) newComparisonLoop(ctx context.Context, cfg ResultExportConfig) (*comparisonLoop, error) {
+func (e *ResultExporter) newComparisonLoop(ctx context.Context, cfg ResultExportRequest) (*comparisonLoop, error) {
 	uploader, err := e.s3UploaderFactory(ctx, cfg.Region)
 	if err != nil {
 		return nil, fmt.Errorf("building S3 uploader: %w", err)

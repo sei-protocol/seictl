@@ -29,11 +29,11 @@ const (
 	defaultUploadInterval = 7 * 24 * time.Hour // weekly
 )
 
-// SnapshotUploadConfig holds the parameters for the snapshot upload task.
-type SnapshotUploadConfig struct {
-	Bucket string
-	Prefix string
-	Region string
+// SnapshotUploadRequest holds the parameters for the snapshot upload task.
+type SnapshotUploadRequest struct {
+	Bucket string `json:"bucket"`
+	Prefix string `json:"prefix"`
+	Region string `json:"region"`
 }
 
 // uploadState tracks the last successfully uploaded snapshot height.
@@ -70,16 +70,18 @@ func NewSnapshotUploader(homeDir string, uploadInterval time.Duration, factory s
 // sleeping for the configured interval between attempts. It stays
 // running until the context is cancelled.
 func (u *SnapshotUploader) Handler() engine.TaskHandler {
-	return func(ctx context.Context, params map[string]any) error {
-		cfg, err := parseUploadConfig(params)
-		if err != nil {
-			return err
+	return engine.TypedHandler(func(ctx context.Context, cfg SnapshotUploadRequest) error {
+		if cfg.Bucket == "" {
+			return fmt.Errorf("snapshot-upload: missing required param 'bucket'")
+		}
+		if cfg.Region == "" {
+			return fmt.Errorf("snapshot-upload: missing required param 'region'")
 		}
 		return u.runLoop(ctx, cfg)
-	}
+	})
 }
 
-func (u *SnapshotUploader) runLoop(ctx context.Context, cfg SnapshotUploadConfig) error {
+func (u *SnapshotUploader) runLoop(ctx context.Context, cfg SnapshotUploadRequest) error {
 	uploadLog.Info("starting snapshot upload loop", "interval", u.uploadInterval, "bucket", cfg.Bucket)
 	for {
 		if err := u.Upload(ctx, cfg); err != nil {
@@ -101,7 +103,7 @@ func (u *SnapshotUploader) runLoop(ctx context.Context, cfg SnapshotUploadConfig
 //
 // The archive is streamed through an io.Pipe so it never needs to be buffered
 // entirely in memory; the transfermanager handles multipart upload automatically.
-func (u *SnapshotUploader) Upload(ctx context.Context, cfg SnapshotUploadConfig) error {
+func (u *SnapshotUploader) Upload(ctx context.Context, cfg SnapshotUploadRequest) error {
 	snapshotsDir := filepath.Join(u.homeDir, "data", "snapshots")
 
 	height, err := pickUploadCandidate(snapshotsDir)
@@ -301,21 +303,6 @@ func addFileToTar(tw *tar.Writer, path, name string, info os.FileInfo) error {
 	return err
 }
 
-func parseUploadConfig(params map[string]any) (SnapshotUploadConfig, error) {
-	bucket, _ := params["bucket"].(string)
-	prefix, _ := params["prefix"].(string)
-	region, _ := params["region"].(string)
-
-	if bucket == "" {
-		return SnapshotUploadConfig{}, fmt.Errorf("snapshot-upload: missing required param 'bucket'")
-	}
-	if region == "" {
-		return SnapshotUploadConfig{}, fmt.Errorf("snapshot-upload: missing required param 'region'")
-	}
-
-	return SnapshotUploadConfig{Bucket: bucket, Prefix: prefix, Region: region}, nil
-}
-
 func normalizePrefix(prefix string) string {
 	if prefix == "" {
 		return ""
@@ -324,6 +311,27 @@ func normalizePrefix(prefix string) string {
 		return prefix + "/"
 	}
 	return prefix
+}
+
+// parseUploadConfig converts raw params into SnapshotUploadRequest with validation.
+func parseUploadConfig(params map[string]any) (SnapshotUploadRequest, error) {
+	var cfg SnapshotUploadRequest
+	if b, _ := params["bucket"].(string); b != "" {
+		cfg.Bucket = b
+	}
+	if p, _ := params["prefix"].(string); p != "" {
+		cfg.Prefix = p
+	}
+	if r, _ := params["region"].(string); r != "" {
+		cfg.Region = r
+	}
+	if cfg.Bucket == "" {
+		return cfg, fmt.Errorf("snapshot-upload: missing required param 'bucket'")
+	}
+	if cfg.Region == "" {
+		return cfg, fmt.Errorf("snapshot-upload: missing required param 'region'")
+	}
+	return cfg, nil
 }
 
 func (u *SnapshotUploader) readUploadState() uploadState {
