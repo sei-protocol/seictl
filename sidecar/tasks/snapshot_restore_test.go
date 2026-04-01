@@ -99,7 +99,7 @@ func TestSnapshotRestoreExtractsArchive(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"testchain/latest.txt":      []byte("100000000"),
+			"testchain/latest.txt":       []byte("100000000"),
 			"testchain/100000000.tar.gz": archive,
 		},
 	}
@@ -178,7 +178,7 @@ func TestSnapshotRestoreRejectsPathTraversal(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/latest.txt":      []byte("100000000"),
+			"c/latest.txt":       []byte("100000000"),
 			"c/100000000.tar.gz": archive,
 		},
 	}
@@ -196,7 +196,7 @@ func TestSnapshotRestoreCleansUpTempFile(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/latest.txt":      []byte("100000000"),
+			"c/latest.txt":       []byte("100000000"),
 			"c/100000000.tar.gz": archive,
 		},
 	}
@@ -225,7 +225,7 @@ func TestSnapshotRestoreWritesHeightFile(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/latest.txt":      []byte("100000000"),
+			"c/latest.txt":       []byte("100000000"),
 			"c/100000000.tar.gz": archive,
 		},
 	}
