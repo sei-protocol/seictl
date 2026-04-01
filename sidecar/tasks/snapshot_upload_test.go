@@ -99,22 +99,18 @@ func TestUpload_UploadsArchiveAndLatestTxt(t *testing.T) {
 	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
 
 	mock := newMockS3Uploader()
-	uploader := NewSnapshotUploader(homeDir, 0, mockUploaderFactory(mock))
+	uploader := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 
-	err := uploader.Upload(context.Background(), SnapshotUploadRequest{
-		Bucket: "my-bucket",
-		Prefix: "state-sync",
-		Region: "eu-central-1",
-	})
+	err := uploader.Upload(context.Background())
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
 
-	if _, ok := mock.uploads["my-bucket/state-sync/1000.tar.gz"]; !ok {
+	if _, ok := mock.uploads["my-bucket/testchain/1000.tar.gz"]; !ok {
 		t.Error("expected archive upload at state-sync/1000.tar.gz")
 	}
 
-	latest, ok := mock.uploads["my-bucket/state-sync/latest.txt"]
+	latest, ok := mock.uploads["my-bucket/testchain/latest.txt"]
 	if !ok {
 		t.Fatal("expected latest.txt upload")
 	}
@@ -132,13 +128,9 @@ func TestUpload_SkipsWhenAlreadyUploaded(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
 	mock := newMockS3Uploader()
-	uploader := NewSnapshotUploader(homeDir, 0, mockUploaderFactory(mock))
+	uploader := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 
-	err := uploader.Upload(context.Background(), SnapshotUploadRequest{
-		Bucket: "my-bucket",
-		Prefix: "state-sync",
-		Region: "eu-central-1",
-	})
+	err := uploader.Upload(context.Background())
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
@@ -157,18 +149,14 @@ func TestUpload_UploadsNewerSnapshot(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
 	mock := newMockS3Uploader()
-	uploader := NewSnapshotUploader(homeDir, 0, mockUploaderFactory(mock))
+	uploader := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 
-	err := uploader.Upload(context.Background(), SnapshotUploadRequest{
-		Bucket: "my-bucket",
-		Prefix: "state-sync",
-		Region: "eu-central-1",
-	})
+	err := uploader.Upload(context.Background())
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
 
-	if _, ok := mock.uploads["my-bucket/state-sync/2000.tar.gz"]; !ok {
+	if _, ok := mock.uploads["my-bucket/testchain/2000.tar.gz"]; !ok {
 		t.Error("expected archive upload at state-sync/2000.tar.gz")
 	}
 }
@@ -178,13 +166,9 @@ func TestUpload_NoOpsWhenTooFewSnapshots(t *testing.T) {
 	setupSnapshotDirs(t, homeDir, []int64{1000})
 
 	mock := newMockS3Uploader()
-	uploader := NewSnapshotUploader(homeDir, 0, mockUploaderFactory(mock))
+	uploader := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 
-	err := uploader.Upload(context.Background(), SnapshotUploadRequest{
-		Bucket: "my-bucket",
-		Prefix: "state-sync",
-		Region: "eu-central-1",
-	})
+	err := uploader.Upload(context.Background())
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
@@ -199,13 +183,9 @@ func TestUpload_WritesUploadState(t *testing.T) {
 	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
 
 	mock := newMockS3Uploader()
-	uploader := NewSnapshotUploader(homeDir, 0, mockUploaderFactory(mock))
+	uploader := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 
-	err := uploader.Upload(context.Background(), SnapshotUploadRequest{
-		Bucket: "my-bucket",
-		Prefix: "state-sync",
-		Region: "eu-central-1",
-	})
+	err := uploader.Upload(context.Background())
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}

@@ -20,17 +20,7 @@ func genSnapshotRestoreTask() gopter.Gen {
 }
 
 func genSnapshotUploadTask() gopter.Gen {
-	return gopter.CombineGens(
-		genNonEmptyString(),
-		genNonEmptyString(),
-		genNonEmptyString(),
-	).Map(func(v []interface{}) SnapshotUploadTask {
-		return SnapshotUploadTask{
-			Bucket: v[0].(string),
-			Prefix: v[1].(string),
-			Region: v[2].(string),
-		}
-	})
+	return gen.Const(SnapshotUploadTask{})
 }
 
 func genConfigureGenesisTask() gopter.Gen {
@@ -120,13 +110,7 @@ func TestSnapshotUploadRoundTrip(t *testing.T) {
 				return false
 			}
 			req := task.ToTaskRequest()
-			if req.Type != TaskTypeSnapshotUpload {
-				return false
-			}
-			rebuilt := SnapshotUploadTaskFromParams(*req.Params)
-			return rebuilt.Bucket == task.Bucket &&
-				rebuilt.Prefix == task.Prefix &&
-				rebuilt.Region == task.Region
+			return req.Type == TaskTypeSnapshotUpload && req.Params == nil
 		},
 		genSnapshotUploadTask(),
 	))
@@ -278,27 +262,9 @@ func TestSnapshotRestoreValidation(t *testing.T) {
 }
 
 func TestSnapshotUploadValidation(t *testing.T) {
-	cases := []struct {
-		name string
-		task SnapshotUploadTask
-		ok   bool
-	}{
-		{"valid", SnapshotUploadTask{Bucket: "b", Region: "r"}, true},
-		{"valid with prefix", SnapshotUploadTask{Bucket: "b", Prefix: "p", Region: "r"}, true},
-		{"missing bucket", SnapshotUploadTask{Region: "r"}, false},
-		{"missing region", SnapshotUploadTask{Bucket: "b"}, false},
-		{"all empty", SnapshotUploadTask{}, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.task.Validate()
-			if tc.ok && err != nil {
-				t.Errorf("unexpected error: %v", err)
-			}
-			if !tc.ok && err == nil {
-				t.Error("expected validation error, got nil")
-			}
-		})
+	task := SnapshotUploadTask{}
+	if err := task.Validate(); err != nil {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 

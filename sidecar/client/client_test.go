@@ -203,8 +203,8 @@ func TestSubmitTask_ValidationFailure(t *testing.T) {
 		t.Fatal("server should not be called when validation fails")
 	}))
 
-	// SnapshotUploadTask requires Bucket — empty should fail validation.
-	_, err := c.SubmitSnapshotUploadTask(context.Background(), SnapshotUploadTask{})
+	// DiscoverPeersTask requires at least one source — empty should fail validation.
+	_, err := c.SubmitDiscoverPeersTask(context.Background(), DiscoverPeersTask{})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}

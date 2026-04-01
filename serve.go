@@ -90,7 +90,7 @@ var serveCmd = cli.Command{
 			engine.TaskMarkReady:                tasks.MarkReadyHandler(),
 			engine.TaskConfigureGenesis:         tasks.NewGenesisFetcher(homeDir, chainID, genesisBucket, genesisRegion, nil).Handler(),
 			engine.TaskConfigureStateSync:       tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
-			engine.TaskSnapshotUpload:           tasks.NewSnapshotUploader(homeDir, snapshotUploadInterval, nil).Handler(),
+			engine.TaskSnapshotUpload:           tasks.NewSnapshotUploader(homeDir, snapshotBucket, snapshotRegion, chainID, snapshotUploadInterval, nil).Handler(),
 			engine.TaskResultExport:             tasks.NewResultExporter(homeDir, nil).Handler(),
 			engine.TaskAwaitCondition:           tasks.NewConditionWaiter(nil).Handler(),
 			engine.TaskGenerateIdentity:         tasks.NewIdentityGenerator(homeDir).Handler(),

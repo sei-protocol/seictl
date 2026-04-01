@@ -204,7 +204,7 @@ func TestDeserialize_ConfigReload(t *testing.T) {
 // TestDeserialize_SnapshotUpload verifies that the snapshot-upload handler
 // correctly deserializes simple string fields from the wire format.
 func TestDeserialize_SnapshotUpload(t *testing.T) {
-	handler := NewSnapshotUploader(t.TempDir(), 0, nil).Handler()
+	handler := NewSnapshotUploader(t.TempDir(), "b", "r", "c", 0, nil).Handler()
 
 	params := map[string]any{
 		"bucket": "",
