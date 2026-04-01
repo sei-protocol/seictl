@@ -42,11 +42,15 @@ var serveCmd = cli.Command{
 		chainID := os.Getenv("SEI_CHAIN_ID")
 		genesisBucket := os.Getenv("SEI_GENESIS_BUCKET")
 		genesisRegion := os.Getenv("SEI_GENESIS_REGION")
+		snapshotBucket := os.Getenv("SEI_SNAPSHOT_BUCKET")
+		snapshotRegion := os.Getenv("SEI_SNAPSHOT_REGION")
 
 		for _, kv := range []struct{ name, val string }{
 			{"SEI_CHAIN_ID", chainID},
 			{"SEI_GENESIS_BUCKET", genesisBucket},
 			{"SEI_GENESIS_REGION", genesisRegion},
+			{"SEI_SNAPSHOT_BUCKET", snapshotBucket},
+			{"SEI_SNAPSHOT_REGION", snapshotRegion},
 		} {
 			if kv.val == "" {
 				return fmt.Errorf("required environment variable %s is not set", kv.name)
@@ -72,7 +76,7 @@ var serveCmd = cli.Command{
 		}
 
 		handlers := map[engine.TaskType]engine.TaskHandler{
-			engine.TaskSnapshotRestore:          tasks.NewSnapshotRestorer(homeDir, nil).Handler(),
+			engine.TaskSnapshotRestore:          tasks.NewSnapshotRestorer(homeDir, snapshotBucket, snapshotRegion, chainID, nil, nil).Handler(),
 			engine.TaskDiscoverPeers:            tasks.NewPeerDiscoverer(homeDir, nil, nil).Handler(),
 			engine.TaskConfigPatch:              tasks.NewConfigPatcher(homeDir).Handler(),
 			engine.TaskConfigApply:              tasks.NewConfigApplier(homeDir).Handler(),

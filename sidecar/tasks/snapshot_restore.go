@@ -14,6 +14,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 	"github.com/sei-protocol/seilog"
@@ -21,83 +22,96 @@ import (
 
 var restoreLog = seilog.NewLogger("seictl", "task", "snapshot-restore")
 
-const snapshotMarkerFile = ".sei-sidecar-snapshot-done"
+const restoreMarkerFile = ".sei-sidecar-snapshot-done"
 
-// SnapshotHeightFile stores the height of the restored snapshot so that
-// downstream tasks (e.g. result export) can auto-discover their start point.
+// SnapshotHeightFile records the snapshot height the node was restored from.
+// The result-export task uses this to know where to start exporting.
 const SnapshotHeightFile = ".sei-sidecar-snapshot-height"
 
-// snapshotHeightRe extracts heights from S3 keys like snapshot_198030000_pacific-1_eu-central-1.tar.gz.
-var snapshotHeightRe = regexp.MustCompile(`snapshot_(\d+)_`)
+// snapshotHeightRe extracts heights from S3 keys like pacific-1/200440000.tar.gz.
+var snapshotHeightRe = regexp.MustCompile(`(\d+)\.tar\.gz$`)
 
-// SnapshotRestoreRequest holds S3 coordinates for snapshot download.
+// SnapshotRestoreRequest holds the typed parameters for the snapshot-restore task.
+// S3 bucket, region, and chain prefix are derived from the sidecar's environment.
+// TargetHeight, when set, selects the highest available snapshot <= that height.
+// When zero, the latest snapshot (from latest.txt) is used.
 type SnapshotRestoreRequest struct {
-	Bucket  string `json:"bucket"`
-	Prefix  string `json:"prefix"`
-	Region  string `json:"region"`
-	ChainID string `json:"chainId"`
+	TargetHeight int64 `json:"targetHeight,omitempty"`
 }
 
 // SnapshotRestorer downloads and extracts a snapshot archive from S3.
 type SnapshotRestorer struct {
 	homeDir       string
+	bucket        string
+	region        string
+	chainID       string
 	clientFactory seis3.TransferClientFactory
+	listerFactory seis3.ObjectListerFactory
 }
 
 // NewSnapshotRestorer creates a restorer targeting the given home directory.
-// Pass nil to use the default AWS transfer manager.
-func NewSnapshotRestorer(homeDir string, factory seis3.TransferClientFactory) *SnapshotRestorer {
-	if factory == nil {
-		factory = seis3.DefaultTransferClientFactory
+// Bucket, region, and chainID are read from environment at construction time.
+func NewSnapshotRestorer(homeDir, bucket, region, chainID string, clientFactory seis3.TransferClientFactory, listerFactory seis3.ObjectListerFactory) *SnapshotRestorer {
+	if clientFactory == nil {
+		clientFactory = seis3.DefaultTransferClientFactory
+	}
+	if listerFactory == nil {
+		listerFactory = seis3.DefaultObjectListerFactory
 	}
 	return &SnapshotRestorer{
 		homeDir:       homeDir,
-		clientFactory: factory,
+		bucket:        bucket,
+		region:        region,
+		chainID:       chainID,
+		clientFactory: clientFactory,
+		listerFactory: listerFactory,
 	}
 }
 
 // Handler returns an engine.TaskHandler for the snapshot-restore task.
 func (r *SnapshotRestorer) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, cfg SnapshotRestoreRequest) error {
-		if cfg.Bucket == "" {
-			return fmt.Errorf("snapshot-restore: missing required param 'bucket'")
-		}
-		if cfg.Prefix == "" {
-			return fmt.Errorf("snapshot-restore: missing required param 'prefix'")
-		}
-		if cfg.Region == "" {
-			return fmt.Errorf("snapshot-restore: missing required param 'region'")
-		}
-		if cfg.ChainID == "" {
-			return fmt.Errorf("snapshot-restore: missing required param 'chainId'")
-		}
-		return r.Restore(ctx, cfg)
+	return engine.TypedHandler(func(ctx context.Context, req SnapshotRestoreRequest) error {
+		return r.Restore(ctx, req.TargetHeight)
 	})
 }
 
 // Restore downloads and extracts the snapshot, skipping if the marker file exists.
-// It reads latest.txt to resolve the current snapshot key, then uses the transfer
-// manager's DownloadObject (io.WriterAt path) for parallel byte-range downloads
-// to a temp file, and finally streams the temp file through gzip+tar extraction.
-func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotRestoreRequest) error {
-	if markerExists(r.homeDir, snapshotMarkerFile) {
+// When targetHeight > 0, it lists objects and picks the highest snapshot <= targetHeight.
+// When targetHeight == 0, it reads latest.txt for the newest snapshot.
+func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) error {
+	if markerExists(r.homeDir, restoreMarkerFile) {
 		restoreLog.Debug("already completed, skipping")
 		return nil
 	}
 
-	client, err := r.clientFactory(ctx, cfg.Region)
+	if r.bucket == "" || r.region == "" || r.chainID == "" {
+		return fmt.Errorf("snapshot-restore: SEI_SNAPSHOT_BUCKET, SEI_SNAPSHOT_REGION, and SEI_CHAIN_ID are required")
+	}
+
+	prefix := r.chainID + "/"
+
+	client, err := r.clientFactory(ctx, r.region)
 	if err != nil {
 		return fmt.Errorf("building S3 transfer client: %w", err)
 	}
 
-	snapshotKey, err := resolveSnapshotKey(ctx, client, cfg)
+	var snapshotKey string
+	if targetHeight > 0 {
+		lister, err := r.listerFactory(ctx, r.region)
+		if err != nil {
+			return fmt.Errorf("building S3 lister: %w", err)
+		}
+		snapshotKey, err = resolveKeyForHeight(ctx, lister, r.bucket, prefix, targetHeight)
+	} else {
+		snapshotKey, err = resolveLatestKey(ctx, client, r.bucket, prefix)
+	}
 	if err != nil {
 		return err
 	}
 
 	tmpDir := filepath.Join(r.homeDir, "tmp")
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return fmt.Errorf("creating tmp directory: %w", err)
+		return fmt.Errorf("creating temp dir: %w", err)
 	}
 
 	tmpFile, err := os.CreateTemp(tmpDir, "snapshot-*.tar.gz")
@@ -107,31 +121,15 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotRestoreReque
 	tmpPath := tmpFile.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
 
-	restoreLog.Info("downloading snapshot", "bucket", cfg.Bucket, "key", snapshotKey, "dest", tmpPath)
+	restoreLog.Info("downloading snapshot", "bucket", r.bucket, "key", snapshotKey, "dest", tmpPath)
 	_, err = client.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
-		Bucket:   aws.String(cfg.Bucket),
+		Bucket:   aws.String(r.bucket),
 		Key:      aws.String(snapshotKey),
 		WriterAt: tmpFile,
 	})
 	_ = tmpFile.Close()
 	if err != nil {
 		return fmt.Errorf("s3 DownloadObject %s: %w", snapshotKey, err)
-	}
-
-	snapshotDir := filepath.Join(r.homeDir, "data", "snapshots")
-	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
-		return fmt.Errorf("creating snapshot directory: %w", err)
-	}
-
-	f, err := os.Open(tmpPath)
-	if err != nil {
-		return fmt.Errorf("opening downloaded archive: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	restoreLog.Info("extracting archive", "dest", snapshotDir)
-	if err := extractTarStream(ctx, f, snapshotDir); err != nil {
-		return fmt.Errorf("extracting snapshot: %w", err)
 	}
 
 	if h := parseHeightFromKey(snapshotKey); h > 0 {
@@ -144,16 +142,22 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, cfg SnapshotRestoreReque
 		}
 	}
 
+	destDir := filepath.Join(r.homeDir, "data", "snapshots")
+	restoreLog.Info("extracting archive", "dest", destDir)
+	if err := extractArchive(ctx, tmpPath, destDir); err != nil {
+		return fmt.Errorf("extracting snapshot: %w", err)
+	}
+
 	restoreLog.Info("restore complete")
-	return writeMarker(r.homeDir, snapshotMarkerFile)
+	return writeMarker(r.homeDir, restoreMarkerFile)
 }
 
-// resolveSnapshotKey reads <prefix>latest.txt to find the current snapshot object key.
-func resolveSnapshotKey(ctx context.Context, client seis3.TransferClient, cfg SnapshotRestoreRequest) (string, error) {
+// resolveLatestKey reads <prefix>latest.txt and constructs the snapshot key.
+func resolveLatestKey(ctx context.Context, client seis3.TransferClient, bucket, prefix string) (string, error) {
 	var buf seis3.WriteAtBuffer
 	_, err := client.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
-		Bucket:   aws.String(cfg.Bucket),
-		Key:      aws.String(cfg.Prefix + "latest.txt"),
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(prefix + "latest.txt"),
 		WriterAt: &buf,
 	})
 	if err != nil {
@@ -165,8 +169,53 @@ func resolveSnapshotKey(ctx context.Context, client seis3.TransferClient, cfg Sn
 		return "", fmt.Errorf("latest.txt is empty")
 	}
 
-	filename := fmt.Sprintf("snapshot_%s_%s_%s.tar.gz", height, cfg.ChainID, cfg.Region)
-	return cfg.Prefix + filename, nil
+	return prefix + height + ".tar.gz", nil
+}
+
+// resolveKeyForHeight lists snapshot objects and returns the key with the
+// highest height that is <= targetHeight.
+func resolveKeyForHeight(ctx context.Context, lister seis3.ObjectLister, bucket, prefix string, targetHeight int64) (string, error) {
+	var bestHeight int64
+	var bestKey string
+
+	var continuationToken *string
+	for {
+		output, err := lister.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return "", fmt.Errorf("listing snapshots in s3://%s/%s: %w", bucket, prefix, err)
+		}
+
+		for _, obj := range output.Contents {
+			if obj.Key == nil {
+				continue
+			}
+			h := parseHeightFromKey(*obj.Key)
+			if h <= 0 || h > targetHeight {
+				continue
+			}
+			if h > bestHeight {
+				bestHeight = h
+				bestKey = *obj.Key
+			}
+		}
+
+		if !aws.ToBool(output.IsTruncated) {
+			break
+		}
+		continuationToken = output.NextContinuationToken
+	}
+
+	if bestKey == "" {
+		return "", fmt.Errorf("no snapshot found at or below height %d in s3://%s/%s", targetHeight, bucket, prefix)
+	}
+
+	restoreLog.Info("resolved snapshot for target height",
+		"targetHeight", targetHeight, "snapshotHeight", bestHeight, "key", bestKey)
+	return bestKey, nil
 }
 
 func parseHeightFromKey(key string) int64 {
@@ -174,12 +223,24 @@ func parseHeightFromKey(key string) int64 {
 	if len(m) < 2 {
 		return 0
 	}
-	h, _ := strconv.ParseInt(m[1], 10, 64)
+	h, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return 0
+	}
 	return h
 }
 
-// extractTarStream reads a gzip-compressed tar archive from r and extracts
-// entries to destDir.
+// extractArchive opens a .tar.gz file and extracts it to destDir.
+func extractArchive(ctx context.Context, archivePath, destDir string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("opening archive: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	return extractTarStream(ctx, f, destDir)
+}
+
 func extractTarStream(ctx context.Context, r io.Reader, destDir string) error {
 	gzr, err := gzip.NewReader(r)
 	if err != nil {
@@ -202,7 +263,6 @@ func extractTarStream(ctx context.Context, r io.Reader, destDir string) error {
 
 		target := filepath.Join(destDir, filepath.Clean(header.Name))
 
-		// Path traversal guard: reject entries that escape destDir.
 		if !isInsideDir(target, destDir) {
 			return fmt.Errorf("tar entry %q escapes destination directory", header.Name)
 		}
@@ -224,8 +284,6 @@ func extractTarStream(ctx context.Context, r io.Reader, destDir string) error {
 			if err := os.Symlink(header.Linkname, target); err != nil {
 				return fmt.Errorf("creating symlink %s: %w", target, err)
 			}
-		default:
-			// Skip unsupported entry types (block devices, char devices, etc.)
 		}
 	}
 }
@@ -234,13 +292,11 @@ func extractFile(r io.Reader, path string, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating parent directory for %s: %w", path, err)
 	}
-
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode|0o600)
 	if err != nil {
 		return fmt.Errorf("creating file %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
-
 	if _, err := io.Copy(f, r); err != nil {
 		return fmt.Errorf("writing file %s: %w", path, err)
 	}

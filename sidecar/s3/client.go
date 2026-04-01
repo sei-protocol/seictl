@@ -46,6 +46,23 @@ func DefaultUploaderFactory(ctx context.Context, region string) (Uploader, error
 	return transfermanager.New(s3.NewFromConfig(cfg)), nil
 }
 
+// ObjectLister abstracts S3 ListObjectsV2 for snapshot discovery.
+type ObjectLister interface {
+	ListObjectsV2(ctx context.Context, input *s3.ListObjectsV2Input, opts ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+}
+
+// ObjectListerFactory builds an ObjectLister for a given region.
+type ObjectListerFactory func(ctx context.Context, region string) (ObjectLister, error)
+
+// DefaultObjectListerFactory creates a real S3 client for listing objects.
+func DefaultObjectListerFactory(ctx context.Context, region string) (ObjectLister, error) {
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	if err != nil {
+		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+	return s3.NewFromConfig(cfg), nil
+}
+
 // WriteAtBuffer is a goroutine-safe in-memory io.WriterAt, used for
 // downloading small S3 objects (e.g. latest.txt) via DownloadObject.
 type WriteAtBuffer struct {
