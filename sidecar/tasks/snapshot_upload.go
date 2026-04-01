@@ -30,11 +30,8 @@ const (
 )
 
 // SnapshotUploadRequest holds the parameters for the snapshot upload task.
-type SnapshotUploadRequest struct {
-	Bucket string `json:"bucket"`
-	Prefix string `json:"prefix"`
-	Region string `json:"region"`
-}
+// S3 bucket, region, and prefix are derived from the sidecar's environment.
+type SnapshotUploadRequest struct{}
 
 // uploadState tracks the last successfully uploaded snapshot height.
 type uploadState struct {
@@ -46,12 +43,16 @@ type uploadState struct {
 // at the configured interval until the context is cancelled.
 type SnapshotUploader struct {
 	homeDir           string
+	bucket            string
+	region            string
+	chainID           string
 	uploadInterval    time.Duration
 	s3UploaderFactory seis3.UploaderFactory
 }
 
 // NewSnapshotUploader creates an uploader targeting the given home directory.
-func NewSnapshotUploader(homeDir string, uploadInterval time.Duration, factory seis3.UploaderFactory) *SnapshotUploader {
+// Bucket, region, and chainID are read from environment at construction time.
+func NewSnapshotUploader(homeDir, bucket, region, chainID string, uploadInterval time.Duration, factory seis3.UploaderFactory) *SnapshotUploader {
 	if factory == nil {
 		factory = seis3.DefaultUploaderFactory
 	}
@@ -60,6 +61,9 @@ func NewSnapshotUploader(homeDir string, uploadInterval time.Duration, factory s
 	}
 	return &SnapshotUploader{
 		homeDir:           homeDir,
+		bucket:            bucket,
+		region:            region,
+		chainID:           chainID,
 		uploadInterval:    uploadInterval,
 		s3UploaderFactory: factory,
 	}
@@ -70,21 +74,15 @@ func NewSnapshotUploader(homeDir string, uploadInterval time.Duration, factory s
 // sleeping for the configured interval between attempts. It stays
 // running until the context is cancelled.
 func (u *SnapshotUploader) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, cfg SnapshotUploadRequest) error {
-		if cfg.Bucket == "" {
-			return fmt.Errorf("snapshot-upload: missing required param 'bucket'")
-		}
-		if cfg.Region == "" {
-			return fmt.Errorf("snapshot-upload: missing required param 'region'")
-		}
-		return u.runLoop(ctx, cfg)
+	return engine.TypedHandler(func(ctx context.Context, _ SnapshotUploadRequest) error {
+		return u.runLoop(ctx)
 	})
 }
 
-func (u *SnapshotUploader) runLoop(ctx context.Context, cfg SnapshotUploadRequest) error {
-	uploadLog.Info("starting snapshot upload loop", "interval", u.uploadInterval, "bucket", cfg.Bucket)
+func (u *SnapshotUploader) runLoop(ctx context.Context) error {
+	uploadLog.Info("starting snapshot upload loop", "interval", u.uploadInterval, "bucket", u.bucket)
 	for {
-		if err := u.Upload(ctx, cfg); err != nil {
+		if err := u.Upload(ctx); err != nil {
 			uploadLog.Warn("upload attempt failed, will retry next interval", "error", err)
 		}
 
@@ -103,7 +101,7 @@ func (u *SnapshotUploader) runLoop(ctx context.Context, cfg SnapshotUploadReques
 //
 // The archive is streamed through an io.Pipe so it never needs to be buffered
 // entirely in memory; the transfermanager handles multipart upload automatically.
-func (u *SnapshotUploader) Upload(ctx context.Context, cfg SnapshotUploadRequest) error {
+func (u *SnapshotUploader) Upload(ctx context.Context) error {
 	snapshotsDir := filepath.Join(u.homeDir, "data", "snapshots")
 
 	height, err := pickUploadCandidate(snapshotsDir)
@@ -121,25 +119,25 @@ func (u *SnapshotUploader) Upload(ctx context.Context, cfg SnapshotUploadRequest
 		return nil
 	}
 
-	uploadLog.Info("uploading snapshot", "height", height, "bucket", cfg.Bucket, "region", cfg.Region)
+	uploadLog.Info("uploading snapshot", "height", height, "bucket", u.bucket, "region", u.region)
 
-	uploader, err := u.s3UploaderFactory(ctx, cfg.Region)
+	uploader, err := u.s3UploaderFactory(ctx, u.region)
 	if err != nil {
 		return fmt.Errorf("building S3 uploader: %w", err)
 	}
 
-	prefix := normalizePrefix(cfg.Prefix)
+	prefix := u.chainID + "/"
 
 	archiveKey := fmt.Sprintf("%s%d.tar.gz", prefix, height)
 	uploadLog.Info("streaming archive to S3", "key", archiveKey)
-	if err := u.streamUpload(ctx, uploader, cfg.Bucket, archiveKey, snapshotsDir, height); err != nil {
+	if err := u.streamUpload(ctx, uploader, u.bucket, archiveKey, snapshotsDir, height); err != nil {
 		return fmt.Errorf("uploading %s: %w", archiveKey, err)
 	}
 
 	latestKey := prefix + "latest.txt"
 	latestBody := []byte(strconv.FormatInt(height, 10))
 	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket: aws.String(cfg.Bucket),
+		Bucket: aws.String(u.bucket),
 		Key:    aws.String(latestKey),
 		Body:   bytes.NewReader(latestBody),
 	})

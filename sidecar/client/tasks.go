@@ -98,47 +98,25 @@ func SnapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestor
 }
 
 // SnapshotUploadTask archives and streams a local snapshot to S3.
+// S3 coordinates are derived by the sidecar from its environment.
 type SnapshotUploadTask struct {
 	TaskMeta
-	Bucket string
-	Prefix string
-	Region string
 }
 
 func (t SnapshotUploadTask) TaskType() string { return TaskTypeSnapshotUpload }
 
-func (t SnapshotUploadTask) Validate() error {
-	if t.Bucket == "" {
-		return fmt.Errorf("snapshot-upload: missing required field Bucket")
-	}
-	if t.Region == "" {
-		return fmt.Errorf("snapshot-upload: missing required field Region")
-	}
-	return nil
-}
+func (t SnapshotUploadTask) Validate() error { return nil }
 
 func (t SnapshotUploadTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
-		"bucket": t.Bucket,
-		"region": t.Region,
-	}
-	if t.Prefix != "" {
-		p["prefix"] = t.Prefix
-	}
-	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType()}
 	t.applyMeta(&req)
 	return req
 }
 
 // SnapshotUploadTaskFromParams reconstructs a SnapshotUploadTask from
 // a generic params map.
-func SnapshotUploadTaskFromParams(params map[string]interface{}) SnapshotUploadTask {
-	s := func(k string) string { v, _ := params[k].(string); return v }
-	return SnapshotUploadTask{
-		Bucket: s("bucket"),
-		Prefix: s("prefix"),
-		Region: s("region"),
-	}
+func SnapshotUploadTaskFromParams(_ map[string]interface{}) SnapshotUploadTask {
+	return SnapshotUploadTask{}
 }
 
 // ConfigureGenesisTask instructs the sidecar to resolve and write genesis.json.
