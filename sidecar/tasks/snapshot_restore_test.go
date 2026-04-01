@@ -46,17 +46,50 @@ func mockClientFactory(client seis3.TransferClient) seis3.TransferClientFactory 
 }
 
 // mockObjectLister implements seis3.ObjectLister for testing.
+// pageSize controls pagination — 0 means return all keys in one page.
 type mockObjectLister struct {
-	keys []string
+	keys     []string
+	pageSize int
 }
 
 func (m *mockObjectLister) ListObjectsV2(_ context.Context, input *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	pageSize := m.pageSize
+	if pageSize <= 0 {
+		pageSize = len(m.keys)
+	}
+
+	startIdx := 0
+	if input.ContinuationToken != nil {
+		for i, k := range m.keys {
+			if k == *input.ContinuationToken {
+				startIdx = i
+				break
+			}
+		}
+	}
+
+	end := startIdx + pageSize
+	if end > len(m.keys) {
+		end = len(m.keys)
+	}
+
 	var contents []types.Object
-	for _, k := range m.keys {
+	for _, k := range m.keys[startIdx:end] {
 		key := k
 		contents = append(contents, types.Object{Key: &key})
 	}
-	return &s3.ListObjectsV2Output{Contents: contents}, nil
+
+	truncated := end < len(m.keys)
+	var nextToken *string
+	if truncated {
+		nextToken = &m.keys[end]
+	}
+
+	return &s3.ListObjectsV2Output{
+		Contents:              contents,
+		IsTruncated:           &truncated,
+		NextContinuationToken: nextToken,
+	}, nil
 }
 
 func mockListerFactory(lister seis3.ObjectLister) seis3.ObjectListerFactory {
@@ -290,5 +323,50 @@ func TestSnapshotRestoreTargetHeightNoMatch(t *testing.T) {
 	err := restorer.Restore(context.Background(), 50000000)
 	if err == nil {
 		t.Fatal("expected error when no snapshot found at or below target height")
+	}
+}
+
+func TestSnapshotRestoreTargetHeightPagination(t *testing.T) {
+	homeDir := t.TempDir()
+	archive := buildTarGzArchive(t, map[string]string{
+		"data/chain.db": "chaindata",
+	})
+
+	client := &mockTransferClient{
+		responses: map[string][]byte{
+			"c/99000000.tar.gz": archive,
+		},
+	}
+	// Page size of 2 forces pagination across 3 pages
+	lister := &mockObjectLister{
+		pageSize: 2,
+		keys: []string{
+			"c/97000000.tar.gz",
+			"c/98000000.tar.gz",
+			"c/99000000.tar.gz",
+			"c/100000000.tar.gz",
+			"c/latest.txt",
+		},
+	}
+	restorer := NewSnapshotRestorer(homeDir, "b", "r", "c", mockClientFactory(client), mockListerFactory(lister))
+	if err := restorer.Restore(context.Background(), 99500000); err != nil {
+		t.Fatalf("Restore failed: %v", err)
+	}
+
+	heightBytes, err := os.ReadFile(filepath.Join(homeDir, SnapshotHeightFile))
+	if err != nil {
+		t.Fatalf("reading snapshot height file: %v", err)
+	}
+	if string(heightBytes) != "99000000" {
+		t.Errorf("snapshot height = %q, want %q", string(heightBytes), "99000000")
+	}
+}
+
+func TestSnapshotRestoreNegativeTargetHeight(t *testing.T) {
+	homeDir := t.TempDir()
+	restorer := NewSnapshotRestorer(homeDir, "b", "r", "c", nil, nil)
+	err := restorer.Restore(context.Background(), -1)
+	if err == nil {
+		t.Fatal("expected error for negative targetHeight")
 	}
 }

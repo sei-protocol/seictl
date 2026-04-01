@@ -84,6 +84,10 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 		return nil
 	}
 
+	if targetHeight < 0 {
+		return fmt.Errorf("snapshot-restore: targetHeight must be >= 0, got %d", targetHeight)
+	}
+
 	if r.bucket == "" || r.region == "" || r.chainID == "" {
 		return fmt.Errorf("snapshot-restore: SEI_SNAPSHOT_BUCKET, SEI_SNAPSHOT_REGION, and SEI_CHAIN_ID are required")
 	}
