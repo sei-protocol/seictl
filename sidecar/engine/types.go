@@ -26,6 +26,7 @@ const (
 	TaskUploadGenesisArtifacts   TaskType = "upload-genesis-artifacts"
 	TaskAssembleAndUploadGenesis TaskType = "assemble-and-upload-genesis"
 	TaskSetGenesisPeers          TaskType = "set-genesis-peers"
+	TaskAssembleGenesisFork      TaskType = "assemble-genesis-fork"
 )
 
 // Task is a unit of work submitted by the controller. When ID is set, the
