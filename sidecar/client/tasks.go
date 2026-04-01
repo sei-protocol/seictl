@@ -52,6 +52,8 @@ const (
 	TaskTypeUploadGenesisArtifacts = "upload-genesis-artifacts"
 	TaskTypeAssembleGenesis        = "assemble-and-upload-genesis"
 	TaskTypeSetGenesisPeers        = "set-genesis-peers"
+	TaskTypeExportState            = string(engine.TaskExportState)
+	TaskTypeAssembleForkGenesis    = string(engine.TaskAssembleForkGenesis)
 )
 
 // Known condition and action values for AwaitConditionTask.
