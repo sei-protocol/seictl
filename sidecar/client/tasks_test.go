@@ -14,18 +14,8 @@ func genNonEmptyString() gopter.Gen {
 }
 
 func genSnapshotRestoreTask() gopter.Gen {
-	return gopter.CombineGens(
-		genNonEmptyString(),
-		genNonEmptyString(),
-		genNonEmptyString(),
-		genNonEmptyString(),
-	).Map(func(v []interface{}) SnapshotRestoreTask {
-		return SnapshotRestoreTask{
-			Bucket:  v[0].(string),
-			Prefix:  v[1].(string),
-			Region:  v[2].(string),
-			ChainID: v[3].(string),
-		}
+	return gen.Int64Range(0, 300000000).Map(func(h int64) SnapshotRestoreTask {
+		return SnapshotRestoreTask{TargetHeight: h}
 	})
 }
 
@@ -111,11 +101,11 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 			if req.Type != TaskTypeSnapshotRestore {
 				return false
 			}
+			if task.TargetHeight == 0 {
+				return req.Params == nil
+			}
 			rebuilt := SnapshotRestoreTaskFromParams(*req.Params)
-			return rebuilt.Bucket == task.Bucket &&
-				rebuilt.Prefix == task.Prefix &&
-				rebuilt.Region == task.Region &&
-				rebuilt.ChainID == task.ChainID
+			return rebuilt.TargetHeight == task.TargetHeight
 		},
 		genSnapshotRestoreTask(),
 	))
@@ -269,21 +259,19 @@ func TestMarkReadyRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSnapshotRestoreValidationRejectsMissingFields(t *testing.T) {
+func TestSnapshotRestoreValidation(t *testing.T) {
+	// SnapshotRestoreTask has no required fields — TargetHeight=0 means "use latest"
 	cases := []struct {
 		name string
 		task SnapshotRestoreTask
 	}{
-		{"missing bucket", SnapshotRestoreTask{Prefix: "p", Region: "r", ChainID: "c"}},
-		{"missing prefix", SnapshotRestoreTask{Bucket: "b", Region: "r", ChainID: "c"}},
-		{"missing region", SnapshotRestoreTask{Bucket: "b", Prefix: "p", ChainID: "c"}},
-		{"missing chainId", SnapshotRestoreTask{Bucket: "b", Prefix: "p", Region: "r"}},
-		{"all empty", SnapshotRestoreTask{}},
+		{"zero height (latest)", SnapshotRestoreTask{}},
+		{"with target height", SnapshotRestoreTask{TargetHeight: 100000000}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.task.Validate(); err == nil {
-				t.Error("expected validation error, got nil")
+			if err := tc.task.Validate(); err != nil {
+				t.Errorf("unexpected validation error: %v", err)
 			}
 		})
 	}

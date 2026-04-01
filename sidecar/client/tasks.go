@@ -61,40 +61,25 @@ const (
 )
 
 // SnapshotRestoreTask downloads and extracts a snapshot archive from S3.
+// S3 coordinates are derived by the sidecar from its environment.
+// TargetHeight selects the highest available snapshot <= that height.
+// When zero, the latest snapshot (from latest.txt) is used.
 type SnapshotRestoreTask struct {
 	TaskMeta
-	Bucket  string
-	Prefix  string
-	Region  string
-	ChainID string
+	TargetHeight int64
 }
 
 func (t SnapshotRestoreTask) TaskType() string { return TaskTypeSnapshotRestore }
 
-func (t SnapshotRestoreTask) Validate() error {
-	if t.Bucket == "" {
-		return fmt.Errorf("snapshot-restore: missing required field Bucket")
-	}
-	if t.Prefix == "" {
-		return fmt.Errorf("snapshot-restore: missing required field Prefix")
-	}
-	if t.Region == "" {
-		return fmt.Errorf("snapshot-restore: missing required field Region")
-	}
-	if t.ChainID == "" {
-		return fmt.Errorf("snapshot-restore: missing required field ChainID")
-	}
-	return nil
-}
+func (t SnapshotRestoreTask) Validate() error { return nil }
 
 func (t SnapshotRestoreTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
-		"bucket":  t.Bucket,
-		"prefix":  t.Prefix,
-		"region":  t.Region,
-		"chainId": t.ChainID,
+	var p *map[string]interface{}
+	if t.TargetHeight > 0 {
+		m := map[string]interface{}{"targetHeight": t.TargetHeight}
+		p = &m
 	}
-	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	req := TaskRequest{Type: t.TaskType(), Params: p}
 	t.applyMeta(&req)
 	return req
 }
@@ -102,13 +87,14 @@ func (t SnapshotRestoreTask) ToTaskRequest() TaskRequest {
 // SnapshotRestoreTaskFromParams reconstructs a SnapshotRestoreTask from
 // a generic params map. Useful for round-trip testing.
 func SnapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestoreTask {
-	s := func(k string) string { v, _ := params[k].(string); return v }
-	return SnapshotRestoreTask{
-		Bucket:  s("bucket"),
-		Prefix:  s("prefix"),
-		Region:  s("region"),
-		ChainID: s("chainId"),
+	var t SnapshotRestoreTask
+	switch h := params["targetHeight"].(type) {
+	case float64:
+		t.TargetHeight = int64(h)
+	case int64:
+		t.TargetHeight = h
 	}
+	return t
 }
 
 // SnapshotUploadTask archives and streams a local snapshot to S3.

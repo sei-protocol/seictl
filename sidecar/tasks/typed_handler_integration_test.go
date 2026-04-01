@@ -13,22 +13,18 @@ import (
 func TestDeserialize_SnapshotRestore(t *testing.T) {
 	homeDir := t.TempDir()
 	// Pre-write a marker so the handler returns early without S3 calls.
-	if err := writeMarker(homeDir, snapshotMarkerFile); err != nil {
+	if err := writeMarker(homeDir, restoreMarkerFile); err != nil {
 		t.Fatal(err)
 	}
 
-	restorer := NewSnapshotRestorer(homeDir, nil)
+	restorer, err := NewSnapshotRestorer(homeDir, "b", "r", "c", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := restorer.Handler()
 
-	params := map[string]any{
-		"bucket":  "my-bucket",
-		"prefix":  "snapshots/",
-		"region":  "us-east-1",
-		"chainId": "pacific-1",
-	}
-
 	// The handler should succeed (skip via marker) without a parse error.
-	err := handler(context.Background(), params)
+	err = handler(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("snapshot-restore handler returned error: %v", err)
 	}

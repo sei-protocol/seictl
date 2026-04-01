@@ -69,8 +69,8 @@ func TestSubmitTask_HTTP201(t *testing.T) {
 			t.Fatal("Params is nil")
 		}
 		params := *req.Params
-		if params["bucket"] != "my-bucket" {
-			t.Errorf("bucket = %v, want my-bucket", params["bucket"])
+		if params["targetHeight"] != float64(100000000) {
+			t.Errorf("targetHeight = %v, want 100000000", params["targetHeight"])
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -78,10 +78,7 @@ func TestSubmitTask_HTTP201(t *testing.T) {
 	}))
 
 	task := SnapshotRestoreTask{
-		Bucket:  "my-bucket",
-		Prefix:  "snapshots",
-		Region:  "us-east-1",
-		ChainID: "sei-chain",
+		TargetHeight: 100000000,
 	}
 	id, err := c.SubmitSnapshotRestoreTask(context.Background(), task)
 	if err != nil {
@@ -206,7 +203,8 @@ func TestSubmitTask_ValidationFailure(t *testing.T) {
 		t.Fatal("server should not be called when validation fails")
 	}))
 
-	_, err := c.SubmitSnapshotRestoreTask(context.Background(), SnapshotRestoreTask{})
+	// SnapshotUploadTask requires Bucket — empty should fail validation.
+	_, err := c.SubmitSnapshotUploadTask(context.Background(), SnapshotUploadTask{})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
