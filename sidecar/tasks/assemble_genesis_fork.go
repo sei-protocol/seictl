@@ -66,6 +66,11 @@ func (r AssembleGenesisForkRequest) validate() error {
 	if len(r.Nodes) == 0 {
 		return fmt.Errorf("assemble-genesis-fork: 'nodes' list is empty")
 	}
+	for i, n := range r.Nodes {
+		if n.Name == "" {
+			return fmt.Errorf("assemble-genesis-fork: nodes[%d] missing 'name'", i)
+		}
+	}
 	return nil
 }
 
@@ -223,7 +228,7 @@ func (a *GenesisForkAssembler) stripValidatorState() error {
 		return fmt.Errorf("assemble-genesis-fork: parsing app_state: %w", err)
 	}
 
-	setModuleFields(appState, "staking", map[string]json.RawMessage{
+	if err := setModuleFields(appState, "staking", map[string]json.RawMessage{
 		"validators":            json.RawMessage(`[]`),
 		"delegations":           json.RawMessage(`[]`),
 		"unbonding_delegations": json.RawMessage(`[]`),
@@ -231,14 +236,18 @@ func (a *GenesisForkAssembler) stripValidatorState() error {
 		"last_total_power":      json.RawMessage(`"0"`),
 		"last_validator_powers": json.RawMessage(`[]`),
 		"exported":              json.RawMessage(`false`),
-	})
+	}); err != nil {
+		return fmt.Errorf("assemble-genesis-fork: stripping staking: %w", err)
+	}
 
-	setModuleFields(appState, "slashing", map[string]json.RawMessage{
+	if err := setModuleFields(appState, "slashing", map[string]json.RawMessage{
 		"signing_infos": json.RawMessage(`[]`),
 		"missed_blocks": json.RawMessage(`[]`),
-	})
+	}); err != nil {
+		return fmt.Errorf("assemble-genesis-fork: stripping slashing: %w", err)
+	}
 
-	setModuleFields(appState, "distribution", map[string]json.RawMessage{
+	if err := setModuleFields(appState, "distribution", map[string]json.RawMessage{
 		"delegator_withdraw_infos":          json.RawMessage(`[]`),
 		"previous_proposer":                 json.RawMessage(`""`),
 		"outstanding_rewards":               json.RawMessage(`[]`),
@@ -247,11 +256,15 @@ func (a *GenesisForkAssembler) stripValidatorState() error {
 		"validator_current_rewards":         json.RawMessage(`[]`),
 		"delegator_starting_infos":          json.RawMessage(`[]`),
 		"validator_slash_events":            json.RawMessage(`[]`),
-	})
+	}); err != nil {
+		return fmt.Errorf("assemble-genesis-fork: stripping distribution: %w", err)
+	}
 
-	setModuleFields(appState, "evidence", map[string]json.RawMessage{
+	if err := setModuleFields(appState, "evidence", map[string]json.RawMessage{
 		"evidence": json.RawMessage(`[]`),
-	})
+	}); err != nil {
+		return fmt.Errorf("assemble-genesis-fork: stripping evidence: %w", err)
+	}
 
 	appStateJSON, err := json.Marshal(appState)
 	if err != nil {
@@ -267,23 +280,25 @@ func (a *GenesisForkAssembler) stripValidatorState() error {
 }
 
 // setModuleFields overwrites specific fields in a module's JSON state.
-func setModuleFields(appState map[string]json.RawMessage, module string, overrides map[string]json.RawMessage) {
+// Returns nil if the module is not present in appState (optional modules).
+func setModuleFields(appState map[string]json.RawMessage, module string, overrides map[string]json.RawMessage) error {
 	raw, ok := appState[module]
 	if !ok {
-		return
+		return nil
 	}
 	var state map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return
+		return fmt.Errorf("parsing %s module state: %w", module, err)
 	}
 	for k, v := range overrides {
 		state[k] = v
 	}
 	updated, err := json.Marshal(state)
 	if err != nil {
-		return
+		return fmt.Errorf("marshaling %s module state: %w", module, err)
 	}
 	appState[module] = updated
+	return nil
 }
 
 // downloadGentxFiles downloads per-node gentx files from S3.
@@ -489,17 +504,12 @@ func (a *GenesisForkAssembler) uploadGenesis(ctx context.Context, chainID string
 }
 
 func (a *GenesisForkAssembler) uploadPeers(ctx context.Context, chainID, namespace string, nodes []string) error {
-	type peerEntry struct {
-		NodeID  string `json:"nodeId"`
-		Address string `json:"address"`
-	}
-
 	s3Client, err := a.s3ClientFactory(ctx, a.region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis-fork: building S3 client for peers: %w", err)
 	}
 
-	var peers []peerEntry
+	var peers []string
 	for _, name := range nodes {
 		key := fmt.Sprintf("%s/%s/identity.json", chainID, name)
 		output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
@@ -509,20 +519,31 @@ func (a *GenesisForkAssembler) uploadPeers(ctx context.Context, chainID, namespa
 		if err != nil {
 			return fmt.Errorf("assemble-genesis-fork: downloading identity for %s: %w", name, err)
 		}
-		var identity struct {
-			NodeID string `json:"nodeId"`
+		data, err := io.ReadAll(output.Body)
+		_ = output.Body.Close()
+		if err != nil {
+			return fmt.Errorf("assemble-genesis-fork: reading identity for %s: %w", name, err)
 		}
-		if err := json.NewDecoder(output.Body).Decode(&identity); err != nil {
-			_ = output.Body.Close()
+
+		var identity struct {
+			NodeKey json.RawMessage `json:"node_key"`
+		}
+		if err := json.Unmarshal(data, &identity); err != nil {
 			return fmt.Errorf("assemble-genesis-fork: parsing identity for %s: %w", name, err)
 		}
-		_ = output.Body.Close()
+
+		var nodeKey struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(identity.NodeKey, &nodeKey); err != nil {
+			return fmt.Errorf("assemble-genesis-fork: parsing node_key for %s: %w", name, err)
+		}
+		if nodeKey.ID == "" {
+			return fmt.Errorf("assemble-genesis-fork: empty node ID for %s", name)
+		}
 
 		dns := fmt.Sprintf("%s-0.%s.%s.svc.cluster.local", name, name, namespace)
-		peers = append(peers, peerEntry{
-			NodeID:  identity.NodeID,
-			Address: fmt.Sprintf("%s@%s:%d", identity.NodeID, dns, 26656),
-		})
+		peers = append(peers, fmt.Sprintf("%s@%s:26656", nodeKey.ID, dns))
 	}
 
 	peersJSON, err := json.Marshal(peers)

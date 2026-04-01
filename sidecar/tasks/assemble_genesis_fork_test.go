@@ -328,8 +328,8 @@ func TestForkAssembler_UploadPeers(t *testing.T) {
 	homeDir := t.TempDir()
 
 	s3Objects := &mockS3GetObject{objects: map[string][]byte{
-		"fork-1/val-0/identity.json": []byte(`{"nodeId":"node-id-0"}`),
-		"fork-1/val-1/identity.json": []byte(`{"nodeId":"node-id-1"}`),
+		"fork-1/val-0/identity.json": []byte(`{"node_key":{"id":"node-id-0"}}`),
+		"fork-1/val-1/identity.json": []byte(`{"node_key":{"id":"node-id-1"}}`),
 	}}
 	s3Factory := func(_ context.Context, _ string) (S3GetObjectAPI, error) {
 		return s3Objects, nil
@@ -348,13 +348,13 @@ func TestForkAssembler_UploadPeers(t *testing.T) {
 		t.Fatalf("expected upload at %q, got keys: %v", key, mapKeys(mock.uploads))
 	}
 
-	var peers []map[string]string
+	var peers []string
 	json.Unmarshal(data, &peers)
 	if len(peers) != 2 {
 		t.Fatalf("expected 2 peers, got %d", len(peers))
 	}
-	if peers[0]["nodeId"] != "node-id-0" {
-		t.Errorf("peer[0].nodeId = %q, want node-id-0", peers[0]["nodeId"])
+	if !strings.Contains(peers[0], "node-id-0@") {
+		t.Errorf("peer[0] = %q, want to contain node-id-0@", peers[0])
 	}
 }
 
