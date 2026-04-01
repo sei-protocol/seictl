@@ -27,7 +27,7 @@ import (
 	"github.com/sei-protocol/seilog"
 )
 
-var forkLog = seilog.NewLogger("seictl", "task", "assemble-genesis-fork")
+var forkLog = seilog.NewLogger("sidecar", "task", "assemble-genesis-fork")
 
 const forkAssembleMarkerFile = ".sei-sidecar-fork-assemble-done"
 
@@ -48,6 +48,25 @@ func (r AssembleGenesisForkRequest) nodeNames() []string {
 		names[i] = n.Name
 	}
 	return names
+}
+
+func (r AssembleGenesisForkRequest) validate() error {
+	if r.SourceChainID == "" {
+		return fmt.Errorf("assemble-genesis-fork: missing 'sourceChainId'")
+	}
+	if r.ChainID == "" {
+		return fmt.Errorf("assemble-genesis-fork: missing 'chainId'")
+	}
+	if r.AccountBalance == "" {
+		return fmt.Errorf("assemble-genesis-fork: missing 'accountBalance'")
+	}
+	if r.Namespace == "" {
+		return fmt.Errorf("assemble-genesis-fork: missing 'namespace'")
+	}
+	if len(r.Nodes) == 0 {
+		return fmt.Errorf("assemble-genesis-fork: 'nodes' list is empty")
+	}
+	return nil
 }
 
 // GenesisForkAssembler downloads exported chain state from S3, rewrites
@@ -91,68 +110,46 @@ func (a *GenesisForkAssembler) Handler() engine.TaskHandler {
 			forkLog.Debug("already completed, skipping")
 			return nil
 		}
-
-		if req.SourceChainID == "" {
-			return fmt.Errorf("assemble-genesis-fork: missing 'sourceChainId'")
-		}
-		if req.ChainID == "" {
-			return fmt.Errorf("assemble-genesis-fork: missing 'chainId'")
-		}
-		if req.AccountBalance == "" {
-			return fmt.Errorf("assemble-genesis-fork: missing 'accountBalance'")
-		}
-		if req.Namespace == "" {
-			return fmt.Errorf("assemble-genesis-fork: missing 'namespace'")
-		}
-		if len(req.Nodes) == 0 {
-			return fmt.Errorf("assemble-genesis-fork: 'nodes' list is empty")
-		}
-
-		nodes := req.nodeNames()
-
-		// 1. Download exported state from {sourceChainId}/exported-state.json
-		if err := a.downloadExportedState(ctx, req.SourceChainID); err != nil {
+		if err := req.validate(); err != nil {
 			return err
 		}
-
-		// 2. Rewrite chain_id, initial_height, genesis_time; clear validators
-		if err := a.rewriteChainMeta(req.ChainID); err != nil {
+		if err := a.assemble(ctx, req); err != nil {
 			return err
 		}
-
-		// 3. Strip old validator state from staking/slashing/distribution
-		if err := a.stripValidatorState(); err != nil {
-			return err
-		}
-
-		// 4. Download per-node gentx files (same as standard assembly)
-		if err := a.downloadGentxFiles(ctx, req.ChainID, nodes); err != nil {
-			return err
-		}
-
-		// 5. Add missing genesis accounts for new validators
-		if err := a.addMissingGenesisAccounts(req.AccountBalance); err != nil {
-			return err
-		}
-
-		// 6. Run collect-gentxs
-		if err := a.collectGentxs(); err != nil {
-			return err
-		}
-
-		// 7. Upload genesis.json to {chainId}/{groupName}/genesis.json
-		if err := a.uploadGenesis(ctx, req.ChainID); err != nil {
-			return err
-		}
-
-		// 8. Build and upload peers.json
-		if err := a.uploadPeers(ctx, req.ChainID, req.Namespace, nodes); err != nil {
-			return err
-		}
-
-		forkLog.Info("fork genesis assembled", "chainId", req.ChainID, "nodes", len(nodes))
 		return writeMarker(a.homeDir, forkAssembleMarkerFile)
 	})
+}
+
+func (a *GenesisForkAssembler) assemble(ctx context.Context, req AssembleGenesisForkRequest) error {
+	nodes := req.nodeNames()
+
+	if err := a.downloadExportedState(ctx, req.SourceChainID); err != nil {
+		return err
+	}
+	if err := a.rewriteChainMeta(req.ChainID); err != nil {
+		return err
+	}
+	if err := a.stripValidatorState(); err != nil {
+		return err
+	}
+	if err := a.downloadGentxFiles(ctx, req.ChainID, nodes); err != nil {
+		return err
+	}
+	if err := a.addMissingGenesisAccounts(req.AccountBalance); err != nil {
+		return err
+	}
+	if err := a.collectGentxs(); err != nil {
+		return err
+	}
+	if err := a.uploadGenesis(ctx, req.ChainID); err != nil {
+		return err
+	}
+	if err := a.uploadPeers(ctx, req.ChainID, req.Namespace, nodes); err != nil {
+		return err
+	}
+
+	forkLog.Info("fork genesis assembled", "chainId", req.ChainID, "nodes", len(nodes))
+	return nil
 }
 
 func (a *GenesisForkAssembler) downloadExportedState(ctx context.Context, sourceChainID string) error {
