@@ -75,8 +75,13 @@ var serveCmd = cli.Command{
 			return fmt.Errorf("open result store: %w", err)
 		}
 
+		snapshotRestorer, err := tasks.NewSnapshotRestorer(homeDir, snapshotBucket, snapshotRegion, chainID, nil, nil)
+		if err != nil {
+			return fmt.Errorf("creating snapshot restorer: %w", err)
+		}
+
 		handlers := map[engine.TaskType]engine.TaskHandler{
-			engine.TaskSnapshotRestore:          tasks.NewSnapshotRestorer(homeDir, snapshotBucket, snapshotRegion, chainID, nil, nil).Handler(),
+			engine.TaskSnapshotRestore:          snapshotRestorer.Handler(),
 			engine.TaskDiscoverPeers:            tasks.NewPeerDiscoverer(homeDir, nil, nil).Handler(),
 			engine.TaskConfigPatch:              tasks.NewConfigPatcher(homeDir).Handler(),
 			engine.TaskConfigApply:              tasks.NewConfigApplier(homeDir).Handler(),

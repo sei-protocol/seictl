@@ -17,11 +17,14 @@ func TestDeserialize_SnapshotRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restorer := NewSnapshotRestorer(homeDir, "b", "r", "c", nil, nil)
+	restorer, err := NewSnapshotRestorer(homeDir, "b", "r", "c", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := restorer.Handler()
 
 	// The handler should succeed (skip via marker) without a parse error.
-	err := handler(context.Background(), map[string]any{})
+	err = handler(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("snapshot-restore handler returned error: %v", err)
 	}

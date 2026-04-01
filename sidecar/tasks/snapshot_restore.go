@@ -51,7 +51,10 @@ type SnapshotRestorer struct {
 
 // NewSnapshotRestorer creates a restorer targeting the given home directory.
 // Bucket, region, and chainID are read from environment at construction time.
-func NewSnapshotRestorer(homeDir, bucket, region, chainID string, clientFactory seis3.TransferClientFactory, listerFactory seis3.ObjectListerFactory) *SnapshotRestorer {
+func NewSnapshotRestorer(homeDir, bucket, region, chainID string, clientFactory seis3.TransferClientFactory, listerFactory seis3.ObjectListerFactory) (*SnapshotRestorer, error) {
+	if bucket == "" || region == "" || chainID == "" {
+		return nil, fmt.Errorf("snapshot-restore: bucket, region, and chainID are required")
+	}
 	if clientFactory == nil {
 		clientFactory = seis3.DefaultTransferClientFactory
 	}
@@ -65,7 +68,7 @@ func NewSnapshotRestorer(homeDir, bucket, region, chainID string, clientFactory 
 		chainID:       chainID,
 		clientFactory: clientFactory,
 		listerFactory: listerFactory,
-	}
+	}, nil
 }
 
 // Handler returns an engine.TaskHandler for the snapshot-restore task.
@@ -86,10 +89,6 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 
 	if targetHeight < 0 {
 		return fmt.Errorf("snapshot-restore: targetHeight must be >= 0, got %d", targetHeight)
-	}
-
-	if r.bucket == "" || r.region == "" || r.chainID == "" {
-		return fmt.Errorf("snapshot-restore: SEI_SNAPSHOT_BUCKET, SEI_SNAPSHOT_REGION, and SEI_CHAIN_ID are required")
 	}
 
 	prefix := r.chainID + "/"
