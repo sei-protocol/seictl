@@ -17,17 +17,9 @@ import (
 	"github.com/sei-protocol/seilog"
 )
 
-var exportLog = seilog.NewLogger("sidecar", "task", "export-state")
+var stateExportLog = seilog.NewLogger("sidecar", "task", "export-state")
 
 const exportMarkerFile = ".sei-sidecar-export-done"
-
-// CommandRunner abstracts os/exec for testability.
-type CommandRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
-
-func defaultCommandRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	return cmd.Output()
-}
 
 // ExportStateRequest holds the typed parameters for the export-state task.
 type ExportStateRequest struct {
@@ -41,21 +33,16 @@ type ExportStateRequest struct {
 // StateExporter runs seid export and uploads the result to S3.
 type StateExporter struct {
 	homeDir           string
-	cmdRunner         CommandRunner
 	s3UploaderFactory seis3.UploaderFactory
 }
 
 // NewStateExporter creates an exporter targeting the given home directory.
-func NewStateExporter(homeDir string, cmdRunner CommandRunner, uploaderFactory seis3.UploaderFactory) *StateExporter {
-	if cmdRunner == nil {
-		cmdRunner = defaultCommandRunner
-	}
+func NewStateExporter(homeDir string, uploaderFactory seis3.UploaderFactory) *StateExporter {
 	if uploaderFactory == nil {
 		uploaderFactory = seis3.DefaultUploaderFactory
 	}
 	return &StateExporter{
 		homeDir:           homeDir,
-		cmdRunner:         cmdRunner,
 		s3UploaderFactory: uploaderFactory,
 	}
 }
@@ -64,7 +51,7 @@ func NewStateExporter(homeDir string, cmdRunner CommandRunner, uploaderFactory s
 func (e *StateExporter) Handler() engine.TaskHandler {
 	return engine.TypedHandler(func(ctx context.Context, req ExportStateRequest) error {
 		if markerExists(e.homeDir, exportMarkerFile) {
-			exportLog.Debug("already completed, skipping")
+			stateExportLog.Debug("already completed, skipping")
 			return nil
 		}
 		if req.ChainID == "" {
@@ -82,8 +69,9 @@ func (e *StateExporter) Handler() engine.TaskHandler {
 			args = append(args, "--height", strconv.FormatInt(req.Height, 10))
 		}
 
-		exportLog.Info("running seid export", "height", req.Height)
-		output, err := e.cmdRunner(ctx, "seid", args...)
+		stateExportLog.Info("running seid export", "height", req.Height)
+		cmd := exec.CommandContext(ctx, "seid", args...)
+		output, err := cmd.Output()
 		if err != nil {
 			return fmt.Errorf("export-state: seid export failed: %w", err)
 		}
@@ -117,7 +105,7 @@ func (e *StateExporter) Handler() engine.TaskHandler {
 		}
 		_ = tmpFile.Close()
 
-		exportLog.Info("uploading exported state", "bucket", req.S3Bucket, "key", s3Key, "bytes", len(output))
+		stateExportLog.Info("uploading exported state", "bucket", req.S3Bucket, "key", s3Key, "bytes", len(output))
 		_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
 			Bucket:      aws.String(req.S3Bucket),
 			Key:         aws.String(s3Key),
@@ -128,7 +116,7 @@ func (e *StateExporter) Handler() engine.TaskHandler {
 			return fmt.Errorf("export-state: uploading to S3: %w", err)
 		}
 
-		exportLog.Info("export complete", "key", s3Key)
+		stateExportLog.Info("export complete", "key", s3Key)
 		return writeMarker(e.homeDir, exportMarkerFile)
 	})
 }
