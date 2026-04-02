@@ -53,6 +53,7 @@ const (
 	TaskTypeAssembleGenesis        = string(engine.TaskAssembleAndUploadGenesis)
 	TaskTypeSetGenesisPeers        = string(engine.TaskSetGenesisPeers)
 	TaskTypeAssembleGenesisFork    = string(engine.TaskAssembleGenesisFork)
+	TaskTypeExportState            = string(engine.TaskExportState)
 )
 
 // Known condition and action values for AwaitConditionTask.
