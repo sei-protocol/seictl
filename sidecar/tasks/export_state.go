@@ -1,7 +1,6 @@
 package tasks
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -69,25 +68,8 @@ func (e *StateExporter) Handler() engine.TaskHandler {
 			args = append(args, "--height", strconv.FormatInt(req.Height, 10))
 		}
 
-		stateExportLog.Info("running seid export", "height", req.Height)
-		cmd := exec.CommandContext(ctx, "seid", args...)
-		output, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("export-state: seid export failed: %w", err)
-		}
-
-		s3Key := req.S3Key
-		if s3Key == "" {
-			s3Key = req.ChainID + "/exported-state.json"
-		}
-
-		uploader, err := e.s3UploaderFactory(ctx, req.S3Region)
-		if err != nil {
-			return fmt.Errorf("export-state: building S3 uploader: %w", err)
-		}
-
-		// Write to temp file first to avoid holding multi-GB in memory
-		// during the S3 multipart upload.
+		// Write seid export output directly to a temp file to avoid
+		// holding multi-GB chain state in memory.
 		tmpDir := filepath.Join(e.homeDir, "tmp")
 		if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 			return fmt.Errorf("export-state: creating tmp dir: %w", err)
@@ -99,17 +81,43 @@ func (e *StateExporter) Handler() engine.TaskHandler {
 		tmpPath := tmpFile.Name()
 		defer func() { _ = os.Remove(tmpPath) }()
 
-		if _, err := tmpFile.Write(output); err != nil {
+		stateExportLog.Info("running seid export", "height", req.Height)
+		cmd := exec.CommandContext(ctx, "seid", args...)
+		cmd.Stdout = tmpFile
+		if err := cmd.Run(); err != nil {
 			_ = tmpFile.Close()
-			return fmt.Errorf("export-state: writing temp file: %w", err)
+			return fmt.Errorf("export-state: seid export failed: %w", err)
 		}
+
+		stat, err := tmpFile.Stat()
+		if err != nil {
+			_ = tmpFile.Close()
+			return fmt.Errorf("export-state: stat temp file: %w", err)
+		}
+		exportSize := stat.Size()
 		_ = tmpFile.Close()
 
-		stateExportLog.Info("uploading exported state", "bucket", req.S3Bucket, "key", s3Key, "bytes", len(output))
+		s3Key := req.S3Key
+		if s3Key == "" {
+			s3Key = req.ChainID + "/exported-state.json"
+		}
+
+		uploader, err := e.s3UploaderFactory(ctx, req.S3Region)
+		if err != nil {
+			return fmt.Errorf("export-state: building S3 uploader: %w", err)
+		}
+
+		uploadFile, err := os.Open(tmpPath)
+		if err != nil {
+			return fmt.Errorf("export-state: reopening temp file: %w", err)
+		}
+		defer func() { _ = uploadFile.Close() }()
+
+		stateExportLog.Info("uploading exported state", "bucket", req.S3Bucket, "key", s3Key, "bytes", exportSize)
 		_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
 			Bucket:      aws.String(req.S3Bucket),
 			Key:         aws.String(s3Key),
-			Body:        bytes.NewReader(output),
+			Body:        uploadFile,
 			ContentType: aws.String("application/json"),
 		})
 		if err != nil {
