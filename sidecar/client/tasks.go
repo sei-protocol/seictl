@@ -47,11 +47,13 @@ const (
 	TaskTypeResultExport       = string(engine.TaskResultExport)
 	TaskTypeAwaitCondition     = string(engine.TaskAwaitCondition)
 
-	TaskTypeGenerateIdentity       = "generate-identity"
-	TaskTypeGenerateGentx          = "generate-gentx"
-	TaskTypeUploadGenesisArtifacts = "upload-genesis-artifacts"
-	TaskTypeAssembleGenesis        = "assemble-and-upload-genesis"
-	TaskTypeSetGenesisPeers        = "set-genesis-peers"
+	TaskTypeGenerateIdentity       = string(engine.TaskGenerateIdentity)
+	TaskTypeGenerateGentx          = string(engine.TaskGenerateGentx)
+	TaskTypeUploadGenesisArtifacts = string(engine.TaskUploadGenesisArtifacts)
+	TaskTypeAssembleGenesis        = string(engine.TaskAssembleAndUploadGenesis)
+	TaskTypeSetGenesisPeers        = string(engine.TaskSetGenesisPeers)
+	TaskTypeAssembleGenesisFork    = string(engine.TaskAssembleGenesisFork)
+	TaskTypeExportState            = string(engine.TaskExportState)
 )
 
 // Known condition and action values for AwaitConditionTask.
