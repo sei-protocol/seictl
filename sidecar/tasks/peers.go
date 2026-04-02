@@ -61,6 +61,14 @@ type StaticSource struct {
 	Addresses []string
 }
 
+// DNSEndpointsSource discovers peers by querying a list of DNS endpoints
+// for their Tendermint node IDs. The controller resolves Kubernetes
+// SeiNodes to stable pod DNS names; this source handles the RPC query.
+type DNSEndpointsSource struct {
+	Endpoints   []string
+	QueryNodeID NodeIDQuerier
+}
+
 // DiscoverPeersRequest holds the typed parameters for the discover-peers task.
 type DiscoverPeersRequest struct {
 	Sources []PeerSourceEntry `json:"sources"`
@@ -72,6 +80,7 @@ type PeerSourceEntry struct {
 	Region    string            `json:"region,omitempty"`
 	Tags      map[string]string `json:"tags,omitempty"`
 	Addresses []string          `json:"addresses,omitempty"`
+	Endpoints []string          `json:"endpoints,omitempty"`
 }
 
 // PeerDiscoverer resolves peers from multiple sources and writes them to a file.
@@ -144,6 +153,30 @@ func (s *StaticSource) Discover(_ context.Context) ([]string, error) {
 	result := make([]string, len(s.Addresses))
 	copy(result, s.Addresses)
 	return result, nil
+}
+
+// Discover queries each DNS endpoint's Tendermint RPC for its node ID
+// and returns peer addresses in id@host:port format.
+func (s *DNSEndpointsSource) Discover(ctx context.Context) ([]string, error) {
+	querier := s.QueryNodeID
+	if querier == nil {
+		querier = defaultQueryNodeID
+	}
+
+	var peers []string
+	for _, endpoint := range s.Endpoints {
+		nodeID, err := querier(ctx, endpoint+":26657")
+		if err != nil {
+			peerLog.Info("skipping unreachable DNS endpoint", "endpoint", endpoint, "error", err)
+			continue
+		}
+		peers = append(peers, fmt.Sprintf("%s@%s:%s", nodeID, endpoint, p2pPort))
+	}
+
+	if len(peers) == 0 {
+		return nil, fmt.Errorf("no reachable peers found via dnsEndpoints (%d endpoints tried)", len(s.Endpoints))
+	}
+	return peers, nil
 }
 
 // NewPeerDiscoverer creates a discoverer targeting the given home directory.
@@ -237,6 +270,14 @@ func (d *PeerDiscoverer) buildSources(configs []PeerSourceEntry) ([]PeerSource, 
 				return nil, fmt.Errorf("source[%d]: static source has empty addresses", i)
 			}
 			sources = append(sources, &StaticSource{Addresses: cfg.Addresses})
+		case "dnsEndpoints":
+			if len(cfg.Endpoints) == 0 {
+				return nil, fmt.Errorf("source[%d]: dnsEndpoints source has empty endpoints", i)
+			}
+			sources = append(sources, &DNSEndpointsSource{
+				Endpoints:   cfg.Endpoints,
+				QueryNodeID: d.queryNodeID,
+			})
 		default:
 			return nil, fmt.Errorf("source[%d]: unknown type %q", i, cfg.Type)
 		}

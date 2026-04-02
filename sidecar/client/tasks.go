@@ -149,8 +149,9 @@ func ConfigureGenesisTaskFromParams(_ map[string]interface{}) ConfigureGenesisTa
 type PeerSourceType string
 
 const (
-	PeerSourceEC2Tags PeerSourceType = "ec2Tags"
-	PeerSourceStatic  PeerSourceType = "static"
+	PeerSourceEC2Tags      PeerSourceType = "ec2Tags"
+	PeerSourceStatic       PeerSourceType = "static"
+	PeerSourceDNSEndpoints PeerSourceType = "dnsEndpoints"
 )
 
 // PeerSource is a single peer discovery source.
@@ -159,6 +160,7 @@ type PeerSource struct {
 	Region    string
 	Tags      map[string]string
 	Addresses []string
+	Endpoints []string
 }
 
 // DiscoverPeersTask resolves peers from one or more sources.
@@ -186,6 +188,10 @@ func (t DiscoverPeersTask) Validate() error {
 			if len(src.Addresses) == 0 {
 				return fmt.Errorf("discover-peers: source[%d] static missing required field Addresses", i)
 			}
+		case PeerSourceDNSEndpoints:
+			if len(src.Endpoints) == 0 {
+				return fmt.Errorf("discover-peers: source[%d] dnsEndpoints missing required field Endpoints", i)
+			}
 		default:
 			return fmt.Errorf("discover-peers: source[%d] unknown type %q", i, src.Type)
 		}
@@ -211,6 +217,12 @@ func (t DiscoverPeersTask) ToTaskRequest() TaskRequest {
 				addrs[j] = a
 			}
 			m["addresses"] = addrs
+		case PeerSourceDNSEndpoints:
+			eps := make([]interface{}, len(src.Endpoints))
+			for j, e := range src.Endpoints {
+				eps[j] = e
+			}
+			m["endpoints"] = eps
 		}
 		sources[i] = m
 	}
@@ -256,6 +268,15 @@ func DiscoverPeersTaskFromParams(params map[string]interface{}) (DiscoverPeersTa
 				for _, a := range rawAddrs {
 					if s, ok := a.(string); ok {
 						src.Addresses = append(src.Addresses, s)
+					}
+				}
+			}
+		case PeerSourceDNSEndpoints:
+			if rawEps, ok := m["endpoints"].([]interface{}); ok {
+				src.Endpoints = make([]string, 0, len(rawEps))
+				for _, e := range rawEps {
+					if s, ok := e.(string); ok {
+						src.Endpoints = append(src.Endpoints, s)
 					}
 				}
 			}
