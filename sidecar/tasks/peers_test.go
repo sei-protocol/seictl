@@ -197,8 +197,8 @@ func TestStaticSource_EmptyAddresses_ReturnsError(t *testing.T) {
 
 func TestDNSEndpointsSource_Discover(t *testing.T) {
 	nodeIDs := map[string]string{
-		"node-0-0.node-0.default.svc.cluster.local:26657": "abc123",
-		"node-1-0.node-1.default.svc.cluster.local:26657": "def456",
+		"node-0-0.node-0.default.svc.cluster.local": "abc123",
+		"node-1-0.node-1.default.svc.cluster.local": "def456",
 	}
 	querier := func(_ context.Context, host string) (string, error) {
 		id, ok := nodeIDs[host]
@@ -233,7 +233,7 @@ func TestDNSEndpointsSource_Discover(t *testing.T) {
 
 func TestDNSEndpointsSource_SkipsUnreachable(t *testing.T) {
 	querier := func(_ context.Context, host string) (string, error) {
-		if host == "bad-0.bad.default.svc.cluster.local:26657" {
+		if host == "bad-0.bad.default.svc.cluster.local" {
 			return "", fmt.Errorf("connection refused")
 		}
 		return "good-id", nil

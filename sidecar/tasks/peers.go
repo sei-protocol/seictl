@@ -165,7 +165,7 @@ func (s *DNSEndpointsSource) Discover(ctx context.Context) ([]string, error) {
 
 	var peers []string
 	for _, endpoint := range s.Endpoints {
-		nodeID, err := querier(ctx, endpoint+":26657")
+		nodeID, err := querier(ctx, endpoint)
 		if err != nil {
 			peerLog.Info("skipping unreachable DNS endpoint", "endpoint", endpoint, "error", err)
 			continue
