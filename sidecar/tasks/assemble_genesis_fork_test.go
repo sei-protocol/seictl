@@ -167,10 +167,10 @@ func TestForkAssembler_StripValidatorState(t *testing.T) {
 	os.MkdirAll(configDir, 0o755)
 
 	stakingState := map[string]any{
-		"params":               map[string]any{"bond_denom": "usei"},
-		"validators":           []any{map[string]any{"operator": "val1"}},
-		"delegations":          []any{map[string]any{"delegator": "del1"}},
-		"last_total_power":     "100",
+		"params":                map[string]any{"bond_denom": "usei"},
+		"validators":            []any{map[string]any{"operator": "val1"}},
+		"delegations":           []any{map[string]any{"delegator": "del1"}},
+		"last_total_power":      "100",
 		"last_validator_powers": []any{map[string]any{"address": "val1"}},
 	}
 	slashingState := map[string]any{
@@ -182,13 +182,13 @@ func TestForkAssembler_StripValidatorState(t *testing.T) {
 		"evidence": []any{map[string]any{"type": "duplicate_vote"}},
 	}
 	distributionState := map[string]any{
-		"params":                              map[string]any{"community_tax": "0.02"},
-		"outstanding_rewards":                 []any{map[string]any{"val": "val1"}},
-		"validator_accumulated_commissions":   []any{map[string]any{"val": "val1"}},
-		"validator_historical_rewards":        []any{map[string]any{"val": "val1"}},
-		"validator_current_rewards":           []any{map[string]any{"val": "val1"}},
-		"delegator_starting_infos":            []any{map[string]any{"del": "del1"}},
-		"validator_slash_events":              []any{map[string]any{"val": "val1"}},
+		"params":                            map[string]any{"community_tax": "0.02"},
+		"outstanding_rewards":               []any{map[string]any{"val": "val1"}},
+		"validator_accumulated_commissions": []any{map[string]any{"val": "val1"}},
+		"validator_historical_rewards":      []any{map[string]any{"val": "val1"}},
+		"validator_current_rewards":         []any{map[string]any{"val": "val1"}},
+		"delegator_starting_infos":          []any{map[string]any{"del": "del1"}},
+		"validator_slash_events":            []any{map[string]any{"val": "val1"}},
 	}
 
 	appState := map[string]any{
