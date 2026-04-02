@@ -372,11 +372,11 @@ func (a *GenesisForkAssembler) addMissingGenesisAccounts(accountBalance string) 
 	for _, gf := range gentxFiles {
 		data, err := os.ReadFile(gf)
 		if err != nil {
-			continue
+			return fmt.Errorf("assemble-genesis-fork: reading gentx %s: %w", filepath.Base(gf), err)
 		}
 		tx, err := txCfg.TxJSONDecoder()(data)
 		if err != nil {
-			continue
+			return fmt.Errorf("assemble-genesis-fork: decoding gentx %s: %w", filepath.Base(gf), err)
 		}
 		for _, msg := range tx.GetMsgs() {
 			delegator := extractDelegatorAddress(msg)
@@ -385,7 +385,7 @@ func (a *GenesisForkAssembler) addMissingGenesisAccounts(accountBalance string) 
 			}
 			addr, err := sdk.AccAddressFromBech32(delegator)
 			if err != nil {
-				continue
+				return fmt.Errorf("assemble-genesis-fork: parsing delegator address in %s: %w", filepath.Base(gf), err)
 			}
 			if accs.Contains(addr) {
 				continue
