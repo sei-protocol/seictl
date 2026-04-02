@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
@@ -332,6 +333,9 @@ func TestSnapshotRestoreTargetHeightNoMatch(t *testing.T) {
 	err := restorer.Restore(context.Background(), 50000000)
 	if err == nil {
 		t.Fatal("expected error when no snapshot found at or below target height")
+	}
+	if !strings.Contains(err.Error(), "no snapshot found") {
+		t.Fatalf("expected 'no snapshot found' error, got: %v", err)
 	}
 }
 
