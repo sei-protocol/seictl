@@ -195,6 +195,111 @@ func TestStaticSource_EmptyAddresses_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestDNSEndpointsSource_Discover(t *testing.T) {
+	nodeIDs := map[string]string{
+		"node-0-0.node-0.default.svc.cluster.local:26657": "abc123",
+		"node-1-0.node-1.default.svc.cluster.local:26657": "def456",
+	}
+	querier := func(_ context.Context, host string) (string, error) {
+		id, ok := nodeIDs[host]
+		if !ok {
+			return "", fmt.Errorf("unreachable: %s", host)
+		}
+		return id, nil
+	}
+
+	src := &DNSEndpointsSource{
+		Endpoints: []string{
+			"node-0-0.node-0.default.svc.cluster.local",
+			"node-1-0.node-1.default.svc.cluster.local",
+		},
+		QueryNodeID: querier,
+	}
+
+	peers, err := src.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(peers) != 2 {
+		t.Fatalf("expected 2 peers, got %d: %v", len(peers), peers)
+	}
+	if peers[0] != "abc123@node-0-0.node-0.default.svc.cluster.local:26656" {
+		t.Errorf("peer[0] = %q", peers[0])
+	}
+	if peers[1] != "def456@node-1-0.node-1.default.svc.cluster.local:26656" {
+		t.Errorf("peer[1] = %q", peers[1])
+	}
+}
+
+func TestDNSEndpointsSource_SkipsUnreachable(t *testing.T) {
+	querier := func(_ context.Context, host string) (string, error) {
+		if host == "bad-0.bad.default.svc.cluster.local:26657" {
+			return "", fmt.Errorf("connection refused")
+		}
+		return "good-id", nil
+	}
+
+	src := &DNSEndpointsSource{
+		Endpoints: []string{
+			"bad-0.bad.default.svc.cluster.local",
+			"good-0.good.default.svc.cluster.local",
+		},
+		QueryNodeID: querier,
+	}
+
+	peers, err := src.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(peers) != 1 {
+		t.Fatalf("expected 1 reachable peer, got %d: %v", len(peers), peers)
+	}
+	if peers[0] != "good-id@good-0.good.default.svc.cluster.local:26656" {
+		t.Errorf("peer[0] = %q", peers[0])
+	}
+}
+
+func TestDNSEndpointsSource_AllUnreachable_ReturnsError(t *testing.T) {
+	querier := func(_ context.Context, _ string) (string, error) {
+		return "", fmt.Errorf("connection refused")
+	}
+
+	src := &DNSEndpointsSource{
+		Endpoints:   []string{"a-0.a.default.svc.cluster.local", "b-0.b.default.svc.cluster.local"},
+		QueryNodeID: querier,
+	}
+
+	_, err := src.Discover(context.Background())
+	if err == nil {
+		t.Fatal("expected error when all endpoints unreachable")
+	}
+}
+
+func TestHandler_SourcesParam_DNSEndpoints(t *testing.T) {
+	homeDir := t.TempDir()
+	ensureConfigDir(t, homeDir)
+	discoverer := NewPeerDiscoverer(homeDir, nil, staticNodeIDQuerier("k8s-node"))
+	handler := discoverer.Handler()
+
+	err := handler(context.Background(), map[string]any{
+		"sources": []any{
+			map[string]any{
+				"type":      "dnsEndpoints",
+				"endpoints": []any{"peer-0-0.peer-0.default.svc.cluster.local"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Handler failed: %v", err)
+	}
+
+	got := readPeersFromConfigTOML(t, homeDir)
+	want := "k8s-node@peer-0-0.peer-0.default.svc.cluster.local:26656"
+	if got != want {
+		t.Fatalf("peers = %q, want %q", got, want)
+	}
+}
+
 func TestDiscoverFromSources_Deduplication(t *testing.T) {
 	src1 := &StaticSource{Addresses: []string{"abc@1.2.3.4:26656", "def@5.6.7.8:26656"}}
 	src2 := &StaticSource{Addresses: []string{"def@5.6.7.8:26656", "ghi@9.10.11.12:26656"}}
