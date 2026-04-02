@@ -63,6 +63,25 @@ func DefaultObjectListerFactory(ctx context.Context, region string) (ObjectListe
 	return s3.NewFromConfig(cfg), nil
 }
 
+// Downloader abstracts S3 GetObject for streaming reads. Unlike
+// TransferClient (which writes to io.WriterAt), Downloader returns
+// a streaming io.ReadCloser body suitable for gzip decompression.
+type Downloader interface {
+	GetObject(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
+// DownloaderFactory builds a Downloader for a given region.
+type DownloaderFactory func(ctx context.Context, region string) (Downloader, error)
+
+// DefaultDownloaderFactory creates a real S3 client for streaming downloads.
+func DefaultDownloaderFactory(ctx context.Context, region string) (Downloader, error) {
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	if err != nil {
+		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+	return s3.NewFromConfig(cfg), nil
+}
+
 // WriteAtBuffer is a goroutine-safe in-memory io.WriterAt, used for
 // downloading small S3 objects (e.g. latest.txt) via DownloadObject.
 type WriteAtBuffer struct {
