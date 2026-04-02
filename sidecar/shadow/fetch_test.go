@@ -218,8 +218,8 @@ func TestFetchReport_WithLayer1Data(t *testing.T) {
 
 func TestFetchReport_WithChainSnapshots(t *testing.T) {
 	report := DivergenceReport{
-		Height:    99,
-		Timestamp: "2026-04-02T00:00:00Z",
+		Height:     99,
+		Timestamp:  "2026-04-02T00:00:00Z",
 		Comparison: CompareResult{Height: 99, Match: false, Layer0: Layer0Result{AppHashMatch: false}},
 		Shadow:     ChainSnapshot{Block: json.RawMessage(`{"shadow":"block"}`), BlockResults: json.RawMessage(`{"shadow":"results"}`)},
 		Canonical:  ChainSnapshot{Block: json.RawMessage(`{"canonical":"block"}`), BlockResults: json.RawMessage(`{"canonical":"results"}`)},
