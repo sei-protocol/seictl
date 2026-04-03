@@ -27,8 +27,9 @@ type rpcError struct {
 // HTTP RPC endpoints. Note: seid's CometBFT fork returns flat JSON without
 // this wrapper — Client.Get handles both formats.
 type envelope struct {
-	Result json.RawMessage `json:"result"`
-	Error  *rpcError       `json:"error,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+	Result  json.RawMessage `json:"result"`
+	Error   *rpcError       `json:"error,omitempty"`
 }
 
 // Client performs HTTP GET requests against a CometBFT RPC endpoint
@@ -81,17 +82,21 @@ func (c *Client) Get(ctx context.Context, path string) (json.RawMessage, error) 
 	if err := json.Unmarshal(body, &env); err != nil {
 		return nil, fmt.Errorf("decoding JSON response from %s: %w", path, err)
 	}
-	if env.Error != nil {
-		return nil, fmt.Errorf("JSON-RPC error from %s: %s (code %d, data: %s)",
-			path, env.Error.Message, env.Error.Code, env.Error.Data)
-	}
 
-	// If the response had a "result" key, return the unwrapped inner value
-	// (standard CometBFT JSON-RPC envelope). Otherwise the response is
-	// flat JSON (seid format) — return the entire body.
-	if len(env.Result) > 0 {
+	// Discriminate by the presence of "jsonrpc":"2.0" — only real JSON-RPC
+	// envelopes carry this field. Seid's flat responses never will.
+	if env.JSONRPC == "2.0" {
+		if env.Error != nil {
+			return nil, fmt.Errorf("JSON-RPC error from %s: %s (code %d, data: %s)",
+				path, env.Error.Message, env.Error.Code, env.Error.Data)
+		}
+		if len(env.Result) == 0 {
+			return nil, fmt.Errorf("empty result in JSON-RPC response from %s", path)
+		}
 		return env.Result, nil
 	}
+
+	// Flat JSON (seid format) — return the body as-is.
 	return json.RawMessage(body), nil
 }
 
