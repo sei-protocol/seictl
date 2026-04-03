@@ -121,7 +121,7 @@ func (e *StateExporter) Handler() engine.TaskHandler {
 			ContentType: aws.String("application/json"),
 		})
 		if err != nil {
-			return fmt.Errorf("export-state: uploading to S3: %w", err)
+			return seis3.ClassifyS3Error("export-state", req.S3Bucket, s3Key, req.S3Region, err)
 		}
 
 		stateExportLog.Info("export complete", "key", s3Key)

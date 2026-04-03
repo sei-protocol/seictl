@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -71,7 +72,7 @@ func (g *GenesisPeersSetter) Handler() engine.TaskHandler {
 			Key:    aws.String(key),
 		})
 		if err != nil {
-			return fmt.Errorf("set-genesis-peers: downloading peers.json: %w", err)
+			return seis3.ClassifyS3Error("set-genesis-peers", g.bucket, key, g.region, err)
 		}
 		data, err := io.ReadAll(output.Body)
 		_ = output.Body.Close()

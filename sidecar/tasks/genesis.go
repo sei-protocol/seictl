@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	seiconfig "github.com/sei-protocol/sei-config"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -124,7 +125,7 @@ func (g *GenesisFetcher) fetchFromS3(ctx context.Context, cfg GenesisS3Config) e
 		Key:    aws.String(cfg.Key),
 	})
 	if err != nil {
-		return fmt.Errorf("s3 GetObject %s/%s: %w", cfg.Bucket, cfg.Key, err)
+		return seis3.ClassifyS3Error("configure-genesis", cfg.Bucket, cfg.Key, cfg.Region, err)
 	}
 	defer func() { _ = output.Body.Close() }()
 

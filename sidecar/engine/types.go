@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -51,6 +52,25 @@ const (
 	TaskStatusCompleted TaskStatus = "completed"
 	TaskStatusFailed    TaskStatus = "failed"
 )
+
+// TaskError is a structured error that includes operator-actionable context.
+// Task handlers return this to provide rich error detail beyond a plain string.
+type TaskError struct {
+	Task      string `json:"task"`
+	Operation string `json:"operation"`
+	Message   string `json:"message"`
+	Hint      string `json:"hint,omitempty"`
+	Retryable bool   `json:"retryable"`
+	Cause     string `json:"cause,omitempty"`
+}
+
+func (e *TaskError) Error() string {
+	s := fmt.Sprintf("%s: %s: %s", e.Task, e.Operation, e.Message)
+	if e.Hint != "" {
+		s += fmt.Sprintf(" [hint: %s]", e.Hint)
+	}
+	return s
+}
 
 // TaskResult records a task and its outcome.
 type TaskResult struct {

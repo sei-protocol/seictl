@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -534,4 +535,36 @@ func TestLongRunningTaskDoesNotBlockOthers(t *testing.T) {
 		t.Fatalf("second submit should not be blocked: %v", err)
 	}
 	waitForResult(t, eng, id)
+}
+
+func TestTaskErrorProducesRichErrorString(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			return &TaskError{
+				Task:      "config-patch",
+				Operation: "S3",
+				Message:   "bucket not found",
+				Hint:      "check SEI_SNAPSHOT_BUCKET",
+			}
+		},
+	})
+
+	id, err := eng.Submit(Task{Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	r := waitForResult(t, eng, id)
+	if r.Status != TaskStatusFailed {
+		t.Fatalf("expected Failed, got %s", r.Status)
+	}
+	if !strings.Contains(r.Error, "config-patch") {
+		t.Errorf("error should contain task name, got: %s", r.Error)
+	}
+	if !strings.Contains(r.Error, "bucket not found") {
+		t.Errorf("error should contain message, got: %s", r.Error)
+	}
+	if !strings.Contains(r.Error, "hint:") {
+		t.Errorf("error should contain hint, got: %s", r.Error)
+	}
 }
