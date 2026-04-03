@@ -30,19 +30,51 @@ func TestClient_Get_UnwrapsEnvelope(t *testing.T) {
 	}
 }
 
-func TestClient_Get_EmptyResult(t *testing.T) {
+func TestClient_Get_FlatJSON_SeidFormat(t *testing.T) {
+	// seid returns flat JSON without the JSON-RPC envelope.
+	flat := `{"node_info":{"id":"abc123"},"sync_info":{"latest_block_height":"42","catching_up":false}}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":-1}`))
+		_, _ = w.Write([]byte(flat))
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, nil)
-	_, err := c.Get(context.Background(), "/status")
-	if err == nil {
-		t.Fatal("expected error for empty result")
+	raw, err := c.Get(context.Background(), "/status")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
 	}
-	if !strings.Contains(err.Error(), "empty result") {
-		t.Errorf("unexpected error: %v", err)
+
+	got := string(raw)
+	if !strings.Contains(got, "abc123") {
+		t.Errorf("expected flat result containing node ID, got %s", got)
+	}
+	if !strings.Contains(got, "latest_block_height") {
+		t.Errorf("expected flat result containing latest_block_height, got %s", got)
+	}
+}
+
+func TestClient_Get_FlatJSON_WithResultKey(t *testing.T) {
+	// A flat response that happens to contain a "result" data key must NOT
+	// be mistaken for a JSON-RPC envelope.
+	flat := `{"result":{"code":0,"log":"ok"},"hash":"ABC123"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(flat))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, nil)
+	raw, err := c.Get(context.Background(), "/tx")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	got := string(raw)
+	// Should return the full body, not just the inner "result" value.
+	if !strings.Contains(got, "hash") {
+		t.Errorf("expected full flat body with hash field, got %s", got)
+	}
+	if !strings.Contains(got, "ABC123") {
+		t.Errorf("expected full flat body with hash value, got %s", got)
 	}
 }
 
