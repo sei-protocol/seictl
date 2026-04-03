@@ -12,11 +12,11 @@ import (
 // compareLayer1 fetches block_results from both chains and compares
 // individual transaction receipts to identify which transactions diverged.
 func (c *Comparator) compareLayer1(ctx context.Context, height int64) (*Layer1Result, error) {
-	shadowResults, err := queryBlockResults(ctx, c.shadowRPC, height)
+	shadowResults, err := queryBlockResults(ctx, c.shadowClient, height)
 	if err != nil {
 		return nil, fmt.Errorf("querying shadow block_results at height %d: %w", height, err)
 	}
-	canonicalResults, err := queryBlockResults(ctx, c.canonicalRPC, height)
+	canonicalResults, err := queryBlockResults(ctx, c.canonicalClient, height)
 	if err != nil {
 		return nil, fmt.Errorf("querying canonical block_results at height %d: %w", height, err)
 	}
@@ -105,9 +105,8 @@ func compareTxReceipts(idx int, shadow, canonical rpc.TxResult) *TxDivergence {
 }
 
 // queryBlockResults fetches /block_results at the given height.
-func queryBlockResults(ctx context.Context, rpcEndpoint string, height int64) (*rpc.BlockResultsResult, error) {
-	c := rpc.NewClient(rpcEndpoint, nil)
-	raw, err := c.Get(ctx, fmt.Sprintf("/block_results?height=%d", height))
+func queryBlockResults(ctx context.Context, client *rpc.Client, height int64) (*rpc.BlockResultsResult, error) {
+	raw, err := client.Get(ctx, fmt.Sprintf("/block_results?height=%d", height))
 	if err != nil {
 		return nil, err
 	}

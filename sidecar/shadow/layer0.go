@@ -11,11 +11,11 @@ import (
 // compareLayer0 fetches the block header from both chains at the given
 // height and compares AppHash, LastResultsHash, and total gas used.
 func (c *Comparator) compareLayer0(ctx context.Context, height int64) (*Layer0Result, error) {
-	shadowBlock, err := queryBlock(ctx, c.shadowRPC, height)
+	shadowBlock, err := queryBlock(ctx, c.shadowClient, height)
 	if err != nil {
 		return nil, fmt.Errorf("querying shadow block at height %d: %w", height, err)
 	}
-	canonicalBlock, err := queryBlock(ctx, c.canonicalRPC, height)
+	canonicalBlock, err := queryBlock(ctx, c.canonicalClient, height)
 	if err != nil {
 		return nil, fmt.Errorf("querying canonical block at height %d: %w", height, err)
 	}
@@ -52,9 +52,8 @@ func (c *Comparator) compareLayer0(ctx context.Context, height int64) (*Layer0Re
 
 // queryBlock fetches the block at the given height from a CometBFT RPC endpoint
 // and returns the header fields needed for comparison.
-func queryBlock(ctx context.Context, rpcEndpoint string, height int64) (*rpc.BlockResult, error) {
-	c := rpc.NewClient(rpcEndpoint, nil)
-	raw, err := c.Get(ctx, fmt.Sprintf("/block?height=%d", height))
+func queryBlock(ctx context.Context, client *rpc.Client, height int64) (*rpc.BlockResult, error) {
+	raw, err := client.Get(ctx, fmt.Sprintf("/block?height=%d", height))
 	if err != nil {
 		return nil, err
 	}

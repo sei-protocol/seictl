@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
@@ -55,6 +57,7 @@ func NewServer(addr string, eng *engine.Engine, homeDir string) *Server {
 	s.mux.HandleFunc("GET /v0/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /v0/livez", s.handleLivez)
 	s.mux.HandleFunc("GET /v0/status", s.handleStatus)
+	s.mux.Handle("GET /v0/metrics", promhttp.Handler())
 	s.mux.HandleFunc("GET /v0/node-id", s.handleNodeID)
 	s.mux.HandleFunc("POST /v0/tasks", s.handlePostTask)
 	s.mux.HandleFunc("GET /v0/tasks", s.handleListTasks)

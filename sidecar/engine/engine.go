@@ -131,6 +131,7 @@ func (e *Engine) Submit(task Task) (string, error) {
 	}
 
 	log.Info("task submitted", "type", task.Type, "id", id, "run", run)
+	taskSubmissions.WithLabelValues(string(task.Type)).Inc()
 	e.runTask(id, task.Type, handler, task.Params, now, run)
 
 	return id, nil
@@ -167,10 +168,15 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 func (e *Engine) execute(ctx context.Context, taskType TaskType, handler TaskHandler, params map[string]any) error {
 	start := time.Now()
 	if err := handler(ctx, params); err != nil {
-		log.Error("task failed", "type", taskType, "elapsed", time.Since(start).Round(time.Millisecond), "err", err)
+		elapsed := time.Since(start)
+		log.Error("task failed", "type", taskType, "elapsed", elapsed.Round(time.Millisecond), "err", err)
+		taskDuration.WithLabelValues(string(taskType), "failed").Observe(elapsed.Seconds())
+		taskFailures.WithLabelValues(string(taskType)).Inc()
 		return err
 	}
-	log.Info("task completed", "type", taskType, "elapsed", time.Since(start).Round(time.Millisecond))
+	elapsed := time.Since(start)
+	log.Info("task completed", "type", taskType, "elapsed", elapsed.Round(time.Millisecond))
+	taskDuration.WithLabelValues(string(taskType), "completed").Observe(elapsed.Seconds())
 	if taskType == TaskMarkReady {
 		e.ready.Store(true)
 	}
