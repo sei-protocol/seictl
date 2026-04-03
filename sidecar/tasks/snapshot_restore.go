@@ -105,13 +105,13 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 			return fmt.Errorf("building S3 lister: %w", listerErr)
 		}
 		var resolveErr error
-		snapshotKey, resolveErr = resolveKeyForHeight(ctx, lister, r.bucket, prefix, targetHeight)
+		snapshotKey, resolveErr = resolveKeyForHeight(ctx, lister, r.bucket, prefix, r.region, targetHeight)
 		if resolveErr != nil {
 			return resolveErr
 		}
 	} else {
 		var resolveErr error
-		snapshotKey, resolveErr = resolveLatestKey(ctx, client, r.bucket, prefix)
+		snapshotKey, resolveErr = resolveLatestKey(ctx, client, r.bucket, prefix, r.region)
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -165,15 +165,16 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 }
 
 // resolveLatestKey reads <prefix>latest.txt and constructs the snapshot key.
-func resolveLatestKey(ctx context.Context, client seis3.TransferClient, bucket, prefix string) (string, error) {
+func resolveLatestKey(ctx context.Context, client seis3.TransferClient, bucket, prefix, region string) (string, error) {
+	latestKey := prefix + "latest.txt"
 	var buf seis3.WriteAtBuffer
 	_, err := client.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
 		Bucket:   aws.String(bucket),
-		Key:      aws.String(prefix + "latest.txt"),
+		Key:      aws.String(latestKey),
 		WriterAt: &buf,
 	})
 	if err != nil {
-		return "", fmt.Errorf("reading latest.txt: %w", err)
+		return "", seis3.ClassifyS3Error("snapshot-restore", bucket, latestKey, region, err)
 	}
 
 	height := strings.TrimSpace(string(buf.Bytes()))
@@ -186,7 +187,7 @@ func resolveLatestKey(ctx context.Context, client seis3.TransferClient, bucket, 
 
 // resolveKeyForHeight lists snapshot objects and returns the key with the
 // highest height that is <= targetHeight.
-func resolveKeyForHeight(ctx context.Context, lister seis3.ObjectLister, bucket, prefix string, targetHeight int64) (string, error) {
+func resolveKeyForHeight(ctx context.Context, lister seis3.ObjectLister, bucket, prefix, region string, targetHeight int64) (string, error) {
 	var bestHeight int64
 	var bestKey string
 
@@ -198,7 +199,7 @@ func resolveKeyForHeight(ctx context.Context, lister seis3.ObjectLister, bucket,
 			ContinuationToken: continuationToken,
 		})
 		if err != nil {
-			return "", fmt.Errorf("listing snapshots in s3://%s/%s: %w", bucket, prefix, err)
+			return "", seis3.ClassifyS3Error("snapshot-restore", bucket, prefix, region, err)
 		}
 
 		for _, obj := range output.Contents {
