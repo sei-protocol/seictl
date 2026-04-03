@@ -537,6 +537,172 @@ func TestLongRunningTaskDoesNotBlockOthers(t *testing.T) {
 	waitForResult(t, eng, id)
 }
 
+// --- Status-aware Submit tests ---
+
+func TestSubmitReExecutesFailedTask(t *testing.T) {
+	calls := 0
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			calls++
+			if calls == 1 {
+				return errors.New("transient failure")
+			}
+			return nil
+		},
+	})
+
+	const taskID = "dddddddd-1111-2222-3333-444444444444"
+
+	// First submit: task fails.
+	id1, err := eng.Submit(Task{ID: taskID, Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+	r1 := waitForResult(t, eng, id1)
+	if r1.Status != TaskStatusFailed {
+		t.Fatalf("expected failed, got %s", r1.Status)
+	}
+	if r1.Run != 1 {
+		t.Fatalf("expected run=1, got %d", r1.Run)
+	}
+
+	// Second submit with same ID: should re-execute.
+	id2, err := eng.Submit(Task{ID: taskID, Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("second submit: %v", err)
+	}
+	if id2 != id1 {
+		t.Fatalf("expected same ID, got %q and %q", id1, id2)
+	}
+
+	r2 := waitForResult(t, eng, id2)
+	if r2.Status != TaskStatusCompleted {
+		t.Fatalf("expected completed on retry, got %s", r2.Status)
+	}
+	if r2.Run != 2 {
+		t.Fatalf("expected run=2, got %d", r2.Run)
+	}
+	if calls != 2 {
+		t.Fatalf("expected handler called twice, got %d", calls)
+	}
+}
+
+func TestSubmitReExecutesFailedTaskThatFailsAgain(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			return errors.New("persistent failure")
+		},
+	})
+
+	const taskID = "eeeeeeee-1111-2222-3333-444444444444"
+
+	id, _ := eng.Submit(Task{ID: taskID, Type: TaskConfigPatch})
+	waitForResult(t, eng, id)
+
+	// Re-submit: still fails.
+	eng.Submit(Task{ID: taskID, Type: TaskConfigPatch})
+	r := waitForResult(t, eng, id)
+
+	if r.Status != TaskStatusFailed {
+		t.Fatalf("expected failed, got %s", r.Status)
+	}
+	if r.Run != 2 {
+		t.Fatalf("expected run=2, got %d", r.Run)
+	}
+}
+
+func TestSubmitDoesNotIncrementRunOnRehydration(t *testing.T) {
+	// Create a store with a stale running task (simulates pod crash).
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	_ = store.Save(&TaskResult{
+		ID:          "ffffffff-1111-2222-3333-444444444444",
+		Type:        string(TaskConfigPatch),
+		Status:      TaskStatusRunning,
+		Run:         1,
+		SubmittedAt: now,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	}, store)
+
+	r := waitForResult(t, eng, "ffffffff-1111-2222-3333-444444444444")
+	if r.Run != 1 {
+		t.Fatalf("expected run=1 after rehydration (not incremented), got %d", r.Run)
+	}
+	if r.Status != TaskStatusCompleted {
+		t.Fatalf("expected completed after rehydration, got %s", r.Status)
+	}
+}
+
+func TestSubmitConcurrentSameFailedID(t *testing.T) {
+	var callCount atomic.Int32
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			callCount.Add(1)
+			return nil
+		},
+	})
+
+	const taskID = "11111111-2222-3333-4444-555555555555"
+
+	// Create a failed task.
+	eng.Submit(Task{ID: taskID, Type: TaskConfigPatch, Params: map[string]any{"fail": true}})
+
+	// Wait but we need it to fail first. Let's use a different approach.
+	// Submit and wait for the first run to complete.
+	waitForResult(t, eng, taskID)
+	callCount.Store(0) // Reset counter.
+
+	// Manually set the task to failed for the concurrent test.
+	now := time.Now().UTC()
+	_, _ = eng.store.Delete(taskID)
+	_ = eng.store.Save(&TaskResult{
+		ID:          taskID,
+		Type:        string(TaskConfigPatch),
+		Status:      TaskStatusFailed,
+		Run:         1,
+		Error:       "failed",
+		SubmittedAt: now,
+		CompletedAt: &now,
+	})
+
+	// Two concurrent submits of the same failed ID.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			eng.Submit(Task{ID: taskID, Type: TaskConfigPatch})
+		}()
+	}
+	wg.Wait()
+
+	// Wait for any launched task to complete.
+	waitForResult(t, eng, taskID)
+
+	// Only one execution should have been launched.
+	if c := callCount.Load(); c != 1 {
+		t.Fatalf("expected exactly 1 re-execution, got %d", c)
+	}
+}
+
+func TestSubmitRunFieldOnFirstSubmit(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
+	r := waitForResult(t, eng, id)
+
+	if r.Run != 1 {
+		t.Fatalf("expected run=1 on first submit, got %d", r.Run)
+	}
+}
+
 func TestTaskErrorProducesRichErrorString(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {

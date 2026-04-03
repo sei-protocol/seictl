@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,6 +36,8 @@ type Engine struct {
 	ctx      context.Context
 	ready    atomic.Bool
 	store    ResultStore
+	mu       sync.Mutex
+	inFlight map[string]struct{}
 }
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
@@ -45,6 +48,7 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store Res
 		handlers: handlers,
 		ctx:      ctx,
 		store:    store,
+		inFlight: make(map[string]struct{}),
 	}
 	eng.rehydrateStaleTasks()
 	return eng
@@ -52,6 +56,8 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store Res
 
 // rehydrateStaleTasks re-executes tasks that were left in "running"
 // state by a previous process that exited before completing them.
+// Run count is NOT incremented — rehydration is crash recovery of an
+// incomplete run, not a new run.
 func (e *Engine) rehydrateStaleTasks() {
 	stale, err := e.store.ListStaleTasks()
 	if err != nil {
@@ -69,16 +75,22 @@ func (e *Engine) rehydrateStaleTasks() {
 			_ = e.store.Save(&tr)
 			continue
 		}
-		log.Info("rehydrating stale task", "type", tr.Type, "id", tr.ID)
-		e.runTask(tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt)
+		log.Info("rehydrating stale task", "type", tr.Type, "id", tr.ID, "run", tr.Run)
+		e.mu.Lock()
+		e.inFlight[tr.ID] = struct{}{}
+		e.mu.Unlock()
+		e.runTask(tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
 	}
 }
 
-// Submit starts a task in its own goroutine and returns its ID. When
-// task.ID is set, it becomes the canonical identifier (enabling
-// deterministic IDs from the controller). When empty, a random UUID is
-// generated. If a task with the same ID already exists, the existing ID
-// is returned without re-submitting.
+// Submit starts a task in its own goroutine and returns its ID.
+//
+// The engine follows a cloud-API model for task lifecycle:
+//   - If no task with this ID exists, create and execute it (run 1).
+//   - If the task is running or completed, return its ID (idempotent no-op).
+//   - If the task failed, re-execute it with an incremented run counter.
+//
+// The caller submits a stable key and the engine owns the execution lifecycle.
 func (e *Engine) Submit(task Task) (string, error) {
 	handler, ok := e.handlers[task.Type]
 	if !ok {
@@ -94,17 +106,33 @@ func (e *Engine) Submit(task Task) (string, error) {
 		id = uuid.New().String()
 	}
 
-	// Dedup check against the store.
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	run := 1
 	if existing, _ := e.store.Get(id); existing != nil {
-		return id, nil
+		switch existing.Status {
+		case TaskStatusRunning, TaskStatusCompleted:
+			return id, nil
+		case TaskStatusFailed:
+			// Guard: if a goroutine for this ID is still cleaning up
+			// (between execute returning and store.Save), wait for it.
+			if _, running := e.inFlight[id]; running {
+				return id, nil
+			}
+			run = existing.Run + 1
+			if _, err := e.store.Delete(id); err != nil {
+				return "", fmt.Errorf("clearing failed task: %w", err)
+			}
+		}
 	}
 
 	now := time.Now().UTC()
-
 	tr := &TaskResult{
 		ID:          id,
 		Type:        string(task.Type),
 		Status:      TaskStatusRunning,
+		Run:         run,
 		Params:      task.Params,
 		SubmittedAt: now,
 	}
@@ -113,14 +141,15 @@ func (e *Engine) Submit(task Task) (string, error) {
 		return "", fmt.Errorf("persist task: %w", err)
 	}
 
-	log.Info("task submitted", "type", task.Type, "id", id)
-	e.runTask(id, task.Type, handler, task.Params, now)
+	e.inFlight[id] = struct{}{}
+	log.Info("task submitted", "type", task.Type, "id", id, "run", run)
+	e.runTask(id, task.Type, handler, task.Params, now, run)
 
 	return id, nil
 }
 
 // runTask spawns a goroutine to run the handler and persist the result.
-func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time) {
+func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
 	go func() {
 		err := e.execute(e.ctx, taskType, handler, params)
 
@@ -128,6 +157,7 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 		tr := &TaskResult{
 			ID:          id,
 			Type:        string(taskType),
+			Run:         run,
 			Params:      params,
 			SubmittedAt: submittedAt,
 			CompletedAt: &t,
@@ -142,6 +172,10 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 		if storeErr := e.store.Save(tr); storeErr != nil {
 			log.Error("failed to persist task result", "id", id, "err", storeErr)
 		}
+
+		e.mu.Lock()
+		delete(e.inFlight, id)
+		e.mu.Unlock()
 	}()
 }
 
@@ -160,8 +194,16 @@ func (e *Engine) execute(ctx context.Context, taskType TaskType, handler TaskHan
 }
 
 // Healthz returns true after the engine has been marked ready.
+// Use as a readiness check.
 func (e *Engine) Healthz() bool {
 	return e.ready.Load()
+}
+
+// Livez returns nil when the engine's backing store is responsive.
+// Use as a liveness check — a non-nil error means the process is wedged
+// (e.g., SQLite WAL corruption, PVC read-only).
+func (e *Engine) Livez() error {
+	return e.store.Ping()
 }
 
 // Status returns the engine's current state.

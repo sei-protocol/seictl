@@ -70,11 +70,12 @@ func (s *SQLiteStore) Save(r *TaskResult) error {
 
 	_, err = s.db.Exec(`
 		INSERT OR REPLACE INTO task_results
-			(id, type, status, params, error, submitted_at, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(id, type, status, run, params, error, submitted_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID,
 		r.Type,
 		string(r.Status),
+		r.Run,
 		string(params),
 		r.Error,
 		r.SubmittedAt.UTC().Format(time.RFC3339Nano),
@@ -112,6 +113,11 @@ func (s *SQLiteStore) Delete(id string) (bool, error) {
 	return n > 0, nil
 }
 
+func (s *SQLiteStore) Ping() error {
+	var n int
+	return s.db.QueryRow("SELECT 1").Scan(&n)
+}
+
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
@@ -119,7 +125,7 @@ func (s *SQLiteStore) Close() error {
 // --- query helpers ---
 
 const selectColumns = `
-	SELECT id, type, status, params, error, submitted_at, completed_at
+	SELECT id, type, status, run, params, error, submitted_at, completed_at
 	FROM task_results`
 
 // queryMany executes a query and scans all rows into TaskResults.
@@ -156,7 +162,7 @@ func scanTaskResult(s rowScanner) (*TaskResult, error) {
 	)
 
 	if err := s.Scan(
-		&r.ID, &r.Type, &status, &paramsJSON,
+		&r.ID, &r.Type, &status, &r.Run, &paramsJSON,
 		&r.Error, &submittedAt, &completedAt,
 	); err != nil {
 		return nil, err

@@ -77,6 +77,7 @@ type TaskResult struct {
 	ID          string         `json:"id"`
 	Type        string         `json:"type"`
 	Status      TaskStatus     `json:"status"`
+	Run         int            `json:"run"`
 	Params      map[string]any `json:"params,omitempty"`
 	Error       string         `json:"error,omitempty"`
 	SubmittedAt time.Time      `json:"submittedAt"`

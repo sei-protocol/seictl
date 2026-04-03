@@ -63,6 +63,30 @@ func waitForTaskResult(eng *engine.Engine, id string) *engine.TaskResult {
 	return nil
 }
 
+func TestLivezReturns200WhenStoreHealthy(t *testing.T) {
+	eng := newTestEngine(t, nil)
+	srv := NewServer(":0", eng, t.TempDir())
+	rec := serveHTTP(srv, http.MethodGet, "/v0/livez", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestLivezReturns200BeforeReady(t *testing.T) {
+	// Livez should pass even before mark-ready (healthz would return 503).
+	eng := newTestEngine(t, nil)
+	srv := NewServer(":0", eng, t.TempDir())
+
+	if eng.Healthz() {
+		t.Fatal("expected healthz=false before mark-ready")
+	}
+	rec := serveHTTP(srv, http.MethodGet, "/v0/livez", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected livez=200 even before mark-ready, got %d", rec.Code)
+	}
+}
+
 func TestHealthzReturns503BeforeReady(t *testing.T) {
 	eng := newTestEngine(t, nil)
 	srv := NewServer(":0", eng, t.TempDir())
