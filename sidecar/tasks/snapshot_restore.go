@@ -100,16 +100,25 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 
 	var snapshotKey string
 	if targetHeight > 0 {
-		lister, err := r.listerFactory(ctx, r.region)
-		if err != nil {
-			return fmt.Errorf("building S3 lister: %w", err)
+		lister, listerErr := r.listerFactory(ctx, r.region)
+		if listerErr != nil {
+			return fmt.Errorf("building S3 lister: %w", listerErr)
 		}
-		snapshotKey, err = resolveKeyForHeight(ctx, lister, r.bucket, prefix, targetHeight)
+		var resolveErr error
+		snapshotKey, resolveErr = resolveKeyForHeight(ctx, lister, r.bucket, prefix, targetHeight)
+		if resolveErr != nil {
+			return resolveErr
+		}
 	} else {
-		snapshotKey, err = resolveLatestKey(ctx, client, r.bucket, prefix)
+		var resolveErr error
+		snapshotKey, resolveErr = resolveLatestKey(ctx, client, r.bucket, prefix)
+		if resolveErr != nil {
+			return resolveErr
+		}
 	}
-	if err != nil {
-		return err
+
+	if snapshotKey == "" {
+		return fmt.Errorf("snapshot-restore: resolved snapshot key is empty for %s in s3://%s/%s", r.chainID, r.bucket, prefix)
 	}
 
 	tmpDir := filepath.Join(r.homeDir, "tmp")
