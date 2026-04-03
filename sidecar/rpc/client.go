@@ -23,8 +23,9 @@ type rpcError struct {
 	Data    string `json:"data"`
 }
 
-// envelope is the JSON-RPC response wrapper returned by all CometBFT
-// HTTP RPC endpoints (e.g. /status, /block, /block_results).
+// envelope is the JSON-RPC response wrapper returned by standard CometBFT
+// HTTP RPC endpoints. Note: seid's CometBFT fork returns flat JSON without
+// this wrapper — Client.Get handles both formats.
 type envelope struct {
 	Result json.RawMessage `json:"result"`
 	Error  *rpcError       `json:"error,omitempty"`
@@ -61,8 +62,15 @@ func (c *Client) SetTimeout(d time.Duration) { c.timeout = d }
 // Endpoint returns the configured RPC base URL.
 func (c *Client) Endpoint() string { return c.endpoint }
 
-// Get performs an HTTP GET to endpoint+path, unwraps the JSON-RPC
-// envelope, and returns the inner "result" as raw JSON.
+// Get performs an HTTP GET to endpoint+path and returns the inner result
+// as raw JSON. It handles both response formats:
+//   - JSON-RPC envelope (standard CometBFT): {"jsonrpc":"2.0","result":{...}}
+//     → returns the unwrapped "result" value
+//   - Flat JSON (seid): {"node_info":{...},"sync_info":{...}}
+//     → returns the body as-is
+//
+// This dual-format support is necessary because seid's CometBFT fork
+// returns flat responses while standard CometBFT uses JSON-RPC envelopes.
 func (c *Client) Get(ctx context.Context, path string) (json.RawMessage, error) {
 	body, err := c.doGet(ctx, path)
 	if err != nil {
@@ -71,17 +79,20 @@ func (c *Client) Get(ctx context.Context, path string) (json.RawMessage, error) 
 
 	var env envelope
 	if err := json.Unmarshal(body, &env); err != nil {
-		return nil, fmt.Errorf("decoding JSON-RPC envelope from %s: %w", path, err)
+		return nil, fmt.Errorf("decoding JSON response from %s: %w", path, err)
 	}
 	if env.Error != nil {
 		return nil, fmt.Errorf("JSON-RPC error from %s: %s (code %d, data: %s)",
 			path, env.Error.Message, env.Error.Code, env.Error.Data)
 	}
-	if len(env.Result) == 0 {
-		return nil, fmt.Errorf("empty result in JSON-RPC response from %s", path)
-	}
 
-	return env.Result, nil
+	// If the response had a "result" key, return the unwrapped inner value
+	// (standard CometBFT JSON-RPC envelope). Otherwise the response is
+	// flat JSON (seid format) — return the entire body.
+	if len(env.Result) > 0 {
+		return env.Result, nil
+	}
+	return json.RawMessage(body), nil
 }
 
 // GetRaw performs an HTTP GET and returns the entire response body

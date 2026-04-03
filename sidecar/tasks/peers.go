@@ -125,11 +125,15 @@ func (s *EC2TagsSource) Discover(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("ec2 DescribeInstances: %w", err)
 	}
 
+	var instanceCount int
 	var peers []string
 	for _, reservation := range output.Reservations {
 		for _, instance := range reservation.Instances {
+			instanceCount++
 			peer, err := buildPeerAddress(ctx, querier, instance)
 			if err != nil {
+				peerLog.Info("skipping unreachable EC2 instance",
+					"ip", instanceIP(instance), "error", err)
 				continue
 			}
 			peers = append(peers, peer)
@@ -137,7 +141,8 @@ func (s *EC2TagsSource) Discover(ctx context.Context) ([]string, error) {
 	}
 
 	if len(peers) == 0 {
-		return nil, fmt.Errorf("no reachable peers found via ec2Tags in region %s", s.Region)
+		return nil, fmt.Errorf("no reachable peers found via ec2Tags in region %s (%d instances returned, 0 reachable)",
+			s.Region, instanceCount)
 	}
 
 	return peers, nil
