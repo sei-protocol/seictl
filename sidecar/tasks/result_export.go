@@ -24,9 +24,8 @@ import (
 var exportLog = seilog.NewLogger("seictl", "task", "result-export")
 
 const (
-	exportStateFile  = ".sei-sidecar-last-export.json"
-	defaultPageSize  = 1000
-	exportRPCTimeout = 10 * time.Second
+	exportStateFile = ".sei-sidecar-last-export.json"
+	defaultPageSize = 1000
 )
 
 var defaultRPCEndpoint = fmt.Sprintf("http://localhost:%d", seiconfig.PortRPC)
@@ -105,6 +104,7 @@ func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportRequest) er
 		return fmt.Errorf("building S3 uploader: %w", err)
 	}
 
+	rpcClient := rpc.NewClient(cfg.RPCEndpoint, nil)
 	prefix := normalizePrefix(cfg.Prefix)
 
 	availableBlocks := latestHeight - startHeight + 1
@@ -126,7 +126,7 @@ func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportRequest) er
 			"end", pageEnd,
 			"bucket", cfg.Bucket)
 
-		if err := e.exportPage(ctx, cfg.RPCEndpoint, uploader, cfg.Bucket, cfg.Region, prefix, pageStart, pageEnd); err != nil {
+		if err := e.exportPage(ctx, rpcClient, uploader, cfg.Bucket, cfg.Region, prefix, pageStart, pageEnd); err != nil {
 			return fmt.Errorf("exporting page %d-%d: %w", pageStart, pageEnd, err)
 		}
 
@@ -150,7 +150,7 @@ func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportRequest) er
 // NDJSON file to S3.
 func (e *ResultExporter) exportPage(
 	ctx context.Context,
-	rpcEndpoint string,
+	client *rpc.Client,
 	uploader seis3.Uploader,
 	bucket, region, prefix string,
 	start, end int64,
@@ -161,7 +161,7 @@ func (e *ResultExporter) exportPage(
 
 	collectErr := make(chan error, 1)
 	go func() {
-		collectErr <- e.collectResults(ctx, rpcEndpoint, pw, start, end)
+		collectErr <- e.collectResults(ctx, client, pw, start, end)
 	}()
 
 	_, uploadErr := uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
@@ -185,7 +185,7 @@ func (e *ResultExporter) exportPage(
 // collectResults queries block_results for each height and writes gzipped
 // NDJSON to wc. Each line is a JSON object with height, time, and the raw
 // block_results response.
-func (e *ResultExporter) collectResults(ctx context.Context, rpcEndpoint string, wc io.WriteCloser, start, end int64) (retErr error) {
+func (e *ResultExporter) collectResults(ctx context.Context, client *rpc.Client, wc io.WriteCloser, start, end int64) (retErr error) {
 	defer func() {
 		if retErr != nil {
 			wc.(*io.PipeWriter).CloseWithError(retErr)
@@ -206,7 +206,7 @@ func (e *ResultExporter) collectResults(ctx context.Context, rpcEndpoint string,
 			return err
 		}
 
-		result, err := queryBlockResults(ctx, rpcEndpoint, h)
+		result, err := queryBlockResults(ctx, client, h)
 		if err != nil {
 			return fmt.Errorf("querying block_results at height %d: %w", h, err)
 		}
@@ -232,20 +232,10 @@ func (e *ResultExporter) collectResults(ctx context.Context, rpcEndpoint string,
 }
 
 func queryLatestHeight(ctx context.Context, rpcEndpoint string) (int64, error) {
-	c := rpc.NewClient(rpcEndpoint, nil)
-	raw, err := c.Get(ctx, "/status")
+	c := rpc.NewStatusClient(rpcEndpoint, nil)
+	h, err := c.LatestHeight(ctx)
 	if err != nil {
 		return 0, err
-	}
-
-	var result rpc.StatusResult
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return 0, fmt.Errorf("decoding /status response: %w", err)
-	}
-
-	h, err := strconv.ParseInt(result.SyncInfo.LatestBlockHeight, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parsing latest_block_height %q: %w", result.SyncInfo.LatestBlockHeight, err)
 	}
 	if h <= 0 {
 		return 0, fmt.Errorf("latest_block_height is %d, node may still be syncing", h)
@@ -253,9 +243,8 @@ func queryLatestHeight(ctx context.Context, rpcEndpoint string) (int64, error) {
 	return h, nil
 }
 
-func queryBlockResults(ctx context.Context, rpcEndpoint string, height int64) (json.RawMessage, error) {
-	c := rpc.NewClient(rpcEndpoint, nil)
-	body, err := c.GetRaw(ctx, fmt.Sprintf("/block_results?height=%d", height))
+func queryBlockResults(ctx context.Context, client *rpc.Client, height int64) (json.RawMessage, error) {
+	body, err := client.GetRaw(ctx, fmt.Sprintf("/block_results?height=%d", height))
 	if err != nil {
 		return nil, err
 	}

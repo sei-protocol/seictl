@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -12,16 +13,16 @@ var log = seilog.NewLogger("seictl", "shadow")
 // Comparator performs block-by-block comparison between a shadow node and
 // a canonical chain node via their RPC endpoints.
 type Comparator struct {
-	shadowRPC    string
-	canonicalRPC string
+	shadowClient    *rpc.Client
+	canonicalClient *rpc.Client
 }
 
 // NewComparator creates a Comparator that queries shadowRPC for the local
 // shadow node and canonicalRPC for the reference chain.
 func NewComparator(shadowRPC, canonicalRPC string) *Comparator {
 	return &Comparator{
-		shadowRPC:    shadowRPC,
-		canonicalRPC: canonicalRPC,
+		shadowClient:    rpc.NewClient(shadowRPC, nil),
+		canonicalClient: rpc.NewClient(canonicalRPC, nil),
 	}
 }
 

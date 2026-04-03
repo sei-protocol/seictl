@@ -14,6 +14,7 @@ require (
 	github.com/leanovate/gopter v0.2.11
 	github.com/oapi-codegen/runtime v1.2.0
 	github.com/pelletier/go-toml/v2 v2.2.4
+	github.com/prometheus/client_golang v1.23.2
 	github.com/sei-protocol/sei-chain v0.0.29-fix.0.20260326202429-c9b42951fef7
 	github.com/sei-protocol/sei-config v0.0.9
 	github.com/sei-protocol/seilog v0.0.3
@@ -150,7 +151,6 @@ require (
 	github.com/petermattis/goid v0.0.0-20260113132338-7c7de50cc741 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
