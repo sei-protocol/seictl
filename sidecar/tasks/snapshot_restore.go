@@ -141,7 +141,7 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 	})
 	_ = tmpFile.Close()
 	if err != nil {
-		return fmt.Errorf("s3 DownloadObject %s: %w", snapshotKey, err)
+		return seis3.ClassifyS3Error("snapshot-restore", r.bucket, snapshotKey, r.region, err)
 	}
 
 	if h := parseHeightFromKey(snapshotKey); h > 0 {

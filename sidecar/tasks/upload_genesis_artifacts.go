@@ -116,7 +116,7 @@ func (u *GenesisArtifactUploader) uploadGentx(ctx context.Context, uploader seis
 		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
-		return fmt.Errorf("upload-genesis-artifacts: uploading gentx: %w", err)
+		return seis3.ClassifyS3Error("upload-genesis-artifacts", bucket, key, u.region, err)
 	}
 	return nil
 }
@@ -148,7 +148,7 @@ func (u *GenesisArtifactUploader) uploadIdentity(ctx context.Context, uploader s
 		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
-		return fmt.Errorf("upload-genesis-artifacts: uploading identity: %w", err)
+		return seis3.ClassifyS3Error("upload-genesis-artifacts", bucket, key, u.region, err)
 	}
 	return nil
 }

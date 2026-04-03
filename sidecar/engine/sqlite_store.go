@@ -68,15 +68,25 @@ func (s *SQLiteStore) Save(r *TaskResult) error {
 		return fmt.Errorf("marshal params: %w", err)
 	}
 
+	var errorDetail any
+	if r.ErrorDetail != nil {
+		ed, err := json.Marshal(r.ErrorDetail)
+		if err != nil {
+			return fmt.Errorf("marshal error_detail: %w", err)
+		}
+		errorDetail = string(ed)
+	}
+
 	_, err = s.db.Exec(`
 		INSERT OR REPLACE INTO task_results
-			(id, type, status, params, error, submitted_at, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(id, type, status, params, error, error_detail, submitted_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID,
 		r.Type,
 		string(r.Status),
 		string(params),
 		r.Error,
+		errorDetail,
 		r.SubmittedAt.UTC().Format(time.RFC3339Nano),
 		formatNullableTime(r.CompletedAt),
 	)
@@ -119,7 +129,7 @@ func (s *SQLiteStore) Close() error {
 // --- query helpers ---
 
 const selectColumns = `
-	SELECT id, type, status, params, error, submitted_at, completed_at
+	SELECT id, type, status, params, error, error_detail, submitted_at, completed_at
 	FROM task_results`
 
 // queryMany executes a query and scans all rows into TaskResults.
@@ -148,16 +158,17 @@ type rowScanner interface {
 
 func scanTaskResult(s rowScanner) (*TaskResult, error) {
 	var (
-		r           TaskResult
-		status      string
-		paramsJSON  string
-		submittedAt string
-		completedAt sql.NullString
+		r              TaskResult
+		status         string
+		paramsJSON     string
+		errorDetailJSON sql.NullString
+		submittedAt    string
+		completedAt    sql.NullString
 	)
 
 	if err := s.Scan(
 		&r.ID, &r.Type, &status, &paramsJSON,
-		&r.Error, &submittedAt, &completedAt,
+		&r.Error, &errorDetailJSON, &submittedAt, &completedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -168,6 +179,14 @@ func scanTaskResult(s rowScanner) (*TaskResult, error) {
 		if err := json.Unmarshal([]byte(paramsJSON), &r.Params); err != nil {
 			return nil, fmt.Errorf("unmarshal params: %w", err)
 		}
+	}
+
+	if errorDetailJSON.Valid && errorDetailJSON.String != "" {
+		var te TaskError
+		if err := json.Unmarshal([]byte(errorDetailJSON.String), &te); err != nil {
+			return nil, fmt.Errorf("unmarshal error_detail: %w", err)
+		}
+		r.ErrorDetail = &te
 	}
 
 	t, err := time.Parse(time.RFC3339Nano, submittedAt)

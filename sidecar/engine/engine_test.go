@@ -535,3 +535,96 @@ func TestLongRunningTaskDoesNotBlockOthers(t *testing.T) {
 	}
 	waitForResult(t, eng, id)
 }
+
+func TestTaskErrorFlowsToErrorDetail(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			return &TaskError{
+				Task:      "config-patch",
+				Operation: "S3",
+				Message:   "bucket not found",
+				Hint:      "check SEI_SNAPSHOT_BUCKET",
+				Retryable: false,
+				Cause:     "NoSuchBucket",
+			}
+		},
+	})
+
+	id, err := eng.Submit(Task{Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	r := waitForResult(t, eng, id)
+	if r.Status != TaskStatusFailed {
+		t.Fatalf("expected Failed, got %s", r.Status)
+	}
+	if r.ErrorDetail == nil {
+		t.Fatal("expected ErrorDetail to be set")
+	}
+	if r.ErrorDetail.Task != "config-patch" {
+		t.Errorf("ErrorDetail.Task = %q, want config-patch", r.ErrorDetail.Task)
+	}
+	if r.ErrorDetail.Message != "bucket not found" {
+		t.Errorf("ErrorDetail.Message = %q", r.ErrorDetail.Message)
+	}
+	if r.ErrorDetail.Hint != "check SEI_SNAPSHOT_BUCKET" {
+		t.Errorf("ErrorDetail.Hint = %q", r.ErrorDetail.Hint)
+	}
+	if r.ErrorDetail.Retryable {
+		t.Error("expected Retryable=false")
+	}
+}
+
+func TestPlainErrorHasNoErrorDetail(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			return errors.New("plain error")
+		},
+	})
+
+	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
+	r := waitForResult(t, eng, id)
+
+	if r.Status != TaskStatusFailed {
+		t.Fatalf("expected Failed, got %s", r.Status)
+	}
+	if r.Error != "plain error" {
+		t.Errorf("Error = %q, want 'plain error'", r.Error)
+	}
+	if r.ErrorDetail != nil {
+		t.Error("expected ErrorDetail to be nil for plain errors")
+	}
+}
+
+func TestTaskErrorPersistedToStore(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			return &TaskError{
+				Task:      "config-patch",
+				Operation: "S3",
+				Message:   "access denied",
+				Hint:      "check IAM",
+				Retryable: false,
+			}
+		},
+	})
+
+	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
+	waitForResult(t, eng, id)
+
+	// Re-read from store to verify persistence round-trip
+	r, err := eng.store.Get(id)
+	if err != nil {
+		t.Fatalf("store.Get: %v", err)
+	}
+	if r.ErrorDetail == nil {
+		t.Fatal("expected ErrorDetail persisted in store")
+	}
+	if r.ErrorDetail.Message != "access denied" {
+		t.Errorf("persisted ErrorDetail.Message = %q", r.ErrorDetail.Message)
+	}
+	if r.ErrorDetail.Hint != "check IAM" {
+		t.Errorf("persisted ErrorDetail.Hint = %q", r.ErrorDetail.Hint)
+	}
+}

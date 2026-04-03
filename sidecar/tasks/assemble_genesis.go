@@ -160,7 +160,7 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleG
 			Key:    aws.String(key),
 		})
 		if err != nil {
-			return fmt.Errorf("assemble-genesis: downloading %s: %w", key, err)
+			return seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
 		}
 
 		data, err := io.ReadAll(output.Body)
@@ -365,7 +365,7 @@ func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg AssembleGenesi
 		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
-		return fmt.Errorf("assemble-genesis: uploading genesis.json: %w", err)
+		return seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
 	}
 	return nil
 }
@@ -389,7 +389,7 @@ func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg AssembleGenesisR
 			Key:    aws.String(key),
 		})
 		if err != nil {
-			return fmt.Errorf("assemble-genesis: downloading identity for %s: %w", nodeName, err)
+			return seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
 		}
 		data, err := io.ReadAll(output.Body)
 		_ = output.Body.Close()
@@ -438,7 +438,7 @@ func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg AssembleGenesisR
 		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
-		return fmt.Errorf("assemble-genesis: uploading peers.json: %w", err)
+		return seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, peersKey, a.region, err)
 	}
 	return nil
 }

@@ -171,7 +171,7 @@ func (a *GenesisForkAssembler) downloadExportedState(ctx context.Context, source
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return fmt.Errorf("assemble-genesis-fork: downloading exported state: %w", err)
+		return seis3.ClassifyS3Error("assemble-genesis-fork", a.bucket, key, a.region, err)
 	}
 	defer func() { _ = output.Body.Close() }()
 
@@ -321,7 +321,7 @@ func (a *GenesisForkAssembler) downloadGentxFiles(ctx context.Context, chainID s
 			Key:    aws.String(key),
 		})
 		if err != nil {
-			return fmt.Errorf("assemble-genesis-fork: downloading gentx for %s: %w", name, err)
+			return seis3.ClassifyS3Error("assemble-genesis-fork", a.bucket, key, a.region, err)
 		}
 		data, err := io.ReadAll(output.Body)
 		_ = output.Body.Close()
@@ -497,7 +497,7 @@ func (a *GenesisForkAssembler) uploadGenesis(ctx context.Context, chainID string
 		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
-		return fmt.Errorf("assemble-genesis-fork: uploading genesis: %w", err)
+		return seis3.ClassifyS3Error("assemble-genesis-fork", a.bucket, key, a.region, err)
 	}
 	forkLog.Info("genesis uploaded", "key", key)
 	return nil
@@ -517,7 +517,7 @@ func (a *GenesisForkAssembler) uploadPeers(ctx context.Context, chainID, namespa
 			Key:    aws.String(key),
 		})
 		if err != nil {
-			return fmt.Errorf("assemble-genesis-fork: downloading identity for %s: %w", name, err)
+			return seis3.ClassifyS3Error("assemble-genesis-fork", a.bucket, key, a.region, err)
 		}
 		data, err := io.ReadAll(output.Body)
 		_ = output.Body.Close()
@@ -564,7 +564,7 @@ func (a *GenesisForkAssembler) uploadPeers(ctx context.Context, chainID, namespa
 		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
-		return fmt.Errorf("assemble-genesis-fork: uploading peers: %w", err)
+		return seis3.ClassifyS3Error("assemble-genesis-fork", a.bucket, key, a.region, err)
 	}
 	forkLog.Info("peers uploaded", "count", len(peers))
 	return nil

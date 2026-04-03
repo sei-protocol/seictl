@@ -127,7 +127,7 @@ func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportRequest) er
 			"end", pageEnd,
 			"bucket", cfg.Bucket)
 
-		if err := e.exportPage(ctx, cfg.RPCEndpoint, uploader, cfg.Bucket, prefix, pageStart, pageEnd); err != nil {
+		if err := e.exportPage(ctx, cfg.RPCEndpoint, uploader, cfg.Bucket, cfg.Region, prefix, pageStart, pageEnd); err != nil {
 			return fmt.Errorf("exporting page %d-%d: %w", pageStart, pageEnd, err)
 		}
 
@@ -153,7 +153,7 @@ func (e *ResultExporter) exportPage(
 	ctx context.Context,
 	rpcEndpoint string,
 	uploader seis3.Uploader,
-	bucket, prefix string,
+	bucket, region, prefix string,
 	start, end int64,
 ) error {
 	key := fmt.Sprintf("%s%d-%d.ndjson.gz", prefix, start, end)
@@ -178,7 +178,7 @@ func (e *ResultExporter) exportPage(
 
 	cErr := <-collectErr
 	if uploadErr != nil {
-		return uploadErr
+		return seis3.ClassifyS3Error("result-export", bucket, key, region, uploadErr)
 	}
 	return cErr
 }
