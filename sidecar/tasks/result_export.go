@@ -1,13 +1,11 @@
 package tasks
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	seiconfig "github.com/sei-protocol/sei-config"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 	"github.com/sei-protocol/seilog"
 )
@@ -233,38 +232,20 @@ func (e *ResultExporter) collectResults(ctx context.Context, rpcEndpoint string,
 }
 
 func queryLatestHeight(ctx context.Context, rpcEndpoint string) (int64, error) {
-	url := rpcEndpoint + "/status"
-	ctx, cancel := context.WithTimeout(ctx, exportRPCTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	c := rpc.NewClient(rpcEndpoint, nil)
+	raw, err := c.Get(ctx, "/status")
 	if err != nil {
 		return 0, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(body))
-	}
-
-	var rpcResp struct {
-		SyncInfo struct {
-			LatestBlockHeight string `json:"latest_block_height"`
-		} `json:"sync_info"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+	var result rpc.StatusResult
+	if err := json.Unmarshal(raw, &result); err != nil {
 		return 0, fmt.Errorf("decoding /status response: %w", err)
 	}
 
-	h, err := strconv.ParseInt(rpcResp.SyncInfo.LatestBlockHeight, 10, 64)
+	h, err := strconv.ParseInt(result.SyncInfo.LatestBlockHeight, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("parsing latest_block_height %q: %w", rpcResp.SyncInfo.LatestBlockHeight, err)
+		return 0, fmt.Errorf("parsing latest_block_height %q: %w", result.SyncInfo.LatestBlockHeight, err)
 	}
 	if h <= 0 {
 		return 0, fmt.Errorf("latest_block_height is %d, node may still be syncing", h)
@@ -273,31 +254,11 @@ func queryLatestHeight(ctx context.Context, rpcEndpoint string) (int64, error) {
 }
 
 func queryBlockResults(ctx context.Context, rpcEndpoint string, height int64) (json.RawMessage, error) {
-	url := fmt.Sprintf("%s/block_results?height=%d", rpcEndpoint, height)
-	ctx, cancel := context.WithTimeout(ctx, exportRPCTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	c := rpc.NewClient(rpcEndpoint, nil)
+	body, err := c.GetRaw(ctx, fmt.Sprintf("/block_results?height=%d", height))
 	if err != nil {
 		return nil, err
 	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-
 	return json.RawMessage(body), nil
 }
 

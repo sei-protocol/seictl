@@ -4,16 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/sei-protocol/seictl/internal/patch"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -22,7 +21,6 @@ var ssLog = seilog.NewLogger("seictl", "task", "state-sync")
 const (
 	stateSyncMarkerFile = ".sei-sidecar-statesync-done"
 	trustHeightOffset   = 2000
-	rpcTimeout          = 10 * time.Second
 )
 
 // StateSyncConfig holds the trust point and RPC servers for Tendermint state sync.
@@ -35,21 +33,16 @@ type StateSyncConfig struct {
 	BackfillBlocks   int64
 }
 
-// HTTPDoer abstracts HTTP requests for testability.
-type HTTPDoer interface {
-	Do(req *http.Request) (*http.Response, error)
-}
-
 // StateSyncConfigurer discovers a trust point from peers and writes the config file.
 type StateSyncConfigurer struct {
 	homeDir    string
-	httpClient HTTPDoer
+	httpClient rpc.HTTPDoer
 }
 
 // NewStateSyncConfigurer creates a configurer targeting the given home directory.
-func NewStateSyncConfigurer(homeDir string, client HTTPDoer) *StateSyncConfigurer {
+func NewStateSyncConfigurer(homeDir string, client rpc.HTTPDoer) *StateSyncConfigurer {
 	if client == nil {
-		client = &http.Client{Timeout: rpcTimeout}
+		client = &http.Client{}
 	}
 	return &StateSyncConfigurer{homeDir: homeDir, httpClient: client}
 }
@@ -199,34 +192,38 @@ func extractRPCHosts(peers []string, maxHosts int) []string {
 	return hosts
 }
 
+// rpcClientForHost builds an rpc.Client targeting a peer's RPC endpoint.
+func (s *StateSyncConfigurer) rpcClientForHost(host string) *rpc.Client {
+	return rpc.NewClient(fmt.Sprintf("http://%s:26657", host), s.httpClient)
+}
+
 func (s *StateSyncConfigurer) queryLatestHeight(ctx context.Context, host string) (int64, error) {
-	url := fmt.Sprintf("http://%s:26657/status", host)
-	body, err := s.doGet(ctx, url)
+	raw, err := s.rpcClientForHost(host).Get(ctx, "/status")
 	if err != nil {
 		return 0, err
 	}
 
-	var status tendermintStatusResponse
-	if err := json.Unmarshal(body, &status); err != nil {
+	var status rpc.StatusResult
+	if err := json.Unmarshal(raw, &status); err != nil {
 		return 0, fmt.Errorf("parsing status response: %w", err)
 	}
 
-	var height int64
-	if _, err := fmt.Sscanf(status.SyncInfo.LatestBlockHeight, "%d", &height); err != nil {
+	height, err := strconv.ParseInt(status.SyncInfo.LatestBlockHeight, 10, 64)
+	if err != nil {
 		return 0, fmt.Errorf("parsing height %q: %w", status.SyncInfo.LatestBlockHeight, err)
 	}
 	return height, nil
 }
 
 func (s *StateSyncConfigurer) queryBlockHash(ctx context.Context, host string, height int64) (string, error) {
-	url := fmt.Sprintf("http://%s:26657/block?height=%d", host, height)
-	body, err := s.doGet(ctx, url)
+	path := fmt.Sprintf("/block?height=%d", height)
+	raw, err := s.rpcClientForHost(host).Get(ctx, path)
 	if err != nil {
 		return "", err
 	}
 
-	var block tendermintBlockResponse
-	if err := json.Unmarshal(body, &block); err != nil {
+	var block rpc.BlockResult
+	if err := json.Unmarshal(raw, &block); err != nil {
 		return "", fmt.Errorf("parsing block response: %w", err)
 	}
 	hash := block.BlockID.Hash
@@ -238,26 +235,6 @@ func (s *StateSyncConfigurer) queryBlockHash(ctx context.Context, host string, h
 		return "", fmt.Errorf("unexpected block hash length at height %d: got %d, want %d", height, len(hash), sha256HexLen)
 	}
 	return hash, nil
-}
-
-func (s *StateSyncConfigurer) doGet(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("building request for %s: %w", url, err)
-	}
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", url, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response from %s: %w", url, err)
-	}
-
-	return body, nil
 }
 
 func writeStateSyncToConfig(homeDir string, cfg StateSyncConfig) error {

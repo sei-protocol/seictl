@@ -2,14 +2,20 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
+// wrapResult wraps a JSON payload in the CometBFT JSON-RPC envelope.
+func wrapResult(inner string) string {
+	return fmt.Sprintf(`{"jsonrpc":"2.0","id":-1,"result":%s}`, inner)
+}
+
 func TestStatusClient_LatestHeight(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"sync_info":{"latest_block_height":"12345","catching_up":false}}`))
+		_, _ = w.Write([]byte(wrapResult(`{"sync_info":{"latest_block_height":"12345","catching_up":false}}`)))
 	}))
 	defer srv.Close()
 
@@ -25,7 +31,7 @@ func TestStatusClient_LatestHeight(t *testing.T) {
 
 func TestStatusClient_CatchingUp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"sync_info":{"latest_block_height":"100","catching_up":true}}`))
+		_, _ = w.Write([]byte(wrapResult(`{"sync_info":{"latest_block_height":"100","catching_up":true}}`)))
 	}))
 	defer srv.Close()
 
@@ -79,8 +85,8 @@ func TestStatusClient_InvalidBlockHeight(t *testing.T) {
 		name    string
 		payload string
 	}{
-		{"empty height", `{"sync_info":{"latest_block_height":"","catching_up":false}}`},
-		{"non-numeric height", `{"sync_info":{"latest_block_height":"abc","catching_up":false}}`},
+		{"empty height", wrapResult(`{"sync_info":{"latest_block_height":"","catching_up":false}}`)},
+		{"non-numeric height", wrapResult(`{"sync_info":{"latest_block_height":"abc","catching_up":false}}`)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -102,5 +108,18 @@ func TestStatusClient_DefaultEndpoint(t *testing.T) {
 	c := NewStatusClient("", nil)
 	if c.Endpoint() != DefaultEndpoint {
 		t.Errorf("endpoint = %q, want %q", c.Endpoint(), DefaultEndpoint)
+	}
+}
+
+func TestStatusClient_EmptyResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":-1}`))
+	}))
+	defer srv.Close()
+
+	c := NewStatusClient(srv.URL, nil)
+	_, err := c.LatestHeight(context.Background())
+	if err == nil {
+		t.Fatal("expected error for empty result")
 	}
 }

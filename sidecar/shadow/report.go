@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 )
 
 // BuildDivergenceReport captures a complete investigation artifact at the
@@ -47,11 +49,9 @@ func captureChainSnapshot(ctx context.Context, rpcEndpoint string, height int64)
 }
 
 func fetchRawBlock(ctx context.Context, rpcEndpoint string, height int64) ([]byte, error) {
-	url := fmt.Sprintf("%s/block?height=%d", rpcEndpoint, height)
-	return rpcGet(ctx, url)
+	return rpc.NewClient(rpcEndpoint, nil).GetRaw(ctx, fmt.Sprintf("/block?height=%d", height))
 }
 
 func fetchRawBlockResults(ctx context.Context, rpcEndpoint string, height int64) ([]byte, error) {
-	url := fmt.Sprintf("%s/block_results?height=%d", rpcEndpoint, height)
-	return rpcGet(ctx, url)
+	return rpc.NewClient(rpcEndpoint, nil).GetRaw(ctx, fmt.Sprintf("/block_results?height=%d", height))
 }

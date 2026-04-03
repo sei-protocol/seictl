@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 )
 
 // compareLayer1 fetches block_results from both chains and compares
@@ -19,8 +21,8 @@ func (c *Comparator) compareLayer1(ctx context.Context, height int64) (*Layer1Re
 		return nil, fmt.Errorf("querying canonical block_results at height %d: %w", height, err)
 	}
 
-	sTxs := shadowResults.txResults()
-	cTxs := canonicalResults.txResults()
+	sTxs := shadowResults.TxsResults
+	cTxs := canonicalResults.TxsResults
 
 	result := &Layer1Result{
 		TotalTxs:     max(len(sTxs), len(cTxs)),
@@ -67,7 +69,7 @@ func (c *Comparator) compareLayer1(ctx context.Context, height int64) (*Layer1Re
 
 // compareTxReceipts compares critical fields from two transaction results.
 // Returns nil when the receipts match.
-func compareTxReceipts(idx int, shadow, canonical txResult) *TxDivergence {
+func compareTxReceipts(idx int, shadow, canonical rpc.TxResult) *TxDivergence {
 	var fields []FieldDivergence
 
 	if shadow.Code != canonical.Code {
@@ -102,37 +104,17 @@ func compareTxReceipts(idx int, shadow, canonical txResult) *TxDivergence {
 	return &TxDivergence{TxIndex: idx, Fields: fields}
 }
 
-// blockResultsResponse is the subset of the Tendermint /block_results
-// RPC response needed for transaction receipt comparison.
-type blockResultsResponse struct {
-	Result struct {
-		TxsResults []txResult `json:"txs_results"`
-	} `json:"result"`
-}
-
-type txResult struct {
-	Code      int             `json:"code"`
-	Log       string          `json:"log"`
-	GasUsed   string          `json:"gas_used"`
-	GasWanted string          `json:"gas_wanted"`
-	Events    json.RawMessage `json:"events"`
-}
-
-func (b *blockResultsResponse) txResults() []txResult {
-	return b.Result.TxsResults
-}
-
 // queryBlockResults fetches /block_results at the given height.
-func queryBlockResults(ctx context.Context, rpcEndpoint string, height int64) (*blockResultsResponse, error) {
-	url := fmt.Sprintf("%s/block_results?height=%d", rpcEndpoint, height)
-	body, err := rpcGet(ctx, url)
+func queryBlockResults(ctx context.Context, rpcEndpoint string, height int64) (*rpc.BlockResultsResult, error) {
+	c := rpc.NewClient(rpcEndpoint, nil)
+	raw, err := c.Get(ctx, fmt.Sprintf("/block_results?height=%d", height))
 	if err != nil {
 		return nil, err
 	}
 
-	var resp blockResultsResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	var result rpc.BlockResultsResult
+	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, fmt.Errorf("decoding /block_results response: %w", err)
 	}
-	return &resp, nil
+	return &result, nil
 }
