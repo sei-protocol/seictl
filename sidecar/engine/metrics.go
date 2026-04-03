@@ -5,11 +5,12 @@ import (
 )
 
 var (
-	// taskDuration records the execution duration of each task in seconds.
+	// taskDuration records the wall-clock execution time of the task handler
+	// (measured inside the goroutine, not submission latency).
 	taskDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "seictl_task_duration_seconds",
-			Help:    "Duration of task execution in seconds.",
+			Name:    "seictl_task_execution_duration_seconds",
+			Help:    "Wall-clock execution time of task handlers in seconds (measured inside the goroutine, not submission latency).",
 			Buckets: prometheus.DefBuckets,
 		},
 		[]string{"type", "status"},
