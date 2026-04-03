@@ -68,27 +68,5 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
-	if version < 3 {
-		tx, err := db.Begin()
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-
-		if _, err := tx.Exec(`
-			ALTER TABLE task_results ADD COLUMN error_detail TEXT;
-		`); err != nil {
-			return err
-		}
-
-		if _, err := tx.Exec("PRAGMA user_version = 3"); err != nil {
-			return err
-		}
-
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }

@@ -79,7 +79,6 @@ type TaskResult struct {
 	Status      TaskStatus     `json:"status"`
 	Params      map[string]any `json:"params,omitempty"`
 	Error       string         `json:"error,omitempty"`
-	ErrorDetail *TaskError     `json:"errorDetail,omitempty"`
 	SubmittedAt time.Time      `json:"submittedAt"`
 	CompletedAt *time.Time     `json:"completedAt,omitempty"`
 }

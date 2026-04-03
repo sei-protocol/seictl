@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -136,10 +135,6 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 		if err != nil {
 			tr.Error = err.Error()
 			tr.Status = TaskStatusFailed
-			var taskErr *TaskError
-			if errors.As(err, &taskErr) {
-				tr.ErrorDetail = taskErr
-			}
 		} else {
 			tr.Status = TaskStatusCompleted
 		}
