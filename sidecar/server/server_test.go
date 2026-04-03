@@ -63,6 +63,49 @@ func waitForTaskResult(eng *engine.Engine, id string) *engine.TaskResult {
 	return nil
 }
 
+func TestLivezReturns200WhenStoreHealthy(t *testing.T) {
+	eng := newTestEngine(t, nil)
+	srv := NewServer(":0", eng, t.TempDir())
+	rec := serveHTTP(srv, http.MethodGet, "/v0/livez", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestLivezReturns200BeforeReady(t *testing.T) {
+	// Livez should pass even before mark-ready (healthz would return 503).
+	eng := newTestEngine(t, nil)
+	srv := NewServer(":0", eng, t.TempDir())
+
+	if eng.Healthz() {
+		t.Fatal("expected healthz=false before mark-ready")
+	}
+	rec := serveHTTP(srv, http.MethodGet, "/v0/livez", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected livez=200 even before mark-ready, got %d", rec.Code)
+	}
+}
+
+func TestLivezReturns503WhenStoreDown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store, err := engine.NewMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := engine.NewEngine(ctx, nil, store)
+	srv := NewServer(":0", eng, t.TempDir())
+
+	// Close the backing store to simulate SQLite failure.
+	store.Close()
+
+	rec := serveHTTP(srv, http.MethodGet, "/v0/livez", "")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when store is down, got %d", rec.Code)
+	}
+}
+
 func TestHealthzReturns503BeforeReady(t *testing.T) {
 	eng := newTestEngine(t, nil)
 	srv := NewServer(":0", eng, t.TempDir())

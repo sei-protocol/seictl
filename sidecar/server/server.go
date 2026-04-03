@@ -53,6 +53,7 @@ func NewServer(addr string, eng *engine.Engine, homeDir string) *Server {
 		mux:     http.NewServeMux(),
 	}
 	s.mux.HandleFunc("GET /v0/healthz", s.handleHealthz)
+	s.mux.HandleFunc("GET /v0/livez", s.handleLivez)
 	s.mux.HandleFunc("GET /v0/status", s.handleStatus)
 	s.mux.HandleFunc("GET /v0/node-id", s.handleNodeID)
 	s.mux.HandleFunc("POST /v0/tasks", s.handlePostTask)
@@ -75,6 +76,14 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	if !s.engine.Healthz() {
 		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleLivez(w http.ResponseWriter, _ *http.Request) {
+	if err := s.engine.Livez(); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusOK)

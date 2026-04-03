@@ -20,6 +20,9 @@ type ResultStore interface {
 	// Delete removes a result by ID. Returns true if it existed.
 	Delete(id string) (bool, error)
 
+	// Ping verifies the store is responsive. Used by liveness checks.
+	Ping() error
+
 	// Close releases underlying resources.
 	Close() error
 }
