@@ -215,6 +215,43 @@ func TestStoreMigrateIdempotent(t *testing.T) {
 	}
 }
 
+func TestStorePing(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Ping(); err != nil {
+		t.Fatalf("Ping on healthy store: %v", err)
+	}
+
+	s.Close()
+	if err := s.Ping(); err == nil {
+		t.Fatal("expected error from Ping on closed store")
+	}
+}
+
+func TestStoreRunFieldRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().Truncate(time.Nanosecond)
+
+	r := &TaskResult{
+		ID:          "run-rt-0000-0000-0000-000000000000",
+		Type:        "config-patch",
+		Status:      TaskStatusFailed,
+		Run:         3,
+		Error:       "transient",
+		SubmittedAt: now,
+	}
+	if err := s.Save(r); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	got, err := s.Get(r.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Run != 3 {
+		t.Fatalf("Run = %d, want 3", got.Run)
+	}
+}
+
 func TestStoreNullableFields(t *testing.T) {
 	s := newTestStore(t)
 

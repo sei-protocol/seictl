@@ -37,7 +37,6 @@ type Engine struct {
 	ready    atomic.Bool
 	store    ResultStore
 	mu       sync.Mutex
-	inFlight map[string]struct{}
 }
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
@@ -48,7 +47,6 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store Res
 		handlers: handlers,
 		ctx:      ctx,
 		store:    store,
-		inFlight: make(map[string]struct{}),
 	}
 	eng.rehydrateStaleTasks()
 	return eng
@@ -72,13 +70,12 @@ func (e *Engine) rehydrateStaleTasks() {
 			tr.Status = TaskStatusFailed
 			tr.Error = "no handler registered for task type"
 			tr.CompletedAt = &t
-			_ = e.store.Save(&tr)
+			if err := e.store.Save(&tr); err != nil {
+				log.Error("failed to persist stale task failure", "id", tr.ID, "err", err)
+			}
 			continue
 		}
 		log.Info("rehydrating stale task", "type", tr.Type, "id", tr.ID, "run", tr.Run)
-		e.mu.Lock()
-		e.inFlight[tr.ID] = struct{}{}
-		e.mu.Unlock()
 		e.runTask(tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
 	}
 }
@@ -115,15 +112,7 @@ func (e *Engine) Submit(task Task) (string, error) {
 		case TaskStatusRunning, TaskStatusCompleted:
 			return id, nil
 		case TaskStatusFailed:
-			// Guard: if a goroutine for this ID is still cleaning up
-			// (between execute returning and store.Save), wait for it.
-			if _, running := e.inFlight[id]; running {
-				return id, nil
-			}
 			run = existing.Run + 1
-			if _, err := e.store.Delete(id); err != nil {
-				return "", fmt.Errorf("clearing failed task: %w", err)
-			}
 		}
 	}
 
@@ -141,7 +130,6 @@ func (e *Engine) Submit(task Task) (string, error) {
 		return "", fmt.Errorf("persist task: %w", err)
 	}
 
-	e.inFlight[id] = struct{}{}
 	log.Info("task submitted", "type", task.Type, "id", id, "run", run)
 	e.runTask(id, task.Type, handler, task.Params, now, run)
 
@@ -172,10 +160,6 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 		if storeErr := e.store.Save(tr); storeErr != nil {
 			log.Error("failed to persist task result", "id", id, "err", storeErr)
 		}
-
-		e.mu.Lock()
-		delete(e.inFlight, id)
-		e.mu.Unlock()
 	}()
 }
 

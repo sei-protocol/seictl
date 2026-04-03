@@ -639,28 +639,27 @@ func TestSubmitDoesNotIncrementRunOnRehydration(t *testing.T) {
 }
 
 func TestSubmitConcurrentSameFailedID(t *testing.T) {
+	started := make(chan struct{}, 2)
+	blocked := make(chan struct{})
 	var callCount atomic.Int32
-	eng := newTestEngine(t, map[TaskType]TaskHandler{
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store := newTestStore(t)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
 			callCount.Add(1)
+			started <- struct{}{}
+			<-blocked
 			return nil
 		},
-	})
+	}, store)
 
 	const taskID = "11111111-2222-3333-4444-555555555555"
 
-	// Create a failed task.
-	eng.Submit(Task{ID: taskID, Type: TaskConfigPatch, Params: map[string]any{"fail": true}})
-
-	// Wait but we need it to fail first. Let's use a different approach.
-	// Submit and wait for the first run to complete.
-	waitForResult(t, eng, taskID)
-	callCount.Store(0) // Reset counter.
-
-	// Manually set the task to failed for the concurrent test.
+	// Seed a failed task directly in the store.
 	now := time.Now().UTC()
-	_, _ = eng.store.Delete(taskID)
-	_ = eng.store.Save(&TaskResult{
+	_ = store.Save(&TaskResult{
 		ID:          taskID,
 		Type:        string(TaskConfigPatch),
 		Status:      TaskStatusFailed,
@@ -681,10 +680,12 @@ func TestSubmitConcurrentSameFailedID(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Wait for any launched task to complete.
+	// Unblock the handler and wait for completion.
+	close(blocked)
 	waitForResult(t, eng, taskID)
 
-	// Only one execution should have been launched.
+	// The mutex serializes Submit: the first sees "failed" and re-executes,
+	// the second sees "running" (from the first's Save) and no-ops.
 	if c := callCount.Load(); c != 1 {
 		t.Fatalf("expected exactly 1 re-execution, got %d", c)
 	}

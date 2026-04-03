@@ -87,6 +87,25 @@ func TestLivezReturns200BeforeReady(t *testing.T) {
 	}
 }
 
+func TestLivezReturns503WhenStoreDown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store, err := engine.NewMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := engine.NewEngine(ctx, nil, store)
+	srv := NewServer(":0", eng, t.TempDir())
+
+	// Close the backing store to simulate SQLite failure.
+	store.Close()
+
+	rec := serveHTTP(srv, http.MethodGet, "/v0/livez", "")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when store is down, got %d", rec.Code)
+	}
+}
+
 func TestHealthzReturns503BeforeReady(t *testing.T) {
 	eng := newTestEngine(t, nil)
 	srv := NewServer(":0", eng, t.TempDir())

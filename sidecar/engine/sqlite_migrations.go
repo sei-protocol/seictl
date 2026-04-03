@@ -76,7 +76,7 @@ func migrate(db *sql.DB) error {
 		defer tx.Rollback()
 
 		if _, err := tx.Exec(`
-			ALTER TABLE task_results ADD COLUMN run INTEGER NOT NULL DEFAULT 0;
+			ALTER TABLE task_results ADD COLUMN run INTEGER NOT NULL DEFAULT 1;
 		`); err != nil {
 			return err
 		}
