@@ -43,9 +43,9 @@ func fakeRPCServer(latestHeight int64) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/status":
-			fmt.Fprintf(w, `{"sync_info":{"latest_block_height":"%d"}}`, latestHeight)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":-1,"result":{"sync_info":{"latest_block_height":"%d"}}}`, latestHeight)
 		case r.URL.Path == "/block_results":
-			fmt.Fprint(w, `{}`)
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":-1,"result":{}}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -136,7 +136,7 @@ func TestExportRPCNon200Status(t *testing.T) {
 
 func TestQueryLatestHeight_ZeroHeight(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"sync_info":{"latest_block_height":"0"}}`)
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":-1,"result":{"sync_info":{"latest_block_height":"0"}}}`)
 	}))
 	defer srv.Close()
 
@@ -468,10 +468,13 @@ func fakeRPCAndBlockServer(latestHeight int64, appHash, lastResultsHash string, 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/status":
-			fmt.Fprintf(w, `{"sync_info":{"latest_block_height":"%d"}}`, latestHeight)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":-1,"result":{"sync_info":{"latest_block_height":"%d"}}}`, latestHeight)
 		case r.URL.Path == "/block":
 			resp := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      -1,
 				"result": map[string]any{
+					"block_id": map[string]any{"hash": ""},
 					"block": map[string]any{
 						"header": map[string]any{
 							"app_hash":          appHash,
@@ -483,6 +486,8 @@ func fakeRPCAndBlockServer(latestHeight int64, appHash, lastResultsHash string, 
 			json.NewEncoder(w).Encode(resp)
 		case r.URL.Path == "/block_results":
 			resp := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      -1,
 				"result": map[string]any{
 					"txs_results": txResults,
 				},

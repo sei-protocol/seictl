@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 )
 
 // compareLayer0 fetches the block header from both chains at the given
@@ -18,13 +20,10 @@ func (c *Comparator) compareLayer0(ctx context.Context, height int64) (*Layer0Re
 		return nil, fmt.Errorf("querying canonical block at height %d: %w", height, err)
 	}
 
-	sHeader := shadowBlock.header()
-	cHeader := canonicalBlock.header()
-
-	sAppHash := sHeader.AppHash
-	cAppHash := cHeader.AppHash
-	sLastResults := sHeader.LastResultsHash
-	cLastResults := cHeader.LastResultsHash
+	sAppHash := shadowBlock.Block.Header.AppHash
+	cAppHash := canonicalBlock.Block.Header.AppHash
+	sLastResults := shadowBlock.Block.Header.LastResultsHash
+	cLastResults := canonicalBlock.Block.Header.LastResultsHash
 
 	// Gas is summed from block_results; the block header doesn't carry it
 	// directly. For L0 we compare what the header gives us. Gas comparison
@@ -51,36 +50,18 @@ func (c *Comparator) compareLayer0(ctx context.Context, height int64) (*Layer0Re
 	return result, nil
 }
 
-// blockResponse is the subset of the Tendermint /block RPC response
-// that we need for header comparison.
-type blockResponse struct {
-	Result struct {
-		Block struct {
-			Header blockHeader `json:"header"`
-		} `json:"block"`
-	} `json:"result"`
-}
-
-type blockHeader struct {
-	AppHash         string `json:"app_hash"`
-	LastResultsHash string `json:"last_results_hash"`
-}
-
-func (b *blockResponse) header() blockHeader {
-	return b.Result.Block.Header
-}
-
-// queryBlock fetches the block at the given height from a Tendermint RPC endpoint.
-func queryBlock(ctx context.Context, rpcEndpoint string, height int64) (*blockResponse, error) {
-	url := fmt.Sprintf("%s/block?height=%d", rpcEndpoint, height)
-	body, err := rpcGet(ctx, url)
+// queryBlock fetches the block at the given height from a CometBFT RPC endpoint
+// and returns the header fields needed for comparison.
+func queryBlock(ctx context.Context, rpcEndpoint string, height int64) (*rpc.BlockResult, error) {
+	c := rpc.NewClient(rpcEndpoint, nil)
+	raw, err := c.Get(ctx, fmt.Sprintf("/block?height=%d", height))
 	if err != nil {
 		return nil, err
 	}
 
-	var resp blockResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	var result rpc.BlockResult
+	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, fmt.Errorf("decoding /block response: %w", err)
 	}
-	return &resp, nil
+	return &result, nil
 }

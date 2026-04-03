@@ -4,17 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -311,30 +309,15 @@ func instanceIP(instance ec2types.Instance) string {
 	return ""
 }
 
-var nodeIDHTTPClient = &http.Client{Timeout: 5 * time.Second}
-
 func defaultQueryNodeID(ctx context.Context, ip string) (string, error) {
-	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, fmt.Sprintf("http://%s:26657/status", ip), nil)
-	if err != nil {
-		return "", fmt.Errorf("building request: %w", err)
-	}
-
-	resp, err := nodeIDHTTPClient.Do(req)
+	c := rpc.NewClient(fmt.Sprintf("http://%s:26657", ip), nil)
+	raw, err := c.Get(ctx, "/status")
 	if err != nil {
 		return "", fmt.Errorf("GET /status: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading response body: %w", err)
-	}
-
-	var status tendermintStatusResponse
-	if err := json.Unmarshal(body, &status); err != nil {
+	var status rpc.StatusResult
+	if err := json.Unmarshal(raw, &status); err != nil {
 		return "", fmt.Errorf("parsing /status response: %w", err)
 	}
 

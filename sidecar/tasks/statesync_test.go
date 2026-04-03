@@ -37,6 +37,11 @@ func jsonResponse(body string) *http.Response {
 	}
 }
 
+// wrapResult wraps inner JSON in the CometBFT JSON-RPC envelope.
+func wrapResult(inner string) string {
+	return fmt.Sprintf(`{"jsonrpc":"2.0","id":-1,"result":%s}`, inner)
+}
+
 func setupPeersInConfig(t *testing.T, homeDir string, peers []string) {
 	t.Helper()
 	configDir := filepath.Join(homeDir, "config")
@@ -56,12 +61,12 @@ func TestStateSyncConfigurer_Success(t *testing.T) {
 	hash := generateBlockHash()
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
-			"http://1.2.3.4:26657/status": jsonResponse(`{
+			"http://1.2.3.4:26657/status": jsonResponse(wrapResult(`{
 				"sync_info": {"latest_block_height": "10000"}
-			}`),
-			"http://1.2.3.4:26657/block?height=8000": jsonResponse(fmt.Sprintf(`{
+			}`)),
+			"http://1.2.3.4:26657/block?height=8000": jsonResponse(wrapResult(fmt.Sprintf(`{
 				"block_id": {"hash": %q}
-			}`, hash)),
+			}`, hash))),
 		},
 	}
 
@@ -124,12 +129,12 @@ func TestStateSyncConfigurer_LowHeight(t *testing.T) {
 	hash := generateBlockHash()
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
-			"http://10.0.0.1:26657/status": jsonResponse(`{
+			"http://10.0.0.1:26657/status": jsonResponse(wrapResult(`{
 				"sync_info": {"latest_block_height": "500"}
-			}`),
-			"http://10.0.0.1:26657/block?height=1": jsonResponse(fmt.Sprintf(`{
+			}`)),
+			"http://10.0.0.1:26657/block?height=1": jsonResponse(wrapResult(fmt.Sprintf(`{
 				"block_id": {"hash": %q}
-			}`, hash)),
+			}`, hash))),
 		},
 	}
 
@@ -170,12 +175,12 @@ func TestStateSyncConfigurer_InvalidBlockHash(t *testing.T) {
 
 			mock := &mockHTTPDoer{
 				responses: map[string]*http.Response{
-					"http://1.2.3.4:26657/status": jsonResponse(`{
+					"http://1.2.3.4:26657/status": jsonResponse(wrapResult(`{
 						"sync_info": {"latest_block_height": "10000"}
-					}`),
-					"http://1.2.3.4:26657/block?height=8000": jsonResponse(fmt.Sprintf(`{
+					}`)),
+					"http://1.2.3.4:26657/block?height=8000": jsonResponse(wrapResult(fmt.Sprintf(`{
 						"block_id": {"hash": %q}
-					}`, tt.hash)),
+					}`, tt.hash))),
 				},
 			}
 
@@ -258,12 +263,12 @@ func TestStateSyncConfigurer_Handler(t *testing.T) {
 	hash := generateBlockHash()
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
-			"http://1.2.3.4:26657/status": jsonResponse(`{
+			"http://1.2.3.4:26657/status": jsonResponse(wrapResult(`{
 				"sync_info": {"latest_block_height": "5000"}
-			}`),
-			"http://1.2.3.4:26657/block?height=3000": jsonResponse(fmt.Sprintf(`{
+			}`)),
+			"http://1.2.3.4:26657/block?height=3000": jsonResponse(wrapResult(fmt.Sprintf(`{
 				"block_id": {"hash": %q}
-			}`, hash)),
+			}`, hash))),
 		},
 	}
 
@@ -288,12 +293,12 @@ func TestStateSyncConfigurer_NetworkWithBackfill(t *testing.T) {
 	hash := generateBlockHash()
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
-			"http://1.2.3.4:26657/status": jsonResponse(`{
+			"http://1.2.3.4:26657/status": jsonResponse(wrapResult(`{
 				"sync_info": {"latest_block_height": "10000"}
-			}`),
-			"http://1.2.3.4:26657/block?height=8000": jsonResponse(fmt.Sprintf(`{
+			}`)),
+			"http://1.2.3.4:26657/block?height=8000": jsonResponse(wrapResult(fmt.Sprintf(`{
 				"block_id": {"hash": %q}
-			}`, hash)),
+			}`, hash))),
 		},
 	}
 
@@ -332,9 +337,9 @@ func TestStateSyncConfigurer_LocalSnapshot(t *testing.T) {
 	hash := generateBlockHash()
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
-			"http://1.2.3.4:26657/block?height=198030000": jsonResponse(fmt.Sprintf(`{
+			"http://1.2.3.4:26657/block?height=198030000": jsonResponse(wrapResult(fmt.Sprintf(`{
 				"block_id": {"hash": %q}
-			}`, hash)),
+			}`, hash))),
 		},
 	}
 

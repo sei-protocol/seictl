@@ -7,12 +7,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 )
 
-// blockJSON builds a minimal /block response with the given header fields.
+// blockJSON builds a minimal /block JSON-RPC response with the given header fields.
 func blockJSON(appHash, lastResultsHash string) []byte {
 	resp := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      -1,
 		"result": map[string]any{
+			"block_id": map[string]any{"hash": ""},
 			"block": map[string]any{
 				"header": map[string]any{
 					"app_hash":          appHash,
@@ -25,9 +30,11 @@ func blockJSON(appHash, lastResultsHash string) []byte {
 	return b
 }
 
-// blockResultsJSON builds a minimal /block_results response.
-func blockResultsJSON(txs []txResult) []byte {
+// blockResultsJSON builds a minimal /block_results JSON-RPC response.
+func blockResultsJSON(txs []rpc.TxResult) []byte {
 	resp := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      -1,
 		"result": map[string]any{
 			"txs_results": txs,
 		},
@@ -37,7 +44,7 @@ func blockResultsJSON(txs []txResult) []byte {
 }
 
 // rpcServer creates an httptest server that responds to /block and /block_results.
-func rpcServer(appHash, lastResultsHash string, txs []txResult) *httptest.Server {
+func rpcServer(appHash, lastResultsHash string, txs []rpc.TxResult) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/block":
@@ -104,10 +111,10 @@ func TestCompareBlock_Layer0Divergence(t *testing.T) {
 }
 
 func TestCompareBlock_Layer1TxDivergence(t *testing.T) {
-	shadowTxs := []txResult{
+	shadowTxs := []rpc.TxResult{
 		{Code: 0, GasUsed: "100", GasWanted: "200", Log: "ok", Events: json.RawMessage(`[]`)},
 	}
-	canonicalTxs := []txResult{
+	canonicalTxs := []rpc.TxResult{
 		{Code: 1, GasUsed: "150", GasWanted: "200", Log: "reverted", Events: json.RawMessage(`[]`)},
 	}
 
@@ -150,11 +157,11 @@ func TestCompareBlock_Layer1TxDivergence(t *testing.T) {
 }
 
 func TestCompareBlock_Layer1TxCountMismatch(t *testing.T) {
-	shadowTxs := []txResult{
+	shadowTxs := []rpc.TxResult{
 		{Code: 0, GasUsed: "100", GasWanted: "200"},
 		{Code: 0, GasUsed: "100", GasWanted: "200"},
 	}
-	canonicalTxs := []txResult{
+	canonicalTxs := []rpc.TxResult{
 		{Code: 0, GasUsed: "100", GasWanted: "200"},
 	}
 
