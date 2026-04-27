@@ -462,7 +462,7 @@ Standard set already in seictl: `errcheck`, `govet`, `staticcheck`, `revive`, `g
 1. `seictl context` returns a populated `ContextResult` JSON envelope on a real harbor kubeconfig — `cluster`, `engineer`, `awsAccount` populated.
 2. `seictl bench up --image <ref> --name demo --size s --duration 5m` (no `--apply`) renders SND-validator (4 replicas), SND-RPC (1 replica), profile ConfigMap, seiload Job — golden-file equality against `testdata/bench-up-s.golden.yaml`. Exits `0`. Output includes `dryRun: true`.
 3. `seictl bench up ... --apply` against a dev/harbor cluster creates all four resources, populates `appliedAt`, returns `0`. Subsequent `seictl bench list` shows the run.
-4. `seictl bench up --name X` re-run while the previous bench is still alive: idempotent (no error, returns same result), or rejects with exit `15` on name collision — confirmed behavior either way.
+4. `seictl bench up --name X` re-run while the previous bench is still alive: idempotent (no error, returns same result), or rejects with exit `10` (category `name-collision`) — confirmed behavior either way.
 5. `seictl onboard --alias bdc --no-pr --apply` against a clean platform-repo checkout creates `clusters/harbor/engineers/bdc/{kustomization,namespace,bench-seiload-sa}.yaml` and writes `~/.seictl/engineer.json`. With `--apply` and `gh` authenticated: opens a PR, captures URL in result. With AWS SDK calls: creates IAM policy and Pod Identity association.
 6. `~/.seictl/engineer.json` written with mode `0600`; loose-perms file rejected with exit `40` (category `perms-loose`).
 7. `seictl bench up --image <bad-registry-ref>` exits `10` (category `image-policy`) without contacting ECR.
