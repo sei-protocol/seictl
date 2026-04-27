@@ -17,7 +17,7 @@
 | `seictl context` | Cluster + identity ground truth |
 | `seictl onboard` | Set up engineer environment (namespace files via PR + IAM via AWS SDK) |
 | `seictl bench up` | Render and apply benchmark workloads (validators + RPC + seiload Job) |
-| `seictl bench down` | Tear down a benchmark by slug |
+| `seictl bench down` | Tear down a benchmark by name |
 | `seictl bench list` | Owner-scoped list of running benchmarks |
 
 The conversational layer is the `sei-platform-engineer` skill at sei-protocol/Tide#8. This LLD is the implementation contract that skill depends on.
@@ -177,18 +177,18 @@ type AWSResource struct{ Kind, ARN, Action string }
 ### `seictl bench up`
 
 ```
-seictl bench up --image <ref> --slug <slug>
+seictl bench up --image <ref> --name <name>
                 [--size s|m|l] [--duration <duration>] [--apply]
 ```
 
-Required: `--image`, `--slug`. Defaults: size `s`, duration `30m`, namespace = `eng-<alias>` from identity.
+Required: `--image`, `--name`. Defaults: size `s`, duration `30m`, namespace = `eng-<alias>` from identity.
 
 Default behavior is dry-run. `--apply` performs server-side apply.
 
 ```go
 type BenchUpResult struct {
-    ChainID            string        `json:"chainId"`         // "bench-<alias>-<slug>"
-    Slug               string        `json:"slug"`
+    ChainID            string        `json:"chainId"`         // "bench-<alias>-<name>"
+    Name               string        `json:"name"`
     Namespace          string        `json:"namespace"`
     ImageRef           string        `json:"imageRef"`        // input ref (tag or digest)
     ImageDigest        string        `json:"imageDigest"`     // resolved sha256:...
@@ -213,21 +213,21 @@ Sizes:
 | `m` | 10 | 2 |
 | `l` | 21 | 4 |
 
-Chain ID convention: `bench-<alias>-<slug>` (engineer benchmarks); RPC SND is `bench-<alias>-<slug>-rpc`. Distinguishes from autobake's nightly `autobake-<run-id>`.
+Chain ID convention: `bench-<alias>-<name>` (engineer benchmarks); RPC SND is `bench-<alias>-<name>-rpc`. Distinguishes from autobake's nightly `autobake-<run-id>`.
 
 S3 results URI: `s3://harbor-sei-autobake-results/<chain-id>/<image-sha-12>/<chain-id>/report.log`. Same bucket as nightly autobake; chain-ID prefix partitions.
 
 ### `seictl bench down`
 
 ```
-seictl bench down --slug <slug> [--namespace <ns>] [--wait] [--timeout 5m]
+seictl bench down --name <name> [--namespace <ns>] [--wait] [--timeout 5m]
 ```
 
 Label-selected delete with `metav1.DeletePropagationForeground`. No dry-run flag — down is bounded and idempotent (re-run is fine if interrupted).
 
 ```go
 type BenchDownResult struct {
-    Slug      string        `json:"slug"`
+    Name      string        `json:"name"`
     ChainID   string        `json:"chainId"`
     Namespace string        `json:"namespace"`
     Resources []ManifestRef `json:"resources"`     // action: "deleted" | "not-found" | "still-terminating"
@@ -251,7 +251,7 @@ type BenchListResult struct {
 }
 type BenchSummary struct {
     ChainID           string `json:"chainId"`
-    Slug              string `json:"slug"`
+    Name              string `json:"name"`
     Namespace         string `json:"namespace"`
     Owner             string `json:"owner"`
     Phase             string `json:"phase"`           // SND aggregate phase, read from `.status.phase` via Unstructured
@@ -312,9 +312,9 @@ for _, obj := range rendered { kc.CR.Patch(ctx, obj, patch, opts...) }
 
 Why SSA:
 
-- Idempotent re-runs of `bench up --slug foo` — re-applying converges to the same state, not a Create-conflict scramble.
+- Idempotent re-runs of `bench up --name foo` — re-applying converges to the same state, not a Create-conflict scramble.
 - Field-manager segregation: controller writes `status.*` with its own field manager; SSA naturally segregates so seictl never fights status writes.
-- Conflict detection on duplicate slugs across engineers (409 with the conflicting field manager listed).
+- Conflict detection on duplicate names across engineers (409 with the conflicting field manager listed).
 
 `--apply` semantics:
 
@@ -330,18 +330,18 @@ Every resource seictl creates carries:
 | `app.kubernetes.io/managed-by` | `seictl` | always |
 | `app.kubernetes.io/part-of` | `seictl-bench` or `seictl-onboard` | command |
 | `sei.io/engineer` | engineer alias from `~/.seictl/engineer.json` | always |
-| `sei.io/bench-slug` | the `--slug` value | bench up |
+| `sei.io/bench-name` | the `--name` value | bench up |
 | `tide.sei.io/cell-type` | `personal` | onboard (cells-forward) |
 | `tide.sei.io/owner` | engineer alias | onboard (cells-forward) |
 
 Queries:
 
 - `bench list` → `app.kubernetes.io/part-of=seictl-bench,sei.io/engineer=<alias>` on SeiNodeDeployments
-- `bench down --slug X` → add `sei.io/bench-slug=X`. Get SNDs first, delete with foreground propagation so children cascade in order.
+- `bench down --name X` → add `sei.io/bench-name=X`. Get SNDs first, delete with foreground propagation so children cascade in order.
 
 ### Landmine: PVC finalizers on `bench down`
 
-`sei.io/seinode-finalizer` blocks SeiNode deletion until the controller releases PVCs cleanly. If the controller is unhealthy or EBS CSI flakes, children sit `Terminating` forever — eating quota and silently failing future `bench up --slug X` on duplicate-name conflicts.
+`sei.io/seinode-finalizer` blocks SeiNode deletion until the controller releases PVCs cleanly. If the controller is unhealthy or EBS CSI flakes, children sit `Terminating` forever — eating quota and silently failing future `bench up --name X` on duplicate-name conflicts.
 
 `bench down` issues delete with `metav1.DeletePropagationForeground` and a `context.WithTimeout(90s)`. On timeout: report still-terminating resources via JSON output, exit `category: "finalizer-stuck"`. Don't auto-patch finalizers, don't redirect to other tools — engineer decides recovery.
 
@@ -356,7 +356,7 @@ Single source of truth in `internal/validate/`. Commands call `validate.Alias(s)
 | Input | Validation |
 |---|---|
 | `alias` | `^[a-z]([a-z0-9-]{0,28}[a-z0-9])?$` AND not in deny-list `{kube-system, kube-public, kube-node-lease, default, autobake, flux-system, istio-system, tide-agents}` |
-| `slug` | `^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`. Combined `bench-<alias>-<slug>` ≤ 63 chars (k8s label limit) |
+| `name` | `^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`. Combined `bench-<alias>-<name>` ≤ 63 chars (k8s label limit) |
 | `--image` | (a) Parse with `name.ParseReference`. (b) Hostname **must equal** `189176372795.dkr.ecr.us-east-2.amazonaws.com`. (c) Repo prefix **must be** `sei/`. (d) Resolve to digest before render; fail closed |
 | `--size` | Strict enum `s\|m\|l` |
 | `--duration` | Integer minutes, `1 ≤ n ≤ 240` |
@@ -417,15 +417,15 @@ Rendering: `text/template` — autobake source files use Helm-style `{{ }}`. Ren
 |---|---|---|
 | 0 | | Success |
 | 2 | usage | Usage error |
-| 3 | not-found | Resource not found (bench list/down on absent slug) |
+| 3 | not-found | Resource not found (bench list/down on absent name) |
 | 4 | cluster | Cluster unreachable |
 | 5 | rbac | Permission denied |
 | 10 | bench | Image policy violation (registry/prefix mismatch, parse failure) |
 | 11 | bench | Image digest resolution failed |
-| 12 | bench | Input validation failed (slug, size, duration) |
+| 12 | bench | Input validation failed (name, size, duration) |
 | 13 | bench | Namespace policy violation (`-n` mismatch with engineer alias) |
 | 14 | bench | Apply failed |
-| 15 | bench | Chain ID collision (slug already in use, alive bench) |
+| 15 | bench | Chain ID collision (name already in use, alive bench) |
 | 16 | bench | Finalizer wait timed out (`bench down --wait`) |
 | 17 | bench | Template render failed |
 | 20 | onboard | Alias invalid (regex or deny-list match) |
@@ -456,7 +456,7 @@ build-kubectl-plugin: build
 
 ### Test patterns
 
-- Table-driven tests for flag parsing, slug validation, exit-code mapping.
+- Table-driven tests for flag parsing, name validation, exit-code mapping.
 - `testdata/` golden files for rendered manifests. `go test -update` flag to refresh.
 - Fake K8s client (`controller-runtime/pkg/client/fake`) for `bench list` and `bench down`.
 - ECR resolver behind an interface — fake in tests, real in production. Same for git/gh in `onboard`.
@@ -474,9 +474,9 @@ Standard set already in seictl: `errcheck`, `govet`, `staticcheck`, `revive`, `g
 ## v1 Definition of Done
 
 1. `seictl context` returns a populated `ContextResult` JSON envelope on a real harbor kubeconfig — `cluster`, `engineer`, `awsAccount` populated.
-2. `seictl bench up --image <ref> --slug demo --size s --duration 5m` (no `--apply`) renders SND-validator (4 replicas), SND-RPC (1 replica), profile ConfigMap, seiload Job — golden-file equality against `testdata/bench-up-s.golden.yaml`. Exits `0`. Output includes `dryRun: true`.
+2. `seictl bench up --image <ref> --name demo --size s --duration 5m` (no `--apply`) renders SND-validator (4 replicas), SND-RPC (1 replica), profile ConfigMap, seiload Job — golden-file equality against `testdata/bench-up-s.golden.yaml`. Exits `0`. Output includes `dryRun: true`.
 3. `seictl bench up ... --apply` against a dev/harbor cluster creates all four resources, populates `appliedAt`, returns `0`. Subsequent `seictl bench list` shows the run.
-4. `seictl bench up --slug X` re-run while the previous bench is still alive: idempotent (no error, returns same result), or rejects with exit `15` on slug collision — confirmed behavior either way.
+4. `seictl bench up --name X` re-run while the previous bench is still alive: idempotent (no error, returns same result), or rejects with exit `15` on name collision — confirmed behavior either way.
 5. `seictl onboard --alias bdc --no-pr --apply` against a clean platform-repo checkout creates `clusters/harbor/engineers/bdc/{kustomization,namespace,bench-seiload-sa}.yaml` and writes `~/.seictl/engineer.json`. With `--apply` and `gh` authenticated: opens a PR, captures URL in result. With AWS SDK calls: creates IAM policy and Pod Identity association.
 6. `kubectl-sei bench list` works (symlink installed by `make build-kubectl-plugin`); `kubectl sei bench list` resolves identically.
 7. `~/.seictl/engineer.json` written with mode `0600`; loose-perms file rejected with exit `44`.
@@ -488,7 +488,7 @@ Standard set already in seictl: `errcheck`, `govet`, `staticcheck`, `revive`, `g
 
 1. **IAM policy: per-engineer scoped policy vs. shared `harbor-bench-seiload-shared`.** Position A: one policy per engineer, scoped to `s3://harbor-sei-autobake-results/bench-<alias>/*`. Position B: one shared policy, `aws:ResourceTag/owner=<alias>` condition gates per-engineer write access. Both viable; A is simpler in v1, B scales better when engineer count grows.
 2. **`onboard`-generated PR auto-merge?** Engineer wants their namespace live ASAP after onboarding. Option: open PR with auto-merge label; platform team reviews if needed but default is auto-merge. Out of scope for first cut; engineer manually requests review for v1.
-3. **`bench up` and concurrent slug collisions across engineers.** Chain ID `bench-<alias>-<slug>` includes the alias prefix, so cross-engineer collision is impossible. Same-engineer reuse hits exit `15`. Confirmed.
+3. **`bench up` and concurrent name collisions across engineers.** Chain ID `bench-<alias>-<name>` includes the alias prefix, so cross-engineer collision is impossible. Same-engineer reuse hits exit `15`. Confirmed.
 4. **Templates re-sync cadence.** When autobake's templates evolve in `sei-protocol/platform`, what triggers the seictl re-sync PR? Manual today; consider a CI nudge later.
 
 ---
