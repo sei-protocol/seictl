@@ -27,7 +27,6 @@ The conversational layer is the `sei-platform-engineer` skill at sei-protocol/Ti
 - Engineer types one command (eventually one natural-language sentence to a Claude skill); benchmark runs.
 - JSON output schemas are the **MCP tool contract** for v2 graduation — schemas defined here are stable.
 - Reuse harbor's existing patterns (Pod Identity, embedded templates derived from autobake source) — no new auth surface, no template fork.
-- kubectl-plugin compatible from day 1 (`kubectl-sei` symlink works against the same binary).
 
 ## Non-goals (deferred from v1, deliberate)
 
@@ -41,6 +40,8 @@ The conversational layer is the `sei-platform-engineer` skill at sei-protocol/Ti
 - Multi-cluster support — harbor-only. `--context` flag wired but exercised against one cluster only.
 - Auto-cleanup of expired benchmarks — engineer triggers `bench down` or revert PR.
 - Per-engineer ECR namespace for image push — engineers test ECR-resident images only in v1.
+- Auto-merge of onboarding PRs — engineer manually requests review in v1.
+- Automated template re-sync from upstream — manual seictl PR per autobake template change.
 
 ## Dependencies
 
@@ -51,6 +52,7 @@ The conversational layer is the `sei-platform-engineer` skill at sei-protocol/Ti
   - `k8s.io/apimachinery/pkg/apis/meta/v1/unstructured` (CR access without typed package)
   - `github.com/google/go-containerregistry/pkg/name` (image ref parsing)
   - AWS SDK v2: `iam`, `eks`, `ecr` clients
+  - `github.com/sei-protocol/seilog` — structured logging (matches existing seictl convention; logs to stderr, stdout reserved for JSON envelope)
 - **Not** depending on `sei-k8s-controller/api/v1alpha1` in v1 — the package needs structural fixes (circular dependency risk) before seictl can safely import it. Tracked separately by sei-k8s-controller maintainer; revisit once landed.
 - External engineer-side: `gh` authenticated, kubeconfig with `harbor` context.
 - Upstream coordination: `sei-protocol/platform autobake/templates/*` and `autobake/profiles/autobake_evm_transfer.json` — embedded into `templates/` with provenance comment in each file.
@@ -83,7 +85,7 @@ seictl/
     namespace.yaml.tmpl
     bench-seiload-sa.yaml.tmpl
     kustomization.yaml.tmpl
-  Makefile                   [edit: lint-strict, build-kubectl-plugin]
+  Makefile                   [edit: lint-strict]
   docs/design/cluster-cli.md [this file]
 ```
 
@@ -137,7 +139,7 @@ type ContextResult struct {
     Engineer        *Engineer `json:"engineer,omitempty"` // nil if engineer.json missing
 }
 
-type Engineer struct{ Alias, Name, Email string }
+type Engineer struct{ Alias, Name string }
 ```
 
 Six fields. The Claude skill surfaces this to the engineer at the start of a session so they can confirm where they are and who they are.
@@ -145,8 +147,8 @@ Six fields. The Claude skill surfaces this to the engineer at the start of a ses
 ### `seictl onboard`
 
 ```
-seictl onboard --alias <alias> [--name <name>] [--email <email>]
-               [--platform-repo <path>] [--no-pr] [--update] [--apply]
+seictl onboard --alias <alias> [--name <name>]
+               [--platform-repo <path>] [--no-pr] [--apply]
 ```
 
 With `--apply`, performs both side effects:
@@ -155,8 +157,6 @@ With `--apply`, performs both side effects:
 2. Creates the IAM policy + Pod Identity association directly via AWS SDK in the engineer's SSO session — `iam:CreatePolicy`, `iam:CreateRole`, `iam:AttachRolePolicy`, `eks:CreatePodIdentityAssociation`. No Terraform.
 
 Without `--apply`: dry-run; prints what would be created.
-
-`--update` rewrites `~/.seictl/engineer.json` only — no namespace files or AWS calls.
 
 ```go
 type OnboardResult struct {
@@ -240,7 +240,7 @@ On finalizer-stuck timeout: report still-terminating resources; exit non-zero wi
 ### `seictl bench list`
 
 ```
-seictl bench list [--all-namespaces] [-n <namespace>] [--owner <alias>]
+seictl bench list [--all-namespaces] [-n <namespace>]
 ```
 
 Owner-scoped via labels (see [Label discipline](#label-discipline)).
@@ -366,7 +366,7 @@ Single source of truth in `internal/validate/`. Commands call `validate.Alias(s)
 
 `seictl onboard --apply` creates resources directly via AWS SDK:
 
-1. **IAM policy** `harbor-bench-seiload-eng-<alias>` (or shared policy + per-engineer trust — see [Open questions](#open-questions))
+1. **IAM policy** `harbor-bench-seiload-eng-<alias>` — per-engineer scoped to `s3://harbor-sei-autobake-results/bench-<alias>-*/`. Shared policies are explicitly rejected as a security risk that doesn't scale.
 2. **Pod Identity association** via `eks:CreatePodIdentityAssociation` for `(cluster=harbor, namespace=eng-<alias>, service_account=bench-seiload, role_arn=<policy-attached-role>)`
 
 Engineer's SSO role currently has admin permissions (sufficient to create the above). When SSO permissions get scoped down, the LLD revisits.
@@ -376,7 +376,7 @@ Offboarding (v1.1 or manual): mirror — `eks:DeletePodIdentityAssociation`, `ia
 ### Identity file: `~/.seictl/engineer.json`
 
 - Mode `0600`, parent dir `0700`. On read, refuse if perms loose.
-- Three fields only: `alias`, `name`, `email`.
+- Two fields only: `alias`, `name`.
 - Integrity matters: a loose-perms file on a shared workstation is a path to onboarding-as-someone-else or benching into another engineer's namespace.
 
 ### Image registry policy
@@ -411,34 +411,26 @@ Rendering: `text/template` — autobake source files use Helm-style `{{ }}`. Ren
 
 ---
 
-## Exit-code matrix
+## Exit codes
+
+Eight codes. The granular cause lives in `ErrorBody.Category` (a stable string enum) — exit codes are families, not specifics. Nothing scripts against numeric ranges; readers branch on `category`.
 
 | Code | Family | Meaning |
 |---|---|---|
 | 0 | | Success |
 | 2 | usage | Usage error |
-| 3 | not-found | Resource not found (bench list/down on absent name) |
+| 3 | not-found | Resource not found |
 | 4 | cluster | Cluster unreachable |
 | 5 | rbac | Permission denied |
-| 10 | bench | Image policy violation (registry/prefix mismatch, parse failure) |
-| 11 | bench | Image digest resolution failed |
-| 12 | bench | Input validation failed (name, size, duration) |
-| 13 | bench | Namespace policy violation (`-n` mismatch with engineer alias) |
-| 14 | bench | Apply failed |
-| 15 | bench | Chain ID collision (name already in use, alive bench) |
-| 16 | bench | Finalizer wait timed out (`bench down --wait`) |
-| 17 | bench | Template render failed |
-| 20 | onboard | Alias invalid (regex or deny-list match) |
-| 21 | onboard | Platform repo not found / not a git checkout |
-| 22 | onboard | Git working tree dirty |
-| 23 | onboard | `gh` not authenticated |
-| 24 | onboard | PR creation failed |
-| 25 | onboard | AWS IAM/Pod Identity creation failed |
-| 26 | onboard | Identity file present, alias mismatch on `--update` |
-| 41 | identity | Identity file malformed |
-| 42 | identity | Identity file missing (when required by command) |
-| 43 | identity | Kubeconfig parse error |
-| 44 | identity | Identity file perms too loose |
+| 10 | bench | Bench failure (specific cause in `error.category`) |
+| 20 | onboard | Onboard failure (specific cause in `error.category`) |
+| 40 | identity | Identity failure (specific cause in `error.category`) |
+
+`error.category` enums (initial set; adding values is non-breaking):
+
+- **bench:** `image-policy`, `image-resolution`, `validation`, `namespace-policy`, `apply-failed`, `name-collision`, `finalizer-stuck`, `template-render`
+- **onboard:** `alias-invalid`, `platform-repo-missing`, `working-tree-dirty`, `gh-unauthenticated`, `pr-create-failed`, `aws-create-failed`
+- **identity:** `malformed`, `missing`, `kubeconfig-parse`, `perms-loose`
 
 ---
 
@@ -449,9 +441,6 @@ Rendering: `text/template` — autobake source files use Helm-style `{{ }}`. Ren
 ```make
 lint-strict:
 	golangci-lint run
-
-build-kubectl-plugin: build
-	ln -sf seictl $(BUILD_DIR)/kubectl-sei
 ```
 
 ### Test patterns
@@ -464,10 +453,7 @@ build-kubectl-plugin: build
 
 ### golangci-lint additions
 
-Standard set already in seictl: `errcheck`, `govet`, `staticcheck`, `revive`, `gosec`. Add:
-
-- `forbidigo`: no `os.Exit()` outside `main.go` and `internal/clioutput`.
-- Document import groups in `.golangci.yml` matching seictl's `CLAUDE.md` convention.
+Standard set already in seictl: `errcheck`, `govet`, `staticcheck`, `revive`, `gosec`. Document import groups in `.golangci.yml` matching seictl's `CLAUDE.md` convention.
 
 ---
 
@@ -478,18 +464,8 @@ Standard set already in seictl: `errcheck`, `govet`, `staticcheck`, `revive`, `g
 3. `seictl bench up ... --apply` against a dev/harbor cluster creates all four resources, populates `appliedAt`, returns `0`. Subsequent `seictl bench list` shows the run.
 4. `seictl bench up --name X` re-run while the previous bench is still alive: idempotent (no error, returns same result), or rejects with exit `15` on name collision — confirmed behavior either way.
 5. `seictl onboard --alias bdc --no-pr --apply` against a clean platform-repo checkout creates `clusters/harbor/engineers/bdc/{kustomization,namespace,bench-seiload-sa}.yaml` and writes `~/.seictl/engineer.json`. With `--apply` and `gh` authenticated: opens a PR, captures URL in result. With AWS SDK calls: creates IAM policy and Pod Identity association.
-6. `kubectl-sei bench list` works (symlink installed by `make build-kubectl-plugin`); `kubectl sei bench list` resolves identically.
-7. `~/.seictl/engineer.json` written with mode `0600`; loose-perms file rejected with exit `44`.
-8. `seictl bench up --image <bad-registry-ref>` exits `10` without contacting ECR.
-
----
-
-## Open questions
-
-1. **IAM policy: per-engineer scoped policy vs. shared `harbor-bench-seiload-shared`.** Position A: one policy per engineer, scoped to `s3://harbor-sei-autobake-results/bench-<alias>/*`. Position B: one shared policy, `aws:ResourceTag/owner=<alias>` condition gates per-engineer write access. Both viable; A is simpler in v1, B scales better when engineer count grows.
-2. **`onboard`-generated PR auto-merge?** Engineer wants their namespace live ASAP after onboarding. Option: open PR with auto-merge label; platform team reviews if needed but default is auto-merge. Out of scope for first cut; engineer manually requests review for v1.
-3. **`bench up` and concurrent name collisions across engineers.** Chain ID `bench-<alias>-<name>` includes the alias prefix, so cross-engineer collision is impossible. Same-engineer reuse hits exit `15`. Confirmed.
-4. **Templates re-sync cadence.** When autobake's templates evolve in `sei-protocol/platform`, what triggers the seictl re-sync PR? Manual today; consider a CI nudge later.
+6. `~/.seictl/engineer.json` written with mode `0600`; loose-perms file rejected with exit `40` (category `perms-loose`).
+7. `seictl bench up --image <bad-registry-ref>` exits `10` (category `image-policy`) without contacting ECR.
 
 ---
 
