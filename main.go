@@ -49,6 +49,7 @@ var (
 			&awaitCmd,
 			&serveCmd,
 			&reportCmd,
+			&contextCmd,
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
