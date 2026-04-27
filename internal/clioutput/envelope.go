@@ -46,6 +46,7 @@ const (
 	CatMissing         = "missing"
 	CatKubeconfigParse = "kubeconfig-parse"
 	CatPermsLoose      = "perms-loose"
+	CatAWSUnavailable  = "aws-unavailable"
 )
 
 type Envelope struct {

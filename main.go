@@ -69,7 +69,15 @@ var (
 )
 
 func main() {
-	if err := seictlCmd.Run(context.Background(), os.Args); err != nil {
-		log.Fatal(err)
+	err := seictlCmd.Run(context.Background(), os.Args)
+	if err == nil {
+		return
 	}
+	// Cluster-facing verbs return cli.ExitCoder so their JSON envelope's
+	// exit code reaches the OS. Other verbs return plain errors that
+	// log.Fatal renders as exit 1 — preserved for backwards compat.
+	if coder, ok := err.(cli.ExitCoder); ok {
+		os.Exit(coder.ExitCode())
+	}
+	log.Fatal(err)
 }

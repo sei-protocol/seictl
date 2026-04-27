@@ -1,26 +1,22 @@
-// Package kube wraps kubeconfig loading + REST config construction
-// behind a single Client used by every cluster-facing seictl command.
-//
-// Slice 2 of docs/design/cluster-cli.md: only the read paths needed for
-// `seictl context`. The controller-runtime client is added in the bench
-// slice when SSA / Unstructured CRUD is actually exercised — keeping
-// this package minimal until that need lands.
+// Package kube wraps kubeconfig loading for cluster-facing seictl
+// commands. The controller-runtime client and rest.Config are added
+// in the slice that first needs them.
 package kube
 
 import (
-	"k8s.io/client-go/rest"
+	"sort"
+
 	"k8s.io/client-go/tools/clientcmd"
-	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/sei-protocol/seictl/internal/clioutput"
 )
 
 type Options struct {
-	// Kubeconfig is an explicit kubeconfig path. Empty falls back to the
-	// KUBECONFIG env var, then ~/.kube/config.
+	// Kubeconfig is an explicit kubeconfig path. Empty falls back to
+	// the KUBECONFIG env var, then ~/.kube/config.
 	Kubeconfig string
-	// Context is the kubeconfig context name to use. Empty falls back to
-	// the kubeconfig's current-context.
+	// Context is the kubeconfig context name to use. Empty falls back
+	// to the kubeconfig's current-context.
 	Context string
 	// Namespace overrides the context's namespace. Empty falls back to
 	// the context's namespace, then "default".
@@ -28,17 +24,15 @@ type Options struct {
 }
 
 type Client struct {
-	RESTConfig    *rest.Config
-	RawConfig     clientcmdapi.Config
 	ContextName   string
 	ClusterName   string
 	ClusterServer string
 	Namespace     string
 }
 
-// New resolves kubeconfig + context + namespace into a Client. Errors
-// in this layer are kubeconfig-shape problems — they map to
-// ExitIdentity / CatKubeconfigParse, not cluster reachability.
+// New resolves kubeconfig context + namespace into a Client. Errors
+// in this layer are kubeconfig-shape problems and map to ExitIdentity /
+// CatKubeconfigParse, not cluster reachability.
 func New(opts Options) (*Client, *clioutput.Error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if opts.Kubeconfig != "" {
@@ -69,8 +63,13 @@ func New(opts Options) (*Client, *clioutput.Error) {
 	}
 	kctx, ok := raw.Contexts[contextName]
 	if !ok {
+		available := make([]string, 0, len(raw.Contexts))
+		for k := range raw.Contexts {
+			available = append(available, k)
+		}
+		sort.Strings(available)
 		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatKubeconfigParse,
-			"context %q not found in kubeconfig", contextName)
+			"context %q not found in kubeconfig (available: %v)", contextName, available)
 	}
 	cluster, ok := raw.Clusters[kctx.Cluster]
 	if !ok {
@@ -86,15 +85,7 @@ func New(opts Options) (*Client, *clioutput.Error) {
 		ns = "default"
 	}
 
-	restCfg, err := cfg.ClientConfig()
-	if err != nil {
-		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatKubeconfigParse,
-			"build REST config: %v", err)
-	}
-
 	return &Client{
-		RESTConfig:    restCfg,
-		RawConfig:     raw,
 		ContextName:   contextName,
 		ClusterName:   kctx.Cluster,
 		ClusterServer: cluster.Server,

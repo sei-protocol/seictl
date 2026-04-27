@@ -3,6 +3,7 @@ package kube
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sei-protocol/seictl/internal/clioutput"
@@ -43,92 +44,85 @@ func writeFixture(t *testing.T, contents string) string {
 	return path
 }
 
-func TestNew_HappyPath(t *testing.T) {
-	path := writeFixture(t, harborKubeconfig)
-	c, err := New(Options{Kubeconfig: path})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if c.ContextName != "harbor" {
-		t.Errorf("context: got %q", c.ContextName)
-	}
-	if c.ClusterName != "harbor-eks" {
-		t.Errorf("cluster name: got %q", c.ClusterName)
-	}
-	if c.ClusterServer != "https://harbor.example.com" {
-		t.Errorf("server: got %q", c.ClusterServer)
-	}
-	if c.Namespace != "eng-bdc" {
-		t.Errorf("namespace: got %q", c.Namespace)
-	}
-	if c.RESTConfig == nil {
-		t.Errorf("REST config nil")
-	}
-}
+func TestNew(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		path := writeFixture(t, harborKubeconfig)
+		c, err := New(Options{Kubeconfig: path})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if c.ContextName != "harbor" || c.ClusterName != "harbor-eks" || c.Namespace != "eng-bdc" {
+			t.Errorf("got %+v", c)
+		}
+		if c.ClusterServer != "https://harbor.example.com" {
+			t.Errorf("server: %q", c.ClusterServer)
+		}
+	})
 
-func TestNew_ContextOverride(t *testing.T) {
-	path := writeFixture(t, harborKubeconfig)
-	c, err := New(Options{Kubeconfig: path, Context: "scratch"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if c.ContextName != "scratch" {
-		t.Errorf("context: got %q, want scratch", c.ContextName)
-	}
-	if c.Namespace != "default" {
-		t.Errorf("namespace fallback: got %q, want default", c.Namespace)
-	}
-}
+	t.Run("context override falls back to default namespace", func(t *testing.T) {
+		path := writeFixture(t, harborKubeconfig)
+		c, err := New(Options{Kubeconfig: path, Context: "scratch"})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if c.ContextName != "scratch" {
+			t.Errorf("context: %q", c.ContextName)
+		}
+		if c.Namespace != "default" {
+			t.Errorf("namespace fallback: %q", c.Namespace)
+		}
+	})
 
-func TestNew_NamespaceOverride(t *testing.T) {
-	path := writeFixture(t, harborKubeconfig)
-	c, err := New(Options{Kubeconfig: path, Namespace: "eng-other"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if c.Namespace != "eng-other" {
-		t.Errorf("namespace: got %q", c.Namespace)
-	}
-}
+	t.Run("namespace override", func(t *testing.T) {
+		path := writeFixture(t, harborKubeconfig)
+		c, err := New(Options{Kubeconfig: path, Namespace: "eng-other"})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if c.Namespace != "eng-other" {
+			t.Errorf("namespace: %q", c.Namespace)
+		}
+	})
 
-func TestNew_MissingContext(t *testing.T) {
-	path := writeFixture(t, harborKubeconfig)
-	_, err := New(Options{Kubeconfig: path, Context: "ghost"})
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if err.Category != clioutput.CatKubeconfigParse {
-		t.Errorf("category: got %q", err.Category)
-	}
-}
+	t.Run("missing context lists available", func(t *testing.T) {
+		path := writeFixture(t, harborKubeconfig)
+		_, err := New(Options{Kubeconfig: path, Context: "ghost"})
+		if err == nil {
+			t.Fatalf("expected error")
+		}
+		if err.Category != clioutput.CatKubeconfigParse {
+			t.Errorf("category: %q", err.Category)
+		}
+		if !strings.Contains(err.Message, "harbor") || !strings.Contains(err.Message, "scratch") {
+			t.Errorf("error message should list available contexts; got %q", err.Message)
+		}
+	})
 
-func TestNew_NoCurrentContext(t *testing.T) {
-	const minimal = `apiVersion: v1
+	t.Run("no current-context", func(t *testing.T) {
+		const minimal = `apiVersion: v1
 kind: Config
 contexts: []
 clusters: []
 users: []
 `
-	path := writeFixture(t, minimal)
-	_, err := New(Options{Kubeconfig: path})
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if err.Category != clioutput.CatKubeconfigParse {
-		t.Errorf("category: got %q", err.Category)
-	}
-	if err.Code != clioutput.ExitIdentity {
-		t.Errorf("code: got %d", err.Code)
-	}
-}
+		path := writeFixture(t, minimal)
+		_, err := New(Options{Kubeconfig: path})
+		if err == nil {
+			t.Fatalf("expected error")
+		}
+		if err.Category != clioutput.CatKubeconfigParse || err.Code != clioutput.ExitIdentity {
+			t.Errorf("got %+v", err)
+		}
+	})
 
-func TestNew_MalformedKubeconfig(t *testing.T) {
-	path := writeFixture(t, "not: [valid yaml")
-	_, err := New(Options{Kubeconfig: path})
-	if err == nil {
-		t.Fatalf("expected parse error")
-	}
-	if err.Category != clioutput.CatKubeconfigParse {
-		t.Errorf("category: got %q", err.Category)
-	}
+	t.Run("malformed kubeconfig", func(t *testing.T) {
+		path := writeFixture(t, "not: [valid yaml")
+		_, err := New(Options{Kubeconfig: path})
+		if err == nil {
+			t.Fatalf("expected parse error")
+		}
+		if err.Category != clioutput.CatKubeconfigParse {
+			t.Errorf("category: %q", err.Category)
+		}
+	})
 }
