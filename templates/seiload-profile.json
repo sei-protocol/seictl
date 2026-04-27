@@ -1,0 +1,30 @@
+{
+  "_provenance": "sei-protocol/platform autobake/profiles/autobake_evm_transfer.json — embedded 2026-04-27",
+  "chainId": 713714,
+  "seiChainId": "${CHAIN_ID}",
+  "endpoints": [${RPC_ENDPOINTS}],
+  "accounts": {
+    "count": 5000,
+    "newAccountRate": 0.0
+  },
+  "scenarios": [
+    {
+      "name": "EVMTransfer",
+      "weight": 1
+    }
+  ],
+  "settings": {
+    "workers": 500,
+    "tps": 0,
+    "statsInterval": "5s",
+    "bufferSize": 1000,
+    "dryRun": false,
+    "debug": false,
+    "trackReceipts": false,
+    "trackBlocks": true,
+    "trackUserLatency": false,
+    "prewarm": false,
+    "rampUp": false,
+    "reportPath": "/dev/stdout"
+  }
+}

@@ -50,6 +50,7 @@ var (
 			&serveCmd,
 			&reportCmd,
 			&contextCmd,
+			&benchCmd,
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
