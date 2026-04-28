@@ -21,8 +21,7 @@ import (
 )
 
 const (
-	benchUpResultKind = "bench.up.result"
-	benchS3Bucket     = "harbor-sei-autobake-results"
+	benchS3Bucket = "harbor-sei-autobake-results"
 
 	// Vendored seiload image. Slice 3b will resolve to a digest at apply
 	// time; v1 dry-run emits the tag for visibility, fails-closed against
@@ -156,7 +155,7 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 		DryRun:       true,
 		Manifests:    manifests,
 	}
-	if err := clioutput.Emit(out, benchUpResultKind, res); err != nil {
+	if err := clioutput.Emit(out, clioutput.KindBenchUpResult, res); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return cli.Exit("", 1)
 	}
@@ -241,7 +240,7 @@ func renderEmbedded(name string, vars map[string]string) ([]byte, *clioutput.Err
 }
 
 func failBenchUp(out io.Writer, e *clioutput.Error) error {
-	_ = clioutput.EmitError(out, benchUpResultKind, e)
+	_ = clioutput.EmitError(out, clioutput.KindBenchUpResult, e)
 	return cli.Exit("", e.Code)
 }
 

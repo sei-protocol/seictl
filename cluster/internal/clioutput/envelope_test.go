@@ -14,7 +14,7 @@ func TestEmit_Success(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Emit(&buf, "test.kind", sample{Foo: "hello", Bar: 42}); err != nil {
+	if err := Emit(&buf, "TestKind", sample{Foo: "hello", Bar: 42}); err != nil {
 		t.Fatalf("Emit returned error: %v", err)
 	}
 
@@ -22,11 +22,11 @@ func TestEmit_Success(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if env.Kind != "test.kind" {
-		t.Errorf("kind: got %q, want %q", env.Kind, "test.kind")
+	if env.Kind != "TestKind" {
+		t.Errorf("kind: got %q, want %q", env.Kind, "TestKind")
 	}
-	if env.Version != EnvelopeVersion {
-		t.Errorf("version: got %q, want %q", env.Version, EnvelopeVersion)
+	if env.APIVersion != APIVersion {
+		t.Errorf("apiVersion: got %q, want %q", env.APIVersion, APIVersion)
 	}
 	if env.Error != nil {
 		t.Errorf("error body should be nil on success, got %+v", env.Error)
@@ -43,7 +43,7 @@ func TestEmit_Success(t *testing.T) {
 func TestEmitError_Round_Trip(t *testing.T) {
 	var buf bytes.Buffer
 	cliErr := New(ExitBench, CatImagePolicy, "image registry not allowed").WithDetail("got: docker.io/foo")
-	if err := EmitError(&buf, "bench.up.result", cliErr); err != nil {
+	if err := EmitError(&buf, KindBenchUpResult, cliErr); err != nil {
 		t.Fatalf("EmitError returned error: %v", err)
 	}
 
@@ -51,8 +51,11 @@ func TestEmitError_Round_Trip(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if env.Kind != "bench.up.result" {
+	if env.Kind != KindBenchUpResult {
 		t.Errorf("kind: got %q", env.Kind)
+	}
+	if env.APIVersion != APIVersion {
+		t.Errorf("apiVersion: got %q", env.APIVersion)
 	}
 	if env.Error == nil {
 		t.Fatalf("error body should be populated")
@@ -104,6 +107,29 @@ func TestNewf(t *testing.T) {
 	}
 	if e.Code != ExitOnboard {
 		t.Errorf("code: got %d", e.Code)
+	}
+}
+
+func TestEnvelopeContract_Stable(t *testing.T) {
+	// APIVersion and Kind constants are part of the public contract
+	// for the sei-platform-engineer skill / future MCP layer. Pin them
+	// so accidental renames fail loudly. Bumping is a breaking change
+	// — ship `seictl.sei.io/v2` alongside, don't mutate v1.
+	if APIVersion != "seictl.sei.io/v1" {
+		t.Errorf("APIVersion: got %q, want %q", APIVersion, "seictl.sei.io/v1")
+	}
+	want := map[string]string{
+		"KindContextResult": "ContextResult",
+		"KindBenchUpResult": "BenchUpResult",
+	}
+	got := map[string]string{
+		"KindContextResult": KindContextResult,
+		"KindBenchUpResult": KindBenchUpResult,
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: got %q, want %q", k, got[k], v)
+		}
 	}
 }
 

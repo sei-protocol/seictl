@@ -2,8 +2,16 @@
 // seictl subcommands and the exit-code / category enums that are part of
 // the public CLI contract.
 //
-// The shape here is the v2 MCP tool contract per docs/design/cluster-cli.md
-// — bumping Version is a breaking change for the sei-platform-engineer skill.
+// The envelope mirrors Kubernetes `metav1.TypeMeta` (apiVersion + kind)
+// so the Sei platform engineer audience reads results in the same shape
+// they read CRDs. The same shape becomes the v2 MCP tool contract.
+//
+// Two-way doors:
+//   - Adding new kinds → additive, never breaks consumers.
+//   - Adding new fields to a kind → JSON consumers ignore unknown fields.
+//   - Adding new error categories → already non-breaking.
+//   - Breaking schema change → ship `seictl.sei.io/v2` alongside v1
+//     (the standard K8s API-versioning migration).
 package clioutput
 
 import (
@@ -12,7 +20,18 @@ import (
 	"io"
 )
 
-const EnvelopeVersion = "v1"
+// APIVersion is the stable group/version string emitted on every envelope.
+// Bumping the major version is a breaking change for the
+// sei-platform-engineer skill; do it by adding `seictl.sei.io/v2`
+// alongside, not by mutating v1.
+const APIVersion = "seictl.sei.io/v1"
+
+// Kinds emitted by cluster-facing verbs. New verbs add a constant here
+// rather than open-coding the string at the call site.
+const (
+	KindContextResult = "ContextResult"
+	KindBenchUpResult = "BenchUpResult"
+)
 
 const (
 	ExitSuccess  = 0
@@ -50,10 +69,10 @@ const (
 )
 
 type Envelope struct {
-	Kind    string          `json:"kind"`
-	Version string          `json:"version"`
-	Data    json.RawMessage `json:"data,omitempty"`
-	Error   *ErrorBody      `json:"error,omitempty"`
+	APIVersion string          `json:"apiVersion"`
+	Kind       string          `json:"kind"`
+	Data       json.RawMessage `json:"data,omitempty"`
+	Error      *ErrorBody      `json:"error,omitempty"`
 }
 
 type ErrorBody struct {
@@ -99,7 +118,7 @@ func Emit(w io.Writer, kind string, data any) error {
 	if err != nil {
 		return fmt.Errorf("marshalling %s data: %w", kind, err)
 	}
-	env := Envelope{Kind: kind, Version: EnvelopeVersion, Data: raw}
+	env := Envelope{APIVersion: APIVersion, Kind: kind, Data: raw}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(env)
@@ -109,8 +128,8 @@ func Emit(w io.Writer, kind string, data any) error {
 // callers should not propagate those back to the user.
 func EmitError(w io.Writer, kind string, e *Error) error {
 	env := Envelope{
-		Kind:    kind,
-		Version: EnvelopeVersion,
+		APIVersion: APIVersion,
+		Kind:       kind,
 		Error: &ErrorBody{
 			Code:     e.Code,
 			Category: e.Category,

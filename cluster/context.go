@@ -14,8 +14,6 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/kube"
 )
 
-const contextResultKind = "context.result"
-
 type contextResult struct {
 	KubeContext     string             `json:"kubeContext"`
 	Cluster         string             `json:"cluster"`
@@ -54,7 +52,7 @@ var ContextCmd = cli.Command{
 func runContext(ctx context.Context, kubeconfig, kubeContext string, out io.Writer, deps contextDeps) error {
 	kc, kerr := kube.New(kube.Options{Kubeconfig: kubeconfig, Context: kubeContext})
 	if kerr != nil {
-		_ = clioutput.EmitError(out, contextResultKind, kerr)
+		_ = clioutput.EmitError(out, clioutput.KindContextResult, kerr)
 		return cli.Exit("", kerr.Code)
 	}
 
@@ -76,7 +74,7 @@ func runContext(ctx context.Context, kubeconfig, kubeContext string, out io.Writ
 	if path, err := deps.identityPath(); err == nil {
 		eng, idErr := identity.Read(path)
 		if idErr != nil && idErr.Category != clioutput.CatMissing {
-			_ = clioutput.EmitError(out, contextResultKind, idErr)
+			_ = clioutput.EmitError(out, clioutput.KindContextResult, idErr)
 			return cli.Exit("", idErr.Code)
 		}
 		if eng != nil {
@@ -84,7 +82,7 @@ func runContext(ctx context.Context, kubeconfig, kubeContext string, out io.Writ
 		}
 	}
 
-	if err := clioutput.Emit(out, contextResultKind, res); err != nil {
+	if err := clioutput.Emit(out, clioutput.KindContextResult, res); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return cli.Exit("", 1)
 	}

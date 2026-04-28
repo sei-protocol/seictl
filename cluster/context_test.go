@@ -67,8 +67,8 @@ func TestRunContext(t *testing.T) {
 		if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		if env.Kind != "context.result" || env.Version != "v1" {
-			t.Errorf("envelope: kind=%q version=%q", env.Kind, env.Version)
+		if env.Kind != clioutput.KindContextResult || env.APIVersion != clioutput.APIVersion {
+			t.Errorf("envelope: kind=%q apiVersion=%q", env.Kind, env.APIVersion)
 		}
 		var data contextResult
 		if err := json.Unmarshal(env.Data, &data); err != nil {
