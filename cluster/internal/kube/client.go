@@ -1,6 +1,5 @@
 // Package kube wraps kubeconfig loading for cluster-facing seictl
-// commands. The controller-runtime client and rest.Config are added
-// in the slice that first needs them.
+// commands.
 package kube
 
 import (

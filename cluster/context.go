@@ -25,8 +25,7 @@ type contextResult struct {
 	Engineer        *identity.Engineer `json:"engineer,omitempty"`
 }
 
-// contextDeps lets tests stub the AWS and identity reads. Production
-// wiring uses aws.GetCaller and identity.Read against the user's home dir.
+// contextDeps lets tests stub the AWS and identity reads.
 type contextDeps struct {
 	getCaller    func(context.Context) (*aws.Caller, *clioutput.Error)
 	identityPath func() (string, error)

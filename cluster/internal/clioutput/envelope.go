@@ -21,9 +21,8 @@ import (
 )
 
 // APIVersion is the stable group/version string emitted on every envelope.
-// Bumping the major version is a breaking change for the
-// sei-platform-engineer skill; do it by adding `seictl.sei.io/v2`
-// alongside, not by mutating v1.
+// Breaking changes ship as `seictl.sei.io/v2` alongside v1, not as
+// mutations to v1.
 const APIVersion = "seictl.sei.io/v1"
 
 // Kinds emitted by cluster-facing verbs. New verbs add a constant here

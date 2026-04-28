@@ -23,9 +23,8 @@ import (
 const (
 	benchS3Bucket = "harbor-sei-autobake-results"
 
-	// Vendored seiload image. Slice 3b will resolve to a digest at apply
-	// time; v1 dry-run emits the tag for visibility, fails-closed against
-	// non-ECR registries via internal/validate.Image.
+	// defaultSeiloadImage is operator-vendored, not engineer input, so
+	// it bypasses the registry policy applied to --image.
 	defaultSeiloadImage = "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/seiload:latest"
 )
 
@@ -77,7 +76,7 @@ var BenchCmd = cli.Command{
 	Commands: []*cli.Command{
 		{
 			Name:  "up",
-			Usage: "Render (slice 3a) or apply (slice 3b) a benchmark workload",
+			Usage: "Render or apply a benchmark workload",
 			Flags: []cli.Flag{
 				&cli.StringFlag{Name: "image", Required: true, Usage: "ECR image ref to bench"},
 				&cli.StringFlag{Name: "name", Required: true, Usage: "Bench name (forms part of chain-id)"},
@@ -171,9 +170,8 @@ func loadEngineer(pathFn func() (string, error)) (*identity.Engineer, *clioutput
 	return identity.Read(path)
 }
 
-// renderManifests builds the four-document YAML stream the bench
-// produces (validator SND, RPC SND, seiload Job, profile ConfigMap)
-// and extracts a ManifestRef per document.
+// renderManifests produces the four-doc YAML bundle (validator SND,
+// RPC SND, seiload Job, profile ConfigMap) and a ManifestRef list.
 func renderManifests(alias, name, namespace, chainID, seidImage, digestShort string,
 	validators, rpcCount, durationMin int) ([]render.ManifestRef, *clioutput.Error) {
 	vars := map[string]string{
@@ -244,8 +242,8 @@ func failBenchUp(out io.Writer, e *clioutput.Error) error {
 	return cli.Exit("", e.Code)
 }
 
-// digestPinned strips any tag or digest from ref and re-pins to the
-// given digest, producing host/repo@sha256:....
+// digestPinned re-pins ref to the given digest, replacing any prior
+// tag or digest. Result form: host/repo@sha256:...
 func digestPinned(ref, digest string) string {
 	slash := strings.IndexByte(ref, '/')
 	host := ref[:slash]
@@ -258,8 +256,8 @@ func digestPinned(ref, digest string) string {
 	return host + "/" + rest + "@" + digest
 }
 
-// shortDigest returns the first 12 hex characters of a sha256 digest,
-// matching the autobake S3 path partition convention.
+// shortDigest returns the first 12 hex chars of a sha256 digest;
+// matches the autobake S3 path partition.
 func shortDigest(d string) string {
 	i := strings.IndexByte(d, ':')
 	if i < 0 || len(d) < i+1+12 {
@@ -268,9 +266,8 @@ func shortDigest(d string) string {
 	return d[i+1 : i+1+12]
 }
 
-// rpcEndpointsJSON renders the JSON-array body for the seiload profile's
-// `endpoints` field. RPC service DNS resolves at apply time; dry-run
-// emits the predictable cluster-local form.
+// rpcEndpointsJSON formats the seiload profile's `endpoints` array
+// using the RPC SND's cluster-local service DNS.
 func rpcEndpointsJSON(chainID, namespace string, rpcCount int) string {
 	var sb strings.Builder
 	for i := 0; i < rpcCount; i++ {

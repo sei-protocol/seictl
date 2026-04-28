@@ -14,13 +14,11 @@ import (
 )
 
 // ResolveDigest converts an ECR image reference (registry/repo:tag) into
-// its sha256 digest. References already pinned to a digest are returned
-// as-is without an ECR round-trip.
+// its sha256 digest. Already-digested refs are returned as-is without an
+// ECR round-trip.
 //
-// The registry hostname is parsed for AWS account + region — the
-// registry policy in internal/validate constrains it to a single
-// account, but the hostname remains the source of truth so a future
-// per-engineer-ECR rollout doesn't require touching this code.
+// Account + region come from the hostname rather than constants so the
+// resolver works for any ECR registry the validate-layer policy admits.
 func ResolveDigest(ctx context.Context, ref string) (string, *clioutput.Error) {
 	host, repo, tag, digest, parseErr := parseImageRef(ref)
 	if parseErr != nil {

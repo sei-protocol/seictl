@@ -108,9 +108,8 @@ func Namespace(ns, alias string) *clioutput.Error {
 	return nil
 }
 
-// Image enforces the v1 registry policy: ECR-only, sei/* prefix, must
-// carry a tag or a digest. Digest resolution is handled later in
-// internal/aws — this is a pure shape and policy gate.
+// Image enforces the registry policy (ECR-only, sei/* prefix, tag or
+// digest required). Digest resolution lives in internal/aws.
 func Image(ref string) *clioutput.Error {
 	if ref == "" {
 		return clioutput.New(clioutput.ExitBench, clioutput.CatImagePolicy,
