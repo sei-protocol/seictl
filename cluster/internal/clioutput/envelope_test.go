@@ -115,12 +115,16 @@ func TestEnvelopeContract_Stable(t *testing.T) {
 		t.Errorf("APIVersion: got %q, want %q", APIVersion, "seictl.sei.io/v1")
 	}
 	want := map[string]string{
-		"KindContextResult": "ContextResult",
-		"KindBenchUpResult": "BenchUpResult",
+		"KindContextResult":   "ContextResult",
+		"KindBenchUpResult":   "BenchUpResult",
+		"KindBenchDownResult": "BenchDownResult",
+		"KindBenchListResult": "BenchListResult",
 	}
 	got := map[string]string{
-		"KindContextResult": KindContextResult,
-		"KindBenchUpResult": KindBenchUpResult,
+		"KindContextResult":   KindContextResult,
+		"KindBenchUpResult":   KindBenchUpResult,
+		"KindBenchDownResult": KindBenchDownResult,
+		"KindBenchListResult": KindBenchListResult,
 	}
 	for k, v := range want {
 		if got[k] != v {

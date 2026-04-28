@@ -99,6 +99,8 @@ var BenchCmd = cli.Command{
 	Name:  "bench",
 	Usage: "Manage benchmark workloads on the harbor cluster",
 	Commands: []*cli.Command{
+		benchDownCmd,
+		benchListCmd,
 		{
 			Name:  "up",
 			Usage: "Render or apply a benchmark workload",

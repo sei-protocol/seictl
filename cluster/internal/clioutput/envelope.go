@@ -18,8 +18,10 @@ const APIVersion = "seictl.sei.io/v1"
 // Kinds emitted by cluster-facing verbs. New verbs add a constant here
 // rather than open-coding the string at the call site.
 const (
-	KindContextResult = "ContextResult"
-	KindBenchUpResult = "BenchUpResult"
+	KindContextResult   = "ContextResult"
+	KindBenchUpResult   = "BenchUpResult"
+	KindBenchDownResult = "BenchDownResult"
+	KindBenchListResult = "BenchListResult"
 )
 
 const (
