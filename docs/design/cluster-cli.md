@@ -302,19 +302,19 @@ Field access by string keys (`unstructured.NestedString(snd.Object, "status", "p
 
 ### Apply strategy: server-side apply
 
-`bench up` uses server-side apply with field manager `seictl-bench`:
+`bench up --apply` uses server-side apply with field manager `seictl-bench` and **no force-ownership**:
 
 ```go
-patch := client.Apply
-opts := []client.PatchOption{client.FieldOwner("seictl-bench"), client.ForceOwnership}
-for _, obj := range rendered { kc.CR.Patch(ctx, obj, patch, opts...) }
+ri.Patch(ctx, obj.GetName(), types.ApplyPatchType, body, metav1.PatchOptions{
+    FieldManager: "seictl-bench",
+})
 ```
 
 Why SSA:
 
 - Idempotent re-runs of `bench up --name foo` — re-applying converges to the same state, not a Create-conflict scramble.
 - Field-manager segregation: controller writes `status.*` with its own field manager; SSA naturally segregates so seictl never fights status writes.
-- Conflict detection on duplicate names across engineers (409 with the conflicting field manager listed).
+- Conflict detection on unexpected writers — 409 with the conflicting field manager listed. With Force off, an outside writer (kubectl, a stale tool, a manager-name typo) surfaces loudly instead of being silently overwritten. If a legitimate ops-rescue path ever needs to take ownership, gate Force behind an explicit `--force-ownership` flag rather than defaulting it on.
 
 `--apply` semantics:
 

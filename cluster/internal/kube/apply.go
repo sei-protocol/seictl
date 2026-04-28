@@ -16,7 +16,6 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/restmapper"
-	"k8s.io/utils/ptr"
 )
 
 // ApplyResult is what Apply emits per input document. Action distinguishes
@@ -157,14 +156,14 @@ func createOrApply(ctx context.Context, ri dynamic.ResourceInterface, obj *unstr
 	if err != nil {
 		return nil, raced, err
 	}
-	// Force ownership per LLD §Apply strategy. With field-manager
-	// segregation (controller owns status, seictl-bench owns spec),
-	// Force should never trigger in practice — if it does, an unexpected
-	// spec writer exists and we've silently stolen ownership. Revisit
-	// when that conflict surfaces.
+	// Force is intentionally off. With proper field-manager segregation
+	// (controller owns .status, seictl-bench owns .spec), no SSA
+	// conflict should arise in steady state. A 409 here means an
+	// unexpected writer holds a field we're claiming — surface it
+	// loudly rather than silently steal. A `--force-ownership` flag
+	// can be added when a legitimate ops-rescue path needs it.
 	applied, err = ri.Patch(ctx, obj.GetName(), types.ApplyPatchType, body, metav1.PatchOptions{
 		FieldManager: fieldOwner,
-		Force:        ptr.To(true),
 	})
 	return applied, raced, err
 }
