@@ -15,10 +15,16 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/aws"
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/kube"
 	"github.com/sei-protocol/seictl/cluster/internal/render"
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
 	"github.com/sei-protocol/seictl/cluster/templates"
 )
+
+// benchFieldOwner is the SSA field manager that owns every bench-up
+// manifest. One-way door per LLD §Migration: changing this string
+// abandons ownership of every previously-applied object.
+const benchFieldOwner = "seictl-bench"
 
 const (
 	// benchS3Bucket and benchJob mirror the platform's shared
@@ -58,20 +64,37 @@ type benchUpResult struct {
 }
 
 type benchUpInput struct {
-	Image    string
-	Name     string
-	Size     string
-	Duration int
+	Image      string
+	Name       string
+	Size       string
+	Duration   int
+	Apply      bool
+	Kubeconfig string
+	Context    string
 }
 
 type benchDeps struct {
 	resolveDigest func(context.Context, string) (string, *clioutput.Error)
 	identityPath  func() (string, error)
+	apply         func(ctx context.Context, opts kube.Options, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
 }
 
 var defaultBenchDeps = benchDeps{
 	resolveDigest: aws.ResolveDigest,
 	identityPath:  identity.DefaultPath,
+	apply:         applyToCluster,
+}
+
+func applyToCluster(ctx context.Context, opts kube.Options, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+	kc, kerr := kube.New(opts)
+	if kerr != nil {
+		return nil, kerr
+	}
+	results, err := kc.Apply(ctx, fieldOwner, namespace, docs)
+	if err != nil {
+		return nil, clioutput.Newf(clioutput.ExitBench, clioutput.CatApplyFailed, "%v", err)
+	}
+	return results, nil
 }
 
 var BenchCmd = cli.Command{
@@ -81,18 +104,22 @@ var BenchCmd = cli.Command{
 		{
 			Name:  "up",
 			Usage: "Render or apply a benchmark workload",
-			Flags: []cli.Flag{
+			Flags: append(kubeconfigFlags(),
 				&cli.StringFlag{Name: "image", Required: true, Usage: "ECR image ref to bench"},
 				&cli.StringFlag{Name: "name", Required: true, Usage: "Bench name (forms part of chain-id)"},
 				&cli.StringFlag{Name: "size", Value: "s", Usage: "s|m|l"},
 				&cli.IntFlag{Name: "duration", Value: 30, Usage: "Bench duration in minutes (1-240)"},
-			},
+				&cli.BoolFlag{Name: "apply", Usage: "Server-side apply the rendered manifests; default is dry-run"},
+			),
 			Action: func(ctx context.Context, command *cli.Command) error {
 				return runBenchUp(ctx, benchUpInput{
-					Image:    command.String("image"),
-					Name:     command.String("name"),
-					Size:     command.String("size"),
-					Duration: int(command.Int("duration")),
+					Image:      command.String("image"),
+					Name:       command.String("name"),
+					Size:       command.String("size"),
+					Duration:   int(command.Int("duration")),
+					Apply:      command.Bool("apply"),
+					Kubeconfig: command.String("kubeconfig"),
+					Context:    command.String("context"),
 				}, os.Stdout, defaultBenchDeps)
 			},
 		},
@@ -138,7 +165,7 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 	s3URI := fmt.Sprintf("s3://%s/%s/%s/%s/report.log", benchS3Bucket, namespace, benchJob, in.Name)
 	sizeProfile := benchSizes[in.Size]
 
-	manifests, err := renderManifests(eng.Alias, in.Name, namespace, chainID, seidImage,
+	docs, manifests, err := renderManifests(eng.Alias, in.Name, namespace, chainID, seidImage,
 		digestShort, sizeProfile.Validators, sizeProfile.RPC, in.Duration)
 	if err != nil {
 		return failBenchUp(out, err)
@@ -155,14 +182,43 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 		RPCNodes:     sizeProfile.RPC,
 		Duration:     fmt.Sprintf("%dm", in.Duration),
 		ResultsS3URI: s3URI,
-		DryRun:       true,
+		DryRun:       !in.Apply,
 		Manifests:    manifests,
 	}
+
+	if in.Apply {
+		applyResults, applyErr := deps.apply(ctx, kube.Options{
+			Kubeconfig: in.Kubeconfig,
+			Context:    in.Context,
+		}, benchFieldOwner, namespace, docs)
+		if applyErr != nil {
+			return failBenchUp(out, applyErr)
+		}
+		res.Manifests = mergeApplyResults(manifests, applyResults)
+		now := time.Now().UTC()
+		res.AppliedAt = &now
+	}
+
 	if err := clioutput.Emit(out, clioutput.KindBenchUpResult, res); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return cli.Exit("", 1)
 	}
 	return nil
+}
+
+// mergeApplyResults overlays the per-doc Action returned by SSA onto
+// the rendered manifest list, keeping order. If counts diverge the
+// rendered placeholder is preserved (defensive — should never happen
+// in normal flow).
+func mergeApplyResults(rendered []render.ManifestRef, applied []kube.ApplyResult) []render.ManifestRef {
+	out := make([]render.ManifestRef, len(rendered))
+	for i, ref := range rendered {
+		out[i] = ref
+		if i < len(applied) {
+			out[i].Action = applied[i].Action
+		}
+	}
+	return out
 }
 
 func loadEngineer(pathFn func() (string, error)) (*identity.Engineer, *clioutput.Error) {
@@ -175,9 +231,10 @@ func loadEngineer(pathFn func() (string, error)) (*identity.Engineer, *clioutput
 }
 
 // renderManifests produces the four-doc YAML bundle (validator SND,
-// RPC SND, seiload Job, profile ConfigMap) and a ManifestRef list.
+// RPC SND, seiload Job, profile ConfigMap) plus a parallel ManifestRef
+// list. docs[i] corresponds to refs[i].
 func renderManifests(alias, name, namespace, chainID, seidImage, digestShort string,
-	validators, rpcCount, durationMin int) ([]render.ManifestRef, *clioutput.Error) {
+	validators, rpcCount, durationMin int) ([][]byte, []render.ManifestRef, *clioutput.Error) {
 	vars := map[string]string{
 		"CHAIN_ID":             chainID,
 		"NAMESPACE":            namespace,
@@ -193,11 +250,11 @@ func renderManifests(alias, name, namespace, chainID, seidImage, digestShort str
 
 	sndYAML, e := renderEmbedded("snd.yaml", vars)
 	if e != nil {
-		return nil, e
+		return nil, nil, e
 	}
 	jobYAML, e := renderEmbedded("seiload-job.yaml", vars)
 	if e != nil {
-		return nil, e
+		return nil, nil, e
 	}
 
 	profileBody, e := renderEmbedded("seiload-profile.json", map[string]string{
@@ -205,7 +262,7 @@ func renderManifests(alias, name, namespace, chainID, seidImage, digestShort str
 		"RPC_ENDPOINTS": rpcEndpointsJSON(chainID, namespace, rpcCount),
 	})
 	if e != nil {
-		return nil, e
+		return nil, nil, e
 	}
 
 	cmVars := make(map[string]string, len(vars)+1)
@@ -215,21 +272,25 @@ func renderManifests(alias, name, namespace, chainID, seidImage, digestShort str
 	cmVars["PROFILE_BODY_INDENTED"] = render.Indent(strings.TrimRight(string(profileBody), "\n"), "    ")
 	cmYAML, e := renderEmbedded("profile-cm.yaml", cmVars)
 	if e != nil {
-		return nil, e
+		return nil, nil, e
 	}
 
-	stream := bytes.Join([][]byte{sndYAML, jobYAML, cmYAML}, []byte("\n---\n"))
-	var refs []render.ManifestRef
-	for _, doc := range render.SplitYAML(stream) {
+	// Order: dependencies first. The Job mounts the seiload profile
+	// ConfigMap; applying CM before Job avoids transient
+	// CreateContainerConfigError events on the Job's pods.
+	stream := bytes.Join([][]byte{cmYAML, sndYAML, jobYAML}, []byte("\n---\n"))
+	docs := render.SplitYAML(stream)
+	refs := make([]render.ManifestRef, 0, len(docs))
+	for _, doc := range docs {
 		ref, err := render.ExtractRef(doc)
 		if err != nil {
-			return nil, clioutput.Newf(clioutput.ExitBench, clioutput.CatTemplateRender,
+			return nil, nil, clioutput.Newf(clioutput.ExitBench, clioutput.CatTemplateRender,
 				"extract manifest ref: %v", err)
 		}
 		ref.Action = "create"
 		refs = append(refs, ref)
 	}
-	return refs, nil
+	return docs, refs, nil
 }
 
 func renderEmbedded(name string, vars map[string]string) ([]byte, *clioutput.Error) {
