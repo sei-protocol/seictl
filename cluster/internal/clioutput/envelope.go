@@ -1,17 +1,7 @@
 // Package clioutput defines the JSON output envelope for cluster-facing
 // seictl subcommands and the exit-code / category enums that are part of
-// the public CLI contract.
-//
-// The envelope mirrors Kubernetes `metav1.TypeMeta` (apiVersion + kind)
-// so the Sei platform engineer audience reads results in the same shape
-// they read CRDs. The same shape becomes the v2 MCP tool contract.
-//
-// Two-way doors:
-//   - Adding new kinds → additive, never breaks consumers.
-//   - Adding new fields to a kind → JSON consumers ignore unknown fields.
-//   - Adding new error categories → already non-breaking.
-//   - Breaking schema change → ship `seictl.sei.io/v2` alongside v1
-//     (the standard K8s API-versioning migration).
+// the public CLI contract. The envelope mirrors Kubernetes
+// `metav1.TypeMeta` (apiVersion + kind).
 package clioutput
 
 import (
