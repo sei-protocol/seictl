@@ -119,12 +119,14 @@ func TestEnvelopeContract_Stable(t *testing.T) {
 		"KindBenchUpResult":   "BenchUpResult",
 		"KindBenchDownResult": "BenchDownResult",
 		"KindBenchListResult": "BenchListResult",
+		"KindOnboardResult":   "OnboardResult",
 	}
 	got := map[string]string{
 		"KindContextResult":   KindContextResult,
 		"KindBenchUpResult":   KindBenchUpResult,
 		"KindBenchDownResult": KindBenchDownResult,
 		"KindBenchListResult": KindBenchListResult,
+		"KindOnboardResult":   KindOnboardResult,
 	}
 	for k, v := range want {
 		if got[k] != v {

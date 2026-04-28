@@ -53,6 +53,7 @@ var (
 			&reportCmd,
 			&cluster.ContextCmd,
 			&cluster.BenchCmd,
+			&cluster.OnboardCmd,
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
