@@ -215,7 +215,7 @@ Sizes:
 
 Chain ID convention: `bench-<alias>-<name>` (engineer benchmarks); RPC SND is `bench-<alias>-<name>-rpc`. Distinguishes from autobake's nightly `autobake-<run-id>`.
 
-S3 results URI: `s3://harbor-sei-autobake-results/<chain-id>/<image-sha-12>/<chain-id>/report.log`. Same bucket as nightly autobake; chain-ID prefix partitions.
+S3 results URI: `s3://harbor-validation-results/<namespace>/<job>/<run>/report.log`. Shared bucket per the platform's validation-results schema; namespace prefix is the per-engineer IAM scope. For engineer benches the segments resolve to `eng-<alias>/evm-transfer/<name>/`.
 
 ### `seictl bench down`
 
@@ -366,7 +366,7 @@ Single source of truth in `internal/validate/`. Commands call `validate.Alias(s)
 
 `seictl onboard --apply` creates resources directly via AWS SDK:
 
-1. **IAM policy** `harbor-bench-seiload-eng-<alias>` — per-engineer scoped to `s3://harbor-sei-autobake-results/bench-<alias>-*/`. Shared policies are explicitly rejected as a security risk that doesn't scale.
+1. **IAM policy** `harbor-bench-seiload-eng-<alias>` — per-engineer scoped to the shared validation-results bucket under the engineer's namespace prefix: `s3:ListBucket` with `s3:prefix=["eng-<alias>/*"]` and `s3:PutObject` on `arn:aws:s3:::harbor-validation-results/eng-<alias>/*`. Mirrors the platform's nightly policy (`harbor-nightly-seiload`); shared policies are explicitly rejected as a security risk that doesn't scale.
 2. **Pod Identity association** via `eks:CreatePodIdentityAssociation` for `(cluster=harbor, namespace=eng-<alias>, service_account=bench-seiload, role_arn=<policy-attached-role>)`
 
 Engineer's SSO role currently has admin permissions (sufficient to create the above). When SSO permissions get scoped down, the LLD revisits.
