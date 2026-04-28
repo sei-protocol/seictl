@@ -1,4 +1,4 @@
-package main
+package cluster
 
 import (
 	"bytes"
@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sei-protocol/seictl/internal/clioutput"
-	"github.com/sei-protocol/seictl/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/identity"
 )
 
 const benchTestDigest = "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd"

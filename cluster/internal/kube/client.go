@@ -8,7 +8,7 @@ import (
 
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/sei-protocol/seictl/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
 
 type Options struct {

@@ -10,7 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 	"github.com/aws/aws-sdk-go-v2/service/ecr/types"
 
-	"github.com/sei-protocol/seictl/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
 
 // ResolveDigest converts an ECR image reference (registry/repo:tag) into

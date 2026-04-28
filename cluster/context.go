@@ -1,4 +1,4 @@
-package main
+package cluster
 
 import (
 	"context"
@@ -8,10 +8,10 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/sei-protocol/seictl/internal/aws"
-	"github.com/sei-protocol/seictl/internal/clioutput"
-	"github.com/sei-protocol/seictl/internal/identity"
-	"github.com/sei-protocol/seictl/internal/kube"
+	"github.com/sei-protocol/seictl/cluster/internal/aws"
+	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/kube"
 )
 
 const contextResultKind = "context.result"
@@ -39,7 +39,7 @@ var defaultContextDeps = contextDeps{
 	identityPath: identity.DefaultPath,
 }
 
-var contextCmd = cli.Command{
+var ContextCmd = cli.Command{
 	Name:  "context",
 	Usage: "Print cluster + identity ground truth as a JSON envelope",
 	Flags: []cli.Flag{

@@ -4,6 +4,9 @@ Dual-purpose tool: CLI for Sei node operators and HTTP sidecar server for the se
 
 ## Architecture
 
+`seictl` carries two distinct surfaces today:
+
+**Node-operator surface** (the original):
 - **CLI commands**: `config patch`, `genesis patch`, `patch`, `serve`, `await` (top-level files: `config.go`, `genesis.go`, `patch.go`, `serve.go`, `await.go`)
 - **Sidecar server**: `sidecar/server/` — HTTP API on `127.0.0.1:7777`
 - **Task engine**: `sidecar/engine/` — concurrent task executor + cron scheduler
@@ -11,6 +14,12 @@ Dual-purpose tool: CLI for Sei node operators and HTTP sidecar server for the se
 - **Generated client**: `sidecar/client/` — OpenAPI-generated HTTP client for the sidecar API, consumed by sei-k8s-controller
 - **OpenAPI spec**: `sidecar/api/openapi.yaml` — source of truth for the sidecar HTTP contract
 - **Internal**: `internal/patch/` — TOML/JSON merge-patch logic
+
+**Engineer-harness surface** (`cluster/`):
+- **Cluster verbs**: `cluster/{context,bench,…}.go` export `cli.Command` vars registered by `main.go`. New cluster-facing verbs go here.
+- **Quarantined internals**: `cluster/internal/{clioutput,identity,validate,kube,aws,render}/` are only importable from `cluster/...`.
+- **Templates**: `cluster/templates/` — vendored autobake YAML/JSON.
+- **Why quarantined**: the workload abstraction (benchmarks, stress tests, integration tests) is still emerging; `cluster/` is the unit that splits into its own binary when it crystallizes. See `cluster/README.md` for the contract.
 
 ## Code Standards
 

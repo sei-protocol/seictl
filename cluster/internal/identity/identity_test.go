@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sei-protocol/seictl/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
 
 func TestWrite_RoundTrip(t *testing.T) {

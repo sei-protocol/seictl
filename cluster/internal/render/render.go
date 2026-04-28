@@ -17,7 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/sei-protocol/seictl/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
 
 // Render substitutes ${VAR} occurrences in tmpl with values from vars.

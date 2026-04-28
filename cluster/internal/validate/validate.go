@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/sei-protocol/seictl/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
 
 const (

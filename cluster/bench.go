@@ -1,4 +1,4 @@
-package main
+package cluster
 
 import (
 	"bytes"
@@ -12,12 +12,12 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/sei-protocol/seictl/internal/aws"
-	"github.com/sei-protocol/seictl/internal/clioutput"
-	"github.com/sei-protocol/seictl/internal/identity"
-	"github.com/sei-protocol/seictl/internal/render"
-	"github.com/sei-protocol/seictl/internal/validate"
-	"github.com/sei-protocol/seictl/templates"
+	"github.com/sei-protocol/seictl/cluster/internal/aws"
+	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/render"
+	"github.com/sei-protocol/seictl/cluster/internal/validate"
+	"github.com/sei-protocol/seictl/cluster/templates"
 )
 
 const (
@@ -72,7 +72,7 @@ var defaultBenchDeps = benchDeps{
 	identityPath:  identity.DefaultPath,
 }
 
-var benchCmd = cli.Command{
+var BenchCmd = cli.Command{
 	Name:  "bench",
 	Usage: "Manage benchmark workloads on the harbor cluster",
 	Commands: []*cli.Command{
