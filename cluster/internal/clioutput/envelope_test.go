@@ -111,10 +111,6 @@ func TestNewf(t *testing.T) {
 }
 
 func TestEnvelopeContract_Stable(t *testing.T) {
-	// APIVersion and Kind constants are part of the public contract
-	// for the sei-platform-engineer skill / future MCP layer. Pin them
-	// so accidental renames fail loudly. Bumping is a breaking change
-	// — ship `seictl.sei.io/v2` alongside, don't mutate v1.
 	if APIVersion != "seictl.sei.io/v1" {
 		t.Errorf("APIVersion: got %q, want %q", APIVersion, "seictl.sei.io/v1")
 	}
