@@ -1,4 +1,4 @@
-FROM docker.io/golang:1.25 as BUILD
+FROM docker.io/golang:1.26 as BUILD
 
 WORKDIR /go/src/seictl
 
