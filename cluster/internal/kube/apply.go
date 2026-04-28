@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -72,7 +73,7 @@ func (c *Client) Apply(ctx context.Context, fieldOwner, namespace string, docs [
 		return nil
 	})
 	if visitErr != nil {
-		return nil, visitErr
+		return nil, wrapMappingErr(visitErr)
 	}
 	return results, nil
 }
@@ -147,7 +148,10 @@ func (c *Client) requireNamespace(ctx context.Context, namespace string) error {
 }
 
 func wrapMappingErr(err error) error {
-	if meta.IsNoMatchError(err) {
+	// `meta.IsNoMatchError` only matches the bare type; Builder wraps,
+	// so substring-match on the "no matches for kind" sentinel that
+	// every NoKindMatchError carries.
+	if err != nil && strings.Contains(err.Error(), "no matches for kind") {
 		return fmt.Errorf("kind not installed in this cluster (CRD missing); contact the platform team: %w", err)
 	}
 	return err
