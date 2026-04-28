@@ -1,12 +1,13 @@
 // Package kube wraps kubeconfig loading for cluster-facing seictl
-// commands.
+// commands. Client holds a *genericclioptions.ConfigFlags so it
+// satisfies cli-runtime's RESTClientGetter natively — Builder, Helper,
+// and discovery cache all consume it directly without adapter shims.
 package kube
 
 import (
 	"sort"
 
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
@@ -28,37 +29,47 @@ type Client struct {
 	ClusterName   string
 	ClusterServer string
 	Namespace     string
-	// restConfig drives the dynamic client used by Apply. Unexported
-	// because callers go through methods on Client, not raw client-go.
-	restConfig *rest.Config
+
+	// flags is the cli-runtime config source — also a RESTClientGetter
+	// for resource.Builder. Unexported because callers go through
+	// methods on Client, not raw cli-runtime.
+	flags *genericclioptions.ConfigFlags
 }
 
 // New resolves kubeconfig context + namespace into a Client. Errors
 // in this layer are kubeconfig-shape problems and map to ExitIdentity /
 // CatKubeconfigParse, not cluster reachability.
 func New(opts Options) (*Client, *clioutput.Error) {
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	cf := genericclioptions.NewConfigFlags(true)
+	// Leave the pointers nil when the caller didn't override, so
+	// ConfigFlags' default loader honors KUBECONFIG / current-context /
+	// the context's namespace as expected.
 	if opts.Kubeconfig != "" {
-		loadingRules.ExplicitPath = opts.Kubeconfig
+		cf.KubeConfig = &opts.Kubeconfig
+	} else {
+		cf.KubeConfig = nil
 	}
-	overrides := &clientcmd.ConfigOverrides{}
 	if opts.Context != "" {
-		overrides.CurrentContext = opts.Context
+		cf.Context = &opts.Context
+	} else {
+		cf.Context = nil
 	}
 	if opts.Namespace != "" {
-		overrides.Context.Namespace = opts.Namespace
+		cf.Namespace = &opts.Namespace
+	} else {
+		cf.Namespace = nil
 	}
 
-	cfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)
-	raw, err := cfg.RawConfig()
+	loader := cf.ToRawKubeConfigLoader()
+	raw, err := loader.RawConfig()
 	if err != nil {
 		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatKubeconfigParse,
 			"load kubeconfig: %v", err)
 	}
 
-	contextName := overrides.CurrentContext
-	if contextName == "" {
-		contextName = raw.CurrentContext
+	contextName := raw.CurrentContext
+	if opts.Context != "" {
+		contextName = opts.Context
 	}
 	if contextName == "" {
 		return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatKubeconfigParse,
@@ -88,17 +99,17 @@ func New(opts Options) (*Client, *clioutput.Error) {
 		ns = "default"
 	}
 
-	restCfg, err := cfg.ClientConfig()
-	if err != nil {
-		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatKubeconfigParse,
-			"build REST config: %v", err)
-	}
-
 	return &Client{
 		ContextName:   contextName,
 		ClusterName:   kctx.Cluster,
 		ClusterServer: cluster.Server,
 		Namespace:     ns,
-		restConfig:    restCfg,
+		flags:         cf,
 	}, nil
+}
+
+// RESTClientGetter exposes the underlying ConfigFlags for callers that
+// need to feed cli-runtime APIs (resource.Builder, etc.) directly.
+func (c *Client) RESTClientGetter() genericclioptions.RESTClientGetter {
+	return c.flags
 }
