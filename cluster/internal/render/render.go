@@ -108,8 +108,7 @@ func isCommentOnly(doc []byte) bool {
 }
 
 // ExtractRef pulls Kind / metadata.name / metadata.namespace from a
-// rendered Kubernetes manifest. Action is left to the caller (dry-run
-// reports "create"; --apply distinguishes create/update/unchanged).
+// rendered Kubernetes manifest. Action is filled in by the caller.
 func ExtractRef(doc []byte) (ManifestRef, error) {
 	var m struct {
 		Kind     string `yaml:"kind"`

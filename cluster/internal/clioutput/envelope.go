@@ -1,9 +1,7 @@
 // Package clioutput defines the JSON output envelope for cluster-facing
 // seictl subcommands and the exit-code / category enums that are part of
-// the public CLI contract.
-//
-// The shape here is the v2 MCP tool contract per docs/design/cluster-cli.md
-// — bumping Version is a breaking change for the sei-platform-engineer skill.
+// the public CLI contract. The envelope mirrors Kubernetes
+// `metav1.TypeMeta` (apiVersion + kind).
 package clioutput
 
 import (
@@ -12,7 +10,17 @@ import (
 	"io"
 )
 
-const EnvelopeVersion = "v1"
+// APIVersion is the stable group/version string emitted on every envelope.
+// Breaking changes ship as `seictl.sei.io/v2` alongside v1, not as
+// mutations to v1.
+const APIVersion = "seictl.sei.io/v1"
+
+// Kinds emitted by cluster-facing verbs. New verbs add a constant here
+// rather than open-coding the string at the call site.
+const (
+	KindContextResult = "ContextResult"
+	KindBenchUpResult = "BenchUpResult"
+)
 
 const (
 	ExitSuccess  = 0
@@ -50,10 +58,10 @@ const (
 )
 
 type Envelope struct {
-	Kind    string          `json:"kind"`
-	Version string          `json:"version"`
-	Data    json.RawMessage `json:"data,omitempty"`
-	Error   *ErrorBody      `json:"error,omitempty"`
+	APIVersion string          `json:"apiVersion"`
+	Kind       string          `json:"kind"`
+	Data       json.RawMessage `json:"data,omitempty"`
+	Error      *ErrorBody      `json:"error,omitempty"`
 }
 
 type ErrorBody struct {
@@ -99,7 +107,7 @@ func Emit(w io.Writer, kind string, data any) error {
 	if err != nil {
 		return fmt.Errorf("marshalling %s data: %w", kind, err)
 	}
-	env := Envelope{Kind: kind, Version: EnvelopeVersion, Data: raw}
+	env := Envelope{APIVersion: APIVersion, Kind: kind, Data: raw}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(env)
@@ -109,8 +117,8 @@ func Emit(w io.Writer, kind string, data any) error {
 // callers should not propagate those back to the user.
 func EmitError(w io.Writer, kind string, e *Error) error {
 	env := Envelope{
-		Kind:    kind,
-		Version: EnvelopeVersion,
+		APIVersion: APIVersion,
+		Kind:       kind,
 		Error: &ErrorBody{
 			Code:     e.Code,
 			Category: e.Category,

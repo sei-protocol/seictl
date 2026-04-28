@@ -53,8 +53,8 @@ func TestRunBenchUp(t *testing.T) {
 		if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 			t.Fatalf("envelope unmarshal: %v\n%s", err, buf.String())
 		}
-		if env.Kind != benchUpResultKind || env.Version != "v1" {
-			t.Errorf("envelope: kind=%q version=%q", env.Kind, env.Version)
+		if env.Kind != clioutput.KindBenchUpResult || env.APIVersion != clioutput.APIVersion {
+			t.Errorf("envelope: kind=%q apiVersion=%q", env.Kind, env.APIVersion)
 		}
 		if env.Error != nil {
 			t.Fatalf("error body should be nil; got %+v\nbody=%s", env.Error, buf.String())

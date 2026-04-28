@@ -1,6 +1,5 @@
 // Package aws holds AWS-side helpers used by cluster-facing seictl
-// commands. ECR digest resolution and IAM/Pod-Identity helpers land
-// alongside the slice that first needs them.
+// commands.
 package aws
 
 import (
