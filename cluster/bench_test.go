@@ -11,6 +11,7 @@ import (
 
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/kube"
 )
 
 const benchTestDigest = "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd"
@@ -33,6 +34,10 @@ func stubBenchDeps(t *testing.T, alias string) benchDeps {
 			return benchTestDigest, nil
 		},
 		identityPath: func() (string, error) { return path, nil },
+		apply: func(context.Context, kube.Options, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+			t.Fatalf("apply should not be called on dry-run path")
+			return nil, nil
+		},
 	}
 }
 
@@ -196,6 +201,125 @@ func TestRunBenchUp(t *testing.T) {
 		}
 		if !strings.Contains(buf.String(), `"category": "missing"`) {
 			t.Errorf("expected missing identity error; got %s", buf.String())
+		}
+	})
+
+	t.Run("apply merges ApplyResult actions and sets appliedAt", func(t *testing.T) {
+		path := writeEngineerFile(t, "bdc")
+		var capturedDocs [][]byte
+		deps := benchDeps{
+			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
+				return benchTestDigest, nil
+			},
+			identityPath: func() (string, error) { return path, nil },
+			apply: func(_ context.Context, opts kube.Options, fieldOwner string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+				if fieldOwner != benchFieldOwner {
+					t.Errorf("field owner: got %q, want %q", fieldOwner, benchFieldOwner)
+				}
+				capturedDocs = docs
+				out := make([]kube.ApplyResult, len(docs))
+				for i := range docs {
+					out[i] = kube.ApplyResult{
+						Kind:      "stub",
+						Name:      "stub",
+						Namespace: "stub",
+						Action:    "update",
+					}
+				}
+				return out, nil
+			},
+		}
+
+		var buf bytes.Buffer
+		err := runBenchUp(context.Background(), benchUpInput{
+			Image:      "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:v1.2.3",
+			Name:       "demo",
+			Size:       "s",
+			Duration:   5,
+			Apply:      true,
+			Kubeconfig: "/tmp/kube",
+			Context:    "harbor",
+		}, &buf, deps)
+		if err != nil {
+			t.Fatalf("runBenchUp: %v\nbody=%s", err, buf.String())
+		}
+		if len(capturedDocs) != 4 {
+			t.Errorf("apply received %d docs, want 4", len(capturedDocs))
+		}
+
+		var env clioutput.Envelope
+		_ = json.Unmarshal(buf.Bytes(), &env)
+		var data benchUpResult
+		_ = json.Unmarshal(env.Data, &data)
+
+		if data.DryRun {
+			t.Errorf("dryRun should be false on --apply")
+		}
+		if data.AppliedAt == nil {
+			t.Errorf("appliedAt should be set on --apply")
+		}
+		for _, m := range data.Manifests {
+			if m.Action != "update" {
+				t.Errorf("manifest action: got %q, want update (from stub)", m.Action)
+			}
+		}
+	})
+
+	t.Run("apply propagates kubeconfig errors with ExitIdentity", func(t *testing.T) {
+		path := writeEngineerFile(t, "bdc")
+		deps := benchDeps{
+			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
+				return benchTestDigest, nil
+			},
+			identityPath: func() (string, error) { return path, nil },
+			apply: func(context.Context, kube.Options, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+				return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatKubeconfigParse, "no kubeconfig")
+			},
+		}
+		var buf bytes.Buffer
+		err := runBenchUp(context.Background(), benchUpInput{
+			Image:    "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:v1",
+			Name:     "demo",
+			Size:     "s",
+			Duration: 5,
+			Apply:    true,
+		}, &buf, deps)
+		if err == nil {
+			t.Fatalf("expected error")
+		}
+		ec, ok := err.(interface{ ExitCode() int })
+		if !ok || ec.ExitCode() != clioutput.ExitIdentity {
+			t.Errorf("exit code: got %v, want %d", err, clioutput.ExitIdentity)
+		}
+		if !strings.Contains(buf.String(), "kubeconfig-parse") {
+			t.Errorf("expected kubeconfig-parse category; got %s", buf.String())
+		}
+	})
+
+	t.Run("apply propagates SSA failures with CatApplyFailed", func(t *testing.T) {
+		path := writeEngineerFile(t, "bdc")
+		deps := benchDeps{
+			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
+				return benchTestDigest, nil
+			},
+			identityPath: func() (string, error) { return path, nil },
+			apply: func(context.Context, kube.Options, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+				return nil, clioutput.New(clioutput.ExitBench, clioutput.CatApplyFailed, "API server says no")
+			},
+		}
+		var buf bytes.Buffer
+		err := runBenchUp(context.Background(), benchUpInput{
+			Image:    "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:v1",
+			Name:     "demo",
+			Size:     "s",
+			Duration: 5,
+			Apply:    true,
+		}, &buf, deps)
+		if err == nil {
+			t.Fatalf("expected error")
+		}
+		if !strings.Contains(buf.String(), "apply-failed") {
+			t.Errorf("expected apply-failed category; got %s", buf.String())
 		}
 	})
 }

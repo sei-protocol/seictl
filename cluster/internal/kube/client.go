@@ -5,6 +5,7 @@ package kube
 import (
 	"sort"
 
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
@@ -27,6 +28,9 @@ type Client struct {
 	ClusterName   string
 	ClusterServer string
 	Namespace     string
+	// restConfig drives the dynamic client used by Apply. Unexported
+	// because callers go through methods on Client, not raw client-go.
+	restConfig *rest.Config
 }
 
 // New resolves kubeconfig context + namespace into a Client. Errors
@@ -84,10 +88,17 @@ func New(opts Options) (*Client, *clioutput.Error) {
 		ns = "default"
 	}
 
+	restCfg, err := cfg.ClientConfig()
+	if err != nil {
+		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatKubeconfigParse,
+			"build REST config: %v", err)
+	}
+
 	return &Client{
 		ContextName:   contextName,
 		ClusterName:   kctx.Cluster,
 		ClusterServer: cluster.Server,
 		Namespace:     ns,
+		restConfig:    restCfg,
 	}, nil
 }

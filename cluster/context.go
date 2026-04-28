@@ -39,10 +39,7 @@ var defaultContextDeps = contextDeps{
 var ContextCmd = cli.Command{
 	Name:  "context",
 	Usage: "Print cluster + identity ground truth as a JSON envelope",
-	Flags: []cli.Flag{
-		&cli.StringFlag{Name: "kubeconfig", Sources: cli.EnvVars("KUBECONFIG"), Usage: "Path to kubeconfig file"},
-		&cli.StringFlag{Name: "context", Usage: "Kubeconfig context to use"},
-	},
+	Flags: kubeconfigFlags(),
 	Action: func(ctx context.Context, command *cli.Command) error {
 		return runContext(ctx, command.String("kubeconfig"), command.String("context"), os.Stdout, defaultContextDeps)
 	},
