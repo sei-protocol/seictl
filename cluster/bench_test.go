@@ -79,8 +79,8 @@ func TestRunBenchUp(t *testing.T) {
 		if !data.DryRun {
 			t.Errorf("dryRun should be true")
 		}
-		// Per LLD §`bench up`: `s3://harbor-sei-autobake-results/<chain-id>/<image-sha-12>/<chain-id>/report.log`
-		want := "s3://harbor-sei-autobake-results/bench-bdc-demo/1234567890ab/bench-bdc-demo/report.log"
+		// Schema: s3://harbor-validation-results/<namespace>/<job>/<run>/...
+		want := "s3://harbor-validation-results/eng-bdc/evm-transfer/demo/report.log"
 		if data.ResultsS3URI != want {
 			t.Errorf("s3 uri: got %q, want %q", data.ResultsS3URI, want)
 		}

@@ -21,7 +21,11 @@ import (
 )
 
 const (
-	benchS3Bucket = "harbor-sei-autobake-results"
+	// benchS3Bucket and benchJob mirror the platform's shared
+	// validation-results scheme: s3://<bucket>/<namespace>/<job>/<run>/...
+	// IAM scoping happens on the namespace prefix.
+	benchS3Bucket = "harbor-validation-results"
+	benchJob      = "evm-transfer"
 
 	// defaultSeiloadImage is operator-vendored, not engineer input, so
 	// it bypasses the registry policy applied to --image.
@@ -131,7 +135,7 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 
 	chainID := fmt.Sprintf("bench-%s-%s", eng.Alias, in.Name)
 	digestShort := shortDigest(digest)
-	s3URI := fmt.Sprintf("s3://%s/%s/%s/%s/report.log", benchS3Bucket, chainID, digestShort, chainID)
+	s3URI := fmt.Sprintf("s3://%s/%s/%s/%s/report.log", benchS3Bucket, namespace, benchJob, in.Name)
 	sizeProfile := benchSizes[in.Size]
 
 	manifests, err := renderManifests(eng.Alias, in.Name, namespace, chainID, seidImage,
