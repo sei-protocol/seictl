@@ -34,7 +34,7 @@ func stubBenchDeps(t *testing.T, alias string) benchDeps {
 			return benchTestDigest, nil
 		},
 		identityPath: func() (string, error) { return path, nil },
-		apply: func(context.Context, kube.Options, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+		apply: func(context.Context, kube.Options, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 			t.Fatalf("apply should not be called on dry-run path")
 			return nil, nil
 		},
@@ -212,9 +212,12 @@ func TestRunBenchUp(t *testing.T) {
 				return benchTestDigest, nil
 			},
 			identityPath: func() (string, error) { return path, nil },
-			apply: func(_ context.Context, opts kube.Options, fieldOwner string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+			apply: func(_ context.Context, opts kube.Options, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 				if fieldOwner != benchFieldOwner {
 					t.Errorf("field owner: got %q, want %q", fieldOwner, benchFieldOwner)
+				}
+				if namespace != "eng-bdc" {
+					t.Errorf("namespace: got %q, want eng-bdc", namespace)
 				}
 				capturedDocs = docs
 				out := make([]kube.ApplyResult, len(docs))
@@ -272,7 +275,7 @@ func TestRunBenchUp(t *testing.T) {
 				return benchTestDigest, nil
 			},
 			identityPath: func() (string, error) { return path, nil },
-			apply: func(context.Context, kube.Options, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+			apply: func(context.Context, kube.Options, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 				return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatKubeconfigParse, "no kubeconfig")
 			},
 		}
@@ -303,7 +306,7 @@ func TestRunBenchUp(t *testing.T) {
 				return benchTestDigest, nil
 			},
 			identityPath: func() (string, error) { return path, nil },
-			apply: func(context.Context, kube.Options, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+			apply: func(context.Context, kube.Options, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 				return nil, clioutput.New(clioutput.ExitBench, clioutput.CatApplyFailed, "API server says no")
 			},
 		}

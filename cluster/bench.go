@@ -21,6 +21,9 @@ import (
 	"github.com/sei-protocol/seictl/cluster/templates"
 )
 
+// benchFieldOwner is the SSA field manager that owns every bench-up
+// manifest. One-way door per LLD §Migration: changing this string
+// abandons ownership of every previously-applied object.
 const benchFieldOwner = "seictl-bench"
 
 const (
@@ -73,7 +76,7 @@ type benchUpInput struct {
 type benchDeps struct {
 	resolveDigest func(context.Context, string) (string, *clioutput.Error)
 	identityPath  func() (string, error)
-	apply         func(ctx context.Context, opts kube.Options, fieldOwner string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
+	apply         func(ctx context.Context, opts kube.Options, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
 }
 
 var defaultBenchDeps = benchDeps{
@@ -82,14 +85,14 @@ var defaultBenchDeps = benchDeps{
 	apply:         applyToCluster,
 }
 
-func applyToCluster(ctx context.Context, opts kube.Options, fieldOwner string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+func applyToCluster(ctx context.Context, opts kube.Options, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 	kc, kerr := kube.New(opts)
 	if kerr != nil {
 		return nil, kerr
 	}
-	results, err := kc.Apply(ctx, fieldOwner, docs)
+	results, err := kc.Apply(ctx, fieldOwner, namespace, docs)
 	if err != nil {
-		return results, clioutput.Newf(clioutput.ExitBench, clioutput.CatApplyFailed, "%v", err)
+		return nil, clioutput.Newf(clioutput.ExitBench, clioutput.CatApplyFailed, "%v", err)
 	}
 	return results, nil
 }
@@ -187,7 +190,7 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 		applyResults, applyErr := deps.apply(ctx, kube.Options{
 			Kubeconfig: in.Kubeconfig,
 			Context:    in.Context,
-		}, benchFieldOwner, docs)
+		}, benchFieldOwner, namespace, docs)
 		if applyErr != nil {
 			return failBenchUp(out, applyErr)
 		}
@@ -272,7 +275,10 @@ func renderManifests(alias, name, namespace, chainID, seidImage, digestShort str
 		return nil, nil, e
 	}
 
-	stream := bytes.Join([][]byte{sndYAML, jobYAML, cmYAML}, []byte("\n---\n"))
+	// Order: dependencies first. The Job mounts the seiload profile
+	// ConfigMap; applying CM before Job avoids transient
+	// CreateContainerConfigError events on the Job's pods.
+	stream := bytes.Join([][]byte{cmYAML, sndYAML, jobYAML}, []byte("\n---\n"))
 	docs := render.SplitYAML(stream)
 	refs := make([]render.ManifestRef, 0, len(docs))
 	for _, doc := range docs {
