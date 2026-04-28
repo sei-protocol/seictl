@@ -34,7 +34,7 @@ func stubBenchDeps(t *testing.T, alias string) benchDeps {
 			return benchTestDigest, nil
 		},
 		identityPath: func() (string, error) { return path, nil },
-		apply: func(context.Context, kube.Options, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+		apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 			t.Fatalf("apply should not be called on dry-run path")
 			return nil, nil
 		},
@@ -212,7 +212,10 @@ func TestRunBenchUp(t *testing.T) {
 				return benchTestDigest, nil
 			},
 			identityPath: func() (string, error) { return path, nil },
-			apply: func(_ context.Context, opts kube.Options, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
+				return &kube.Client{ContextName: "harbor", Namespace: "eng-bdc"}, nil
+			},
+			apply: func(_ context.Context, _ *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 				if fieldOwner != benchFieldOwner {
 					t.Errorf("field owner: got %q, want %q", fieldOwner, benchFieldOwner)
 				}
@@ -275,8 +278,12 @@ func TestRunBenchUp(t *testing.T) {
 				return benchTestDigest, nil
 			},
 			identityPath: func() (string, error) { return path, nil },
-			apply: func(context.Context, kube.Options, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatKubeconfigParse, "no kubeconfig")
+			},
+			apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+				t.Fatalf("apply should not be called when kubeconfig fails")
+				return nil, nil
 			},
 		}
 		var buf bytes.Buffer
@@ -306,7 +313,10 @@ func TestRunBenchUp(t *testing.T) {
 				return benchTestDigest, nil
 			},
 			identityPath: func() (string, error) { return path, nil },
-			apply: func(context.Context, kube.Options, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
+				return &kube.Client{}, nil
+			},
+			apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 				return nil, clioutput.New(clioutput.ExitBench, clioutput.CatApplyFailed, "API server says no")
 			},
 		}

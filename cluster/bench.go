@@ -76,20 +76,18 @@ type benchUpInput struct {
 type benchDeps struct {
 	resolveDigest func(context.Context, string) (string, *clioutput.Error)
 	identityPath  func() (string, error)
-	apply         func(ctx context.Context, opts kube.Options, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
+	newKubeClient func(kube.Options) (*kube.Client, *clioutput.Error)
+	apply         func(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
 }
 
 var defaultBenchDeps = benchDeps{
 	resolveDigest: aws.ResolveDigest,
 	identityPath:  identity.DefaultPath,
+	newKubeClient: kube.New,
 	apply:         applyToCluster,
 }
 
-func applyToCluster(ctx context.Context, opts kube.Options, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
-	kc, kerr := kube.New(opts)
-	if kerr != nil {
-		return nil, kerr
-	}
+func applyToCluster(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 	results, err := kc.Apply(ctx, fieldOwner, namespace, docs)
 	if err != nil {
 		return nil, clioutput.Newf(clioutput.ExitBench, clioutput.CatApplyFailed, "%v", err)
@@ -187,10 +185,14 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 	}
 
 	if in.Apply {
-		applyResults, applyErr := deps.apply(ctx, kube.Options{
+		kc, kerr := deps.newKubeClient(kube.Options{
 			Kubeconfig: in.Kubeconfig,
 			Context:    in.Context,
-		}, benchFieldOwner, namespace, docs)
+		})
+		if kerr != nil {
+			return failBenchUp(out, kerr)
+		}
+		applyResults, applyErr := deps.apply(ctx, kc, benchFieldOwner, namespace, docs)
 		if applyErr != nil {
 			return failBenchUp(out, applyErr)
 		}
