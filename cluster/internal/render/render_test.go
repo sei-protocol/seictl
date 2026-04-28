@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sei-protocol/seictl/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
 
 func TestRender(t *testing.T) {

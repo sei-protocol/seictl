@@ -1,4 +1,4 @@
-package main
+package cluster
 
 import (
 	"bytes"
@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sei-protocol/seictl/internal/aws"
-	"github.com/sei-protocol/seictl/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/aws"
+	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
 
 const fixtureKubeconfig = `apiVersion: v1
