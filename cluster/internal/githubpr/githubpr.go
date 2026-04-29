@@ -45,29 +45,30 @@ func CheckAuth() error {
 
 // CheckCleanTree returns nil if the platform repo has no staged or
 // unstaged changes to tracked files. Untracked files are tolerated
-// because we add explicit paths via `git add <file>`, never `-A`.
+// because CreatePR adds explicit paths via `git add <file>`, never `-A`.
 func CheckCleanTree(repoPath string) error {
 	out, err := runIn(repoPath, "git", "status", "--porcelain=v1")
 	if err != nil {
 		return fmt.Errorf("git status: %w", err)
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
+		if isUntrackedOrEmpty(line) {
 			continue
 		}
-		if len(line) < 2 {
-			continue
-		}
-		// Status codes: first char = staged, second char = unstaged.
-		// "??" = untracked → ignore. Any other non-space code = dirty.
-		if line[0] == '?' && line[1] == '?' {
-			continue
-		}
-		if line[0] != ' ' || line[1] != ' ' {
-			return fmt.Errorf("working tree dirty: %s", line)
-		}
+		return fmt.Errorf("working tree dirty: %s", line)
 	}
 	return nil
+}
+
+// isUntrackedOrEmpty reports whether a `git status --porcelain` line
+// can be skipped. The two-character status prefix is "??" for
+// untracked files; everything else with non-space codes is a tracked
+// file with staged or unstaged modifications.
+func isUntrackedOrEmpty(line string) bool {
+	if len(line) < 2 {
+		return true
+	}
+	return line[0] == '?' && line[1] == '?'
 }
 
 // CreatePR branches, writes files, commits, pushes, and opens a PR.

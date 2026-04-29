@@ -1,3 +1,11 @@
+// IAM artifacts seictl creates land under path /seictl/ for IAM-console
+// discoverability (`aws iam list-policies --path-prefix /seictl/`) and
+// for scoped-down caller policies (e.g. `iam:PassRole` conditioned on
+// `Resource: arn:aws:iam::*:role/seictl/*`). Per-engineer policies and
+// roles share their name — harbor-bench-seiload-eng-<alias> — and are
+// tagged with ManagedBy=seictl + Engineer=<alias> so drift on re-run
+// is detectable.
+
 package aws
 
 import (
@@ -15,13 +23,12 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
 
-// IAMPath is the prefix all seictl-managed IAM resources land under.
-// Discoverable in the IAM console via `--path-prefix /seictl/`.
-const IAMPath = "/seictl/"
+const (
+	IAMPath                    = "/seictl/"
+	validationResultsBucket    = "harbor-validation-results"
+	validationResultsBucketARN = "arn:aws:s3:::" + validationResultsBucket
+)
 
-// EngineerScope identifies a single engineer's bench-seiload IAM
-// resources. Account is the AWS account the resources live in (today
-// always 189176372795).
 type EngineerScope struct {
 	Account string
 	Region  string
@@ -29,39 +36,30 @@ type EngineerScope struct {
 	Alias   string
 }
 
-// PolicyName returns "harbor-bench-seiload-eng-<alias>".
 func (e EngineerScope) PolicyName() string {
 	return fmt.Sprintf("%s-bench-seiload-eng-%s", e.Cluster, e.Alias)
 }
 
-// RoleName mirrors PolicyName per the nightly-module convention; role
-// and policy share a name.
 func (e EngineerScope) RoleName() string {
 	return e.PolicyName()
 }
 
-// PolicyARN is what AttachRolePolicy and CreatePodIdentityAssociation
-// reference. Construction matches AWS's customer-managed policy ARN
-// shape exactly so we can equality-check during idempotent re-runs.
 func (e EngineerScope) PolicyARN() string {
 	return fmt.Sprintf("arn:aws:iam::%s:policy%s%s", e.Account, IAMPath, e.PolicyName())
 }
 
-// RoleARN is what Pod Identity associations bind to.
 func (e EngineerScope) RoleARN() string {
 	return fmt.Sprintf("arn:aws:iam::%s:role%s%s", e.Account, IAMPath, e.RoleName())
 }
 
-// IAMArtifact describes one IAM resource the onboard run touched.
 type IAMArtifact struct {
 	Kind   string // "Policy" | "Role" | "Attachment"
 	ARN    string
 	Action string // "create" | "exists" | "would-create"
 }
 
-// ProvisionIAM creates the engineer-scoped policy + role + attachment
-// idempotently. Get-then-Create per resource: re-running on a
-// fully-onboarded engineer yields all "exists" actions.
+// ProvisionIAM is idempotent: re-running on a fully-onboarded engineer
+// returns all "exists" actions and performs no mutation.
 func ProvisionIAM(ctx context.Context, scope EngineerScope, dryRun bool) ([]IAMArtifact, *clioutput.Error) {
 	cfg, err := awscfg.LoadDefaultConfig(ctx, awscfg.WithRegion(scope.Region))
 	if err != nil {
@@ -82,22 +80,18 @@ func ProvisionIAM(ctx context.Context, scope EngineerScope, dryRun bool) ([]IAMA
 	}
 
 	var artifacts []IAMArtifact
-
-	// Policy
 	policyArt, perr := ensurePolicy(ctx, client, scope, string(policyDoc), dryRun)
 	if perr != nil {
 		return artifacts, perr
 	}
 	artifacts = append(artifacts, policyArt)
 
-	// Role
 	roleArt, rerr := ensureRole(ctx, client, scope, string(trustDoc), dryRun)
 	if rerr != nil {
 		return artifacts, rerr
 	}
 	artifacts = append(artifacts, roleArt)
 
-	// Attachment
 	attArt, aerr := ensureAttachment(ctx, client, scope, dryRun)
 	if aerr != nil {
 		return artifacts, aerr
@@ -211,12 +205,8 @@ func isNotFound(err error) bool {
 	return false
 }
 
-// seiloadPolicyDocument returns the bench-seiload IAM policy document
-// scoped to s3://harbor-validation-results/eng-<alias>/* — list with
-// an s3:prefix condition, write on the prefix-scoped resource.
 func seiloadPolicyDocument(scope EngineerScope) map[string]any {
 	prefix := fmt.Sprintf("eng-%s/*", scope.Alias)
-	bucketARN := "arn:aws:s3:::harbor-validation-results"
 	return map[string]any{
 		"Version": "2012-10-17",
 		"Statement": []map[string]any{
@@ -224,7 +214,7 @@ func seiloadPolicyDocument(scope EngineerScope) map[string]any {
 				"Sid":      "ResultsListBucket",
 				"Effect":   "Allow",
 				"Action":   []string{"s3:ListBucket"},
-				"Resource": bucketARN,
+				"Resource": validationResultsBucketARN,
 				"Condition": map[string]any{
 					"StringLike": map[string]any{"s3:prefix": []string{prefix}},
 				},
@@ -233,18 +223,16 @@ func seiloadPolicyDocument(scope EngineerScope) map[string]any {
 				"Sid":      "ResultsWriteScopedToEngineerPrefix",
 				"Effect":   "Allow",
 				"Action":   []string{"s3:PutObject"},
-				"Resource": fmt.Sprintf("%s/%s", bucketARN, prefix),
+				"Resource": fmt.Sprintf("%s/%s", validationResultsBucketARN, prefix),
 			},
 		},
 	}
 }
 
-// podIdentityTrustPolicy returns the assume-role policy document for
-// the engineer's bench-seiload role. EKS Pod Identity assumes via the
-// pods.eks.amazonaws.com service principal; sts:TagSession is required
-// (Pod Identity propagates pod metadata as session tags). The
-// SourceAccount + SourceArn conditions are confused-deputy mitigations
-// pinning the role to harbor's EKS service in the right account.
+// podIdentityTrustPolicy uses Pod Identity's pods.eks.amazonaws.com
+// principal. sts:TagSession is required (Pod Identity propagates pod
+// metadata as session tags). SourceAccount + SourceArn are
+// confused-deputy guards.
 func podIdentityTrustPolicy(scope EngineerScope) map[string]any {
 	sourceArn := fmt.Sprintf("arn:aws:eks:%s:%s:podidentityassociation/%s/*",
 		scope.Region, scope.Account, scope.Cluster)
