@@ -52,6 +52,7 @@ const (
 	CatGHUnauthenticated   = "gh-unauthenticated"
 	CatPRCreateFailed      = "pr-create-failed"
 	CatAWSCreateFailed     = "aws-create-failed"
+	CatAggregatorMissing   = "aggregator-missing"
 
 	CatMalformed       = "malformed"
 	CatMissing         = "missing"

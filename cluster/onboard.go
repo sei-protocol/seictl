@@ -22,6 +22,7 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/githubpr"
 	"github.com/sei-protocol/seictl/cluster/internal/identity"
 	"github.com/sei-protocol/seictl/cluster/internal/onboardmanifests"
+	"github.com/sei-protocol/seictl/cluster/internal/onboardmanifests/aggregator"
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
 )
 
@@ -60,29 +61,31 @@ type onboardInput struct {
 }
 
 type onboardDeps struct {
-	identityPath  func() (string, error)
-	getCaller     func(context.Context) (*aws.Caller, *clioutput.Error)
-	provisionIAM  func(ctx context.Context, scope aws.EngineerScope, dryRun bool) ([]aws.IAMArtifact, *clioutput.Error)
-	podIdentity   func(ctx context.Context, b aws.PodIdentityBinding, dryRun bool) (aws.PodIdentityArtifact, *clioutput.Error)
-	generateFiles func(cell onboardmanifests.Cell) ([]onboardmanifests.File, error)
-	checkGHAuth   func() error
-	checkClean    func(repoPath string) error
-	createPR      func(opts githubpr.Options) (*githubpr.Result, error)
-	discoverRepo  func(start string) (string, error)
-	writeIdentity func(path string, eng identity.Engineer) *clioutput.Error
+	identityPath     func() (string, error)
+	getCaller        func(context.Context) (*aws.Caller, *clioutput.Error)
+	provisionIAM     func(ctx context.Context, scope aws.EngineerScope, dryRun bool) ([]aws.IAMArtifact, *clioutput.Error)
+	podIdentity      func(ctx context.Context, b aws.PodIdentityBinding, dryRun bool) (aws.PodIdentityArtifact, *clioutput.Error)
+	generateFiles    func(cell onboardmanifests.Cell) ([]onboardmanifests.File, error)
+	updateAggregator func(repoPath, alias string) (aggregator.Result, error)
+	checkGHAuth      func() error
+	checkClean       func(repoPath string) error
+	createPR         func(opts githubpr.Options) (*githubpr.Result, error)
+	discoverRepo     func(start string) (string, error)
+	writeIdentity    func(path string, eng identity.Engineer) *clioutput.Error
 }
 
 var defaultOnboardDeps = onboardDeps{
-	identityPath:  identity.DefaultPath,
-	getCaller:     aws.GetCaller,
-	provisionIAM:  aws.ProvisionIAM,
-	podIdentity:   aws.EnsurePodIdentity,
-	generateFiles: onboardmanifests.Generate,
-	checkGHAuth:   githubpr.CheckAuth,
-	checkClean:    githubpr.CheckCleanTree,
-	createPR:      githubpr.CreatePR,
-	discoverRepo:  githubpr.DiscoverRepo,
-	writeIdentity: identity.Write,
+	identityPath:     identity.DefaultPath,
+	getCaller:        aws.GetCaller,
+	provisionIAM:     aws.ProvisionIAM,
+	podIdentity:      aws.EnsurePodIdentity,
+	generateFiles:    onboardmanifests.Generate,
+	updateAggregator: aggregator.UpdateEngineers,
+	checkGHAuth:      githubpr.CheckAuth,
+	checkClean:       githubpr.CheckCleanTree,
+	createPR:         githubpr.CreatePR,
+	discoverRepo:     githubpr.DiscoverRepo,
+	writeIdentity:    identity.Write,
 }
 
 var OnboardCmd = cli.Command{
@@ -178,6 +181,23 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 		generatedPaths[i] = f.Path
 	}
 
+	var aggRes aggregator.Result
+	if !in.NoPR {
+		var aerr error
+		aggRes, aerr = deps.updateAggregator(repoPath, in.Alias)
+		if errors.Is(aerr, aggregator.ErrAggregatorMissing) {
+			return failOnboard(out, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatAggregatorMissing,
+				"aggregator kustomization missing at clusters/harbor/engineers/kustomization.yaml; this is a one-time bootstrap that must be landed by hand (see sei-protocol/platform#249 for prior art)"))
+		}
+		if aerr != nil {
+			return failOnboard(out, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatPRCreateFailed,
+				"update aggregator: %v", aerr))
+		}
+		if aggRes.Added {
+			generatedPaths = append(generatedPaths, aggRes.Path)
+		}
+	}
+
 	res := OnboardResult{
 		Alias:          in.Alias,
 		IdentityPath:   idPath,
@@ -195,6 +215,9 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 		fileBodies := map[string][]byte{}
 		for _, f := range files {
 			fileBodies[f.Path] = f.Content
+		}
+		if aggRes.Added {
+			fileBodies[aggRes.Path] = aggRes.Content
 		}
 		prRes, perr := deps.createPR(githubpr.Options{
 			RepoPath:      repoPath,
