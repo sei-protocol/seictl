@@ -68,7 +68,7 @@ func onboardStubs(t *testing.T) (onboardDeps, string, string) {
 		},
 		ensureUpToDate: func(string, string) error { return nil },
 		checkGHAuth:    func() error { return nil },
-		checkClean:  func(string) error { return nil },
+		checkClean:     func(string) error { return nil },
 		createPR: func(opts githubpr.Options) (*githubpr.Result, error) {
 			return &githubpr.Result{Branch: opts.Branch, URL: "https://github.com/example/pr/1"}, nil
 		},
