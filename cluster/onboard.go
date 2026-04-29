@@ -34,9 +34,8 @@ var onboardPRBodyTemplate string
 type OnboardResult struct {
 	Alias        string `json:"alias"`
 	IdentityPath string `json:"identityPath"`
-	// GeneratedFiles lists files included in the generated PR.
 	// Idempotent re-runs omit unchanged files (e.g. an aggregator entry
-	// already present).
+	// already present in the resources list).
 	GeneratedFiles []string      `json:"generatedFiles"`
 	Branch         string        `json:"branch,omitempty"`
 	PRURL          string        `json:"prUrl,omitempty"`
@@ -251,9 +250,9 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 	return nil
 }
 
-// identityConsistent enforces that a pre-existing engineer.json with a
-// different alias blocks onboard. Matching alias is fine (idempotent
-// rewrite happens later); missing file is fine (will be created).
+// Matching alias is fine (idempotent rewrite happens later); missing
+// file is fine (will be created). Mismatched alias blocks onboard to
+// prevent accidental cross-engineer overwrites.
 func identityConsistent(path, alias string) *clioutput.Error {
 	existing, err := identity.Read(path)
 	if err == nil {
@@ -292,11 +291,10 @@ func resolveRepo(explicit string, discover func(string) (string, error)) (string
 	return repo, nil
 }
 
-// refuseExistingAlias fails closed if an engineer cell already exists
-// at the target path. Mid-run idempotency for an in-progress onboard
-// (same engineer re-running) is the createPR layer's job; this guard
-// catches the cross-engineer case where Alice tries `--alias bob` and
-// would otherwise clobber bob's cell directory.
+// Mid-run idempotency for an in-progress onboard (same engineer
+// re-running) is the createPR layer's job; this guard catches the
+// cross-engineer case where Alice tries `--alias bob` and would
+// otherwise clobber bob's cell directory.
 func refuseExistingAlias(repoPath, alias string) *clioutput.Error {
 	cellDir := filepath.Join(repoPath, "clusters", "harbor", "engineers", alias)
 	if _, err := os.Stat(cellDir); err == nil {

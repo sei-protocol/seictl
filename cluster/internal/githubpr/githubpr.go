@@ -43,12 +43,10 @@ func CheckAuth() error {
 	return nil
 }
 
-// EnsureBaseUpToDate fetches origin/<baseBranch> and errors if local
-// HEAD is missing any of its commits. Onboard reads files from the
-// working tree (e.g. the engineers/kustomization.yaml aggregator) and
-// includes them in the PR; without this guard, a stale local main
-// would silently overwrite a peer's onboard entry with the older
-// content.
+// EnsureBaseUpToDate errors if local HEAD is missing commits from
+// origin/<baseBranch>. Without this guard, onboard would read a stale
+// aggregator from the working tree and silently overwrite peer entries
+// when the PR landed.
 func EnsureBaseUpToDate(repoPath, baseBranch string) error {
 	if _, err := runIn(repoPath, "git", "fetch", "origin", baseBranch); err != nil {
 		return fmt.Errorf("git fetch origin %s: %w", baseBranch, err)

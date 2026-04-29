@@ -20,22 +20,18 @@ import (
 
 const aggregatorPath = "clusters/harbor/engineers/kustomization.yaml"
 
-// Result is what UpdateEngineers returns: the repo-relative path of the
-// aggregator, the rewritten content, and whether the alias was actually
-// added (false means the alias was already present and the original
-// bytes are returned unchanged so callers can skip including the file
-// in the PR for a smaller, more honest diff).
+// Result.Added=false means the alias was already present; Content is
+// the original bytes and callers should skip including the file in the
+// PR to keep the diff clean.
 type Result struct {
 	Path    string
 	Content []byte
 	Added   bool
 }
 
-// UpdateEngineers reads the aggregator from repoPath, inserts alias
-// into its `resources:` list (sorted alphabetically, idempotent), and
-// returns the rewritten file. The aggregator is assumed to exist in
-// any canonical platform-repo checkout that's at-or-ahead of the
-// bootstrap PR (sei-protocol/platform#249).
+// UpdateEngineers inserts alias into the aggregator's resources list,
+// sorted alphabetically. Idempotent. Assumes the aggregator exists —
+// ensure repoPath is at-or-ahead of sei-protocol/platform#249.
 func UpdateEngineers(repoPath, alias string) (Result, error) {
 	full := filepath.Join(repoPath, aggregatorPath)
 	raw, err := os.ReadFile(full)
@@ -82,8 +78,7 @@ func UpdateEngineers(repoPath, alias string) (Result, error) {
 	return Result{Path: aggregatorPath, Content: buf.Bytes(), Added: true}, nil
 }
 
-// findResourcesSeq locates the `resources:` sequence in the top-level
-// kustomization mapping. Errors if `resources` is missing or not a
+// findResourcesSeq errors if `resources` is missing or not a bare
 // sequence — the aggregator schema is constrained and we own it.
 func findResourcesSeq(doc *yaml.Node) (*yaml.Node, error) {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
