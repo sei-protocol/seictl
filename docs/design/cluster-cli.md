@@ -407,7 +407,7 @@ Why embedded over live-fetch:
 
 Drift discipline: when autobake's templates evolve, a seictl PR re-syncs the embedded copy. We don't try to enforce a CI drift check in v1 — the `seictl-bench` field manager makes drift between releases visible at apply time anyway.
 
-Rendering: `text/template` — autobake source files use Helm-style `{{ }}`. Render to YAML, parse via `yaml.UnmarshalStrict` into Unstructured, apply via SSA.
+Rendering: `os.Expand` over `${VAR}` placeholders. Fail-closed — any unresolved `${VAR}` returns category `template-render` with the deduplicated list of missing keys, so engineers see the gap rather than an empty-string-laundered manifest. Output is split on `---` into individual YAML documents and decoded into Unstructured for SSA.
 
 ---
 
