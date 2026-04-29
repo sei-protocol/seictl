@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sei-protocol/seictl/cluster/internal/aws"
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 	"github.com/sei-protocol/seictl/cluster/internal/identity"
 	"github.com/sei-protocol/seictl/cluster/internal/kube"
@@ -26,6 +27,10 @@ func writeEngineerFile(t *testing.T, alias string) string {
 	return path
 }
 
+func okCaller(context.Context) (*aws.Caller, *clioutput.Error) {
+	return &aws.Caller{Account: "189176372795", Region: "eu-central-1", PrincipalARN: "arn:aws:sts::189176372795:assumed-role/Eng/bdc"}, nil
+}
+
 func stubBenchDeps(t *testing.T, alias string) benchDeps {
 	t.Helper()
 	path := writeEngineerFile(t, alias)
@@ -38,6 +43,7 @@ func stubBenchDeps(t *testing.T, alias string) benchDeps {
 			t.Fatalf("apply should not be called on dry-run path")
 			return nil, nil
 		},
+		getCaller: okCaller,
 	}
 }
 
@@ -169,6 +175,7 @@ func TestRunBenchUp(t *testing.T) {
 				return "", clioutput.New(clioutput.ExitBench, clioutput.CatImageResolution, "ecr unavailable")
 			},
 			identityPath: func() (string, error) { return path, nil },
+			getCaller:    okCaller,
 		}
 		var buf bytes.Buffer
 		err := runBenchUp(context.Background(), benchUpInput{
@@ -215,6 +222,7 @@ func TestRunBenchUp(t *testing.T) {
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{ContextName: "harbor", Namespace: "eng-bdc"}, nil
 			},
+			getCaller: okCaller,
 			apply: func(_ context.Context, _ *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 				if fieldOwner != benchFieldOwner {
 					t.Errorf("field owner: got %q, want %q", fieldOwner, benchFieldOwner)
@@ -281,6 +289,7 @@ func TestRunBenchUp(t *testing.T) {
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatKubeconfigParse, "no kubeconfig")
 			},
+			getCaller: okCaller,
 			apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 				t.Fatalf("apply should not be called when kubeconfig fails")
 				return nil, nil
@@ -316,6 +325,7 @@ func TestRunBenchUp(t *testing.T) {
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{}, nil
 			},
+			getCaller: okCaller,
 			apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 				return nil, clioutput.New(clioutput.ExitBench, clioutput.CatApplyFailed, "API server says no")
 			},
