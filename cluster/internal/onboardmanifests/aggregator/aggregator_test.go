@@ -2,7 +2,6 @@ package aggregator
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,22 +52,11 @@ resources:
 		}
 	})
 
-	t.Run("missing aggregator returns sentinel", func(t *testing.T) {
-		repo := t.TempDir()
-		_, err := UpdateEngineers(repo, "alice")
-		if !errors.Is(err, ErrAggregatorMissing) {
-			t.Errorf("expected ErrAggregatorMissing; got %v", err)
-		}
-	})
-
-	t.Run("malformed yaml errors but is not the sentinel", func(t *testing.T) {
+	t.Run("malformed yaml errors", func(t *testing.T) {
 		repo := writeAggregator(t, "not: [valid: yaml: content")
 		_, err := UpdateEngineers(repo, "alice")
 		if err == nil {
 			t.Fatal("expected error on malformed YAML")
-		}
-		if errors.Is(err, ErrAggregatorMissing) {
-			t.Errorf("malformed YAML should not surface as ErrAggregatorMissing; got %v", err)
 		}
 	})
 

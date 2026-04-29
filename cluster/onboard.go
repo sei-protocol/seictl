@@ -1,7 +1,3 @@
-// `seictl onboard` is harbor-only and single-account in v1; the
-// constants below pin those assumptions. Multi-cluster / multi-account
-// is a follow-up that would replace these with flags.
-
 package cluster
 
 import (
@@ -36,8 +32,11 @@ const (
 var onboardPRBodyTemplate string
 
 type OnboardResult struct {
-	Alias          string        `json:"alias"`
-	IdentityPath   string        `json:"identityPath"`
+	Alias        string `json:"alias"`
+	IdentityPath string `json:"identityPath"`
+	// GeneratedFiles lists files included in the generated PR.
+	// Idempotent re-runs omit unchanged files (e.g. an aggregator entry
+	// already present).
 	GeneratedFiles []string      `json:"generatedFiles"`
 	Branch         string        `json:"branch,omitempty"`
 	PRURL          string        `json:"prUrl,omitempty"`
@@ -67,6 +66,7 @@ type onboardDeps struct {
 	podIdentity      func(ctx context.Context, b aws.PodIdentityBinding, dryRun bool) (aws.PodIdentityArtifact, *clioutput.Error)
 	generateFiles    func(cell onboardmanifests.Cell) ([]onboardmanifests.File, error)
 	updateAggregator func(repoPath, alias string) (aggregator.Result, error)
+	ensureUpToDate   func(repoPath, baseBranch string) error
 	checkGHAuth      func() error
 	checkClean       func(repoPath string) error
 	createPR         func(opts githubpr.Options) (*githubpr.Result, error)
@@ -81,6 +81,7 @@ var defaultOnboardDeps = onboardDeps{
 	podIdentity:      aws.EnsurePodIdentity,
 	generateFiles:    onboardmanifests.Generate,
 	updateAggregator: aggregator.UpdateEngineers,
+	ensureUpToDate:   githubpr.EnsureBaseUpToDate,
 	checkGHAuth:      githubpr.CheckAuth,
 	checkClean:       githubpr.CheckCleanTree,
 	createPR:         githubpr.CreatePR,
@@ -183,12 +184,12 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 
 	var aggRes aggregator.Result
 	if !in.NoPR {
+		if err := deps.ensureUpToDate(repoPath, "main"); err != nil {
+			return failOnboard(out, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatBaseBranchStale,
+				"%v", err))
+		}
 		var aerr error
 		aggRes, aerr = deps.updateAggregator(repoPath, in.Alias)
-		if errors.Is(aerr, aggregator.ErrAggregatorMissing) {
-			return failOnboard(out, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatAggregatorMissing,
-				"aggregator kustomization missing at clusters/harbor/engineers/kustomization.yaml; this is a one-time bootstrap that must be landed by hand (see sei-protocol/platform#249 for prior art)"))
-		}
 		if aerr != nil {
 			return failOnboard(out, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatPRCreateFailed,
 				"update aggregator: %v", aerr))

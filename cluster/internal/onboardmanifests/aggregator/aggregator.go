@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,11 +19,6 @@ import (
 )
 
 const aggregatorPath = "clusters/harbor/engineers/kustomization.yaml"
-
-// ErrAggregatorMissing is the sentinel returned when the aggregator
-// kustomization doesn't exist on disk. Callers map it to a typed CLI
-// error pointing at the bootstrap-PR remediation path.
-var ErrAggregatorMissing = errors.New("aggregator kustomization missing")
 
 // Result is what UpdateEngineers returns: the repo-relative path of the
 // aggregator, the rewritten content, and whether the alias was actually
@@ -39,14 +33,12 @@ type Result struct {
 
 // UpdateEngineers reads the aggregator from repoPath, inserts alias
 // into its `resources:` list (sorted alphabetically, idempotent), and
-// returns the rewritten file. ErrAggregatorMissing fires when the
-// aggregator file doesn't exist — that's a one-time human bootstrap.
+// returns the rewritten file. The aggregator is assumed to exist in
+// any canonical platform-repo checkout that's at-or-ahead of the
+// bootstrap PR (sei-protocol/platform#249).
 func UpdateEngineers(repoPath, alias string) (Result, error) {
 	full := filepath.Join(repoPath, aggregatorPath)
 	raw, err := os.ReadFile(full)
-	if errors.Is(err, fs.ErrNotExist) {
-		return Result{}, ErrAggregatorMissing
-	}
 	if err != nil {
 		return Result{}, fmt.Errorf("read aggregator: %w", err)
 	}
@@ -73,7 +65,6 @@ func UpdateEngineers(repoPath, alias string) (Result, error) {
 	aliases = append(aliases, alias)
 	sort.Strings(aliases)
 
-	seq.Style = 0
 	seq.Content = seq.Content[:0]
 	for _, a := range aliases {
 		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: a})

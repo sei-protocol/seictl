@@ -66,7 +66,8 @@ func onboardStubs(t *testing.T) (onboardDeps, string, string) {
 				Added:   true,
 			}, nil
 		},
-		checkGHAuth: func() error { return nil },
+		ensureUpToDate: func(string, string) error { return nil },
+		checkGHAuth:    func() error { return nil },
 		checkClean:  func(string) error { return nil },
 		createPR: func(opts githubpr.Options) (*githubpr.Result, error) {
 			return &githubpr.Result{Branch: opts.Branch, URL: "https://github.com/example/pr/1"}, nil
@@ -242,18 +243,26 @@ func TestRunOnboard_PropagatesIAMFailureWithAWSCreateFailed(t *testing.T) {
 	}
 }
 
-func TestRunOnboard_MissingAggregatorFailsWithCategory(t *testing.T) {
+func TestRunOnboard_StaleBaseFailsBeforeAggregatorRead(t *testing.T) {
 	deps, _, _ := onboardStubs(t)
+	deps.ensureUpToDate = func(string, string) error {
+		return errors.New("local HEAD is 3 commit(s) behind origin/main; run `git pull origin main` first")
+	}
+	aggregatorCalled := false
 	deps.updateAggregator = func(string, string) (aggregator.Result, error) {
-		return aggregator.Result{}, aggregator.ErrAggregatorMissing
+		aggregatorCalled = true
+		return aggregator.Result{}, nil
 	}
 	var buf bytes.Buffer
 	err := runOnboard(context.Background(), onboardInput{Alias: "bdc", Apply: true}, &buf, deps)
-	if err == nil || !strings.Contains(buf.String(), "aggregator-missing") {
-		t.Errorf("expected aggregator-missing; got %s", buf.String())
+	if err == nil || !strings.Contains(buf.String(), "base-branch-stale") {
+		t.Errorf("expected base-branch-stale; got %s", buf.String())
 	}
-	if !strings.Contains(buf.String(), "platform#249") {
-		t.Errorf("error should reference the bootstrap PR for remediation; got %s", buf.String())
+	if !strings.Contains(buf.String(), "git pull origin main") {
+		t.Errorf("error should tell engineer to pull; got %s", buf.String())
+	}
+	if aggregatorCalled {
+		t.Errorf("updateAggregator should not run when base is stale")
 	}
 }
 
