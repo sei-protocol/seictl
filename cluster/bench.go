@@ -78,6 +78,7 @@ type benchDeps struct {
 	identityPath  func() (string, error)
 	newKubeClient func(kube.Options) (*kube.Client, *clioutput.Error)
 	apply         func(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
+	getCaller     func(context.Context) (*aws.Caller, *clioutput.Error)
 }
 
 var defaultBenchDeps = benchDeps{
@@ -85,6 +86,7 @@ var defaultBenchDeps = benchDeps{
 	identityPath:  identity.DefaultPath,
 	newKubeClient: kube.New,
 	apply:         applyToCluster,
+	getCaller:     aws.GetCaller,
 }
 
 func applyToCluster(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
@@ -148,6 +150,10 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 	namespace := "eng-" + eng.Alias
 	if e := validate.Namespace(namespace, eng.Alias); e != nil {
 		return failBenchUp(out, e)
+	}
+
+	if _, callerErr := deps.getCaller(ctx); callerErr != nil {
+		return failBenchUp(out, callerErr)
 	}
 
 	digest, dErr := deps.resolveDigest(ctx, in.Image)

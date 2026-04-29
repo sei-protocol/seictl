@@ -20,12 +20,18 @@ type Caller struct {
 
 // GetCaller resolves the active AWS principal via STS GetCallerIdentity.
 // Errors map to ExitIdentity / CatAWSUnavailable — this is a read of
-// auth state, not a creation.
+// auth state, not a creation. When the failure is "no credentials
+// resolvable" (vs e.g. permission denied), the message is prefixed with
+// CredsHint() so the engineer sees the specific remediation.
 func GetCaller(ctx context.Context) (*Caller, *clioutput.Error) {
 	cfg, err := awscfg.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatAWSUnavailable,
-			"load AWS config: %v", err)
+			"%s (load AWS config: %v)", CredsHint(), err)
+	}
+	if _, credsErr := cfg.Credentials.Retrieve(ctx); credsErr != nil {
+		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatAWSUnavailable,
+			"%s (%v)", CredsHint(), credsErr)
 	}
 	out, err := sts.NewFromConfig(cfg).GetCallerIdentity(ctx, nil)
 	if err != nil {

@@ -59,13 +59,18 @@ func runContext(ctx context.Context, kubeconfig, kubeContext string, out io.Writ
 		Namespace:   kc.Namespace,
 	}
 
-	// AWS is best-effort: SSO sessions expire and engineers run `context`
-	// to diagnose that.
-	if caller, awsErr := deps.getCaller(ctx); awsErr == nil {
-		res.AWSAccount = caller.Account
-		res.AWSRegion = caller.Region
-		res.AWSPrincipalARN = caller.PrincipalARN
+	// AWS is required: every side-effecting verb needs it, so failing
+	// here saves the engineer from running through more verbs that all
+	// fail in different shapes. The error message carries the specific
+	// remediation hint via aws.CredsHint.
+	caller, awsErr := deps.getCaller(ctx)
+	if awsErr != nil {
+		_ = clioutput.EmitError(out, clioutput.KindContextResult, awsErr)
+		return cli.Exit("", awsErr.Code)
 	}
+	res.AWSAccount = caller.Account
+	res.AWSRegion = caller.Region
+	res.AWSPrincipalARN = caller.PrincipalARN
 
 	if path, err := deps.identityPath(); err == nil {
 		eng, idErr := identity.Read(path)

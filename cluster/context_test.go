@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sei-protocol/seictl/cluster/internal/aws"
@@ -85,12 +86,13 @@ func TestRunContext(t *testing.T) {
 		}
 	})
 
-	t.Run("aws failure leaves aws fields empty", func(t *testing.T) {
+	t.Run("aws failure exits ExitIdentity with error envelope", func(t *testing.T) {
 		path := writeKubeconfig(t)
 
 		stub := contextDeps{
 			getCaller: func(context.Context) (*aws.Caller, *clioutput.Error) {
-				return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatAWSUnavailable, "expired SSO")
+				return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatAWSUnavailable,
+					"AWS_PROFILE not set; ~/.aws/config has profile \"sei\"")
 			},
 			identityPath: func() (string, error) {
 				return "", errors.New("skip")
@@ -98,17 +100,27 @@ func TestRunContext(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		if err := runContext(context.Background(), path, "", &buf, stub); err != nil {
-			t.Fatalf("runContext should not fail on AWS error: %v", err)
+		err := runContext(context.Background(), path, "", &buf, stub)
+		if err == nil {
+			t.Fatalf("runContext should fail when AWS unavailable")
+		}
+		type exitCoder interface{ ExitCode() int }
+		ec, ok := err.(exitCoder)
+		if !ok {
+			t.Fatalf("error must implement ExitCode(); got %T", err)
+		}
+		if ec.ExitCode() != clioutput.ExitIdentity {
+			t.Errorf("exit code: got %d want %d", ec.ExitCode(), clioutput.ExitIdentity)
 		}
 		var env clioutput.Envelope
 		if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		var data contextResult
-		_ = json.Unmarshal(env.Data, &data)
-		if data.AWSAccount != "" || data.AWSPrincipalARN != "" {
-			t.Errorf("aws fields should be empty: %+v", data)
+		if env.Error == nil || env.Error.Category != clioutput.CatAWSUnavailable {
+			t.Errorf("expected error envelope with aws-unavailable, got %+v", env.Error)
+		}
+		if env.Error != nil && !strings.Contains(env.Error.Message, "AWS_PROFILE") {
+			t.Errorf("error message should carry the hint, got %q", env.Error.Message)
 		}
 	})
 
