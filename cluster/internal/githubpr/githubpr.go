@@ -43,6 +43,25 @@ func CheckAuth() error {
 	return nil
 }
 
+// EnsureBaseUpToDate errors if local HEAD is missing commits from
+// origin/<baseBranch>. Without this guard, onboard would read a stale
+// aggregator from the working tree and silently overwrite peer entries
+// when the PR landed.
+func EnsureBaseUpToDate(repoPath, baseBranch string) error {
+	if _, err := runIn(repoPath, "git", "fetch", "origin", baseBranch); err != nil {
+		return fmt.Errorf("git fetch origin %s: %w", baseBranch, err)
+	}
+	out, err := runIn(repoPath, "git", "rev-list", "--count", "HEAD..origin/"+baseBranch)
+	if err != nil {
+		return fmt.Errorf("git rev-list HEAD..origin/%s: %w", baseBranch, err)
+	}
+	behind := strings.TrimSpace(string(out))
+	if behind != "0" {
+		return fmt.Errorf("local HEAD is %s commit(s) behind origin/%s; run `git pull origin %s` first", behind, baseBranch, baseBranch)
+	}
+	return nil
+}
+
 // CheckCleanTree returns nil if the platform repo has no staged or
 // unstaged changes to tracked files. Untracked files are tolerated
 // because CreatePR adds explicit paths via `git add <file>`, never `-A`.

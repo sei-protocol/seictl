@@ -15,6 +15,7 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/githubpr"
 	"github.com/sei-protocol/seictl/cluster/internal/identity"
 	"github.com/sei-protocol/seictl/cluster/internal/onboardmanifests"
+	"github.com/sei-protocol/seictl/cluster/internal/onboardmanifests/aggregator"
 )
 
 // onboardStubs builds a deps struct with all positive-path stubs.
@@ -58,8 +59,16 @@ func onboardStubs(t *testing.T) (onboardDeps, string, string) {
 			}, nil
 		},
 		generateFiles: onboardmanifests.Generate,
-		checkGHAuth:   func() error { return nil },
-		checkClean:    func(string) error { return nil },
+		updateAggregator: func(_, alias string) (aggregator.Result, error) {
+			return aggregator.Result{
+				Path:    "clusters/harbor/engineers/kustomization.yaml",
+				Content: []byte("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - " + alias + "\n"),
+				Added:   true,
+			}, nil
+		},
+		ensureUpToDate: func(string, string) error { return nil },
+		checkGHAuth:    func() error { return nil },
+		checkClean:     func(string) error { return nil },
 		createPR: func(opts githubpr.Options) (*githubpr.Result, error) {
 			return &githubpr.Result{Branch: opts.Branch, URL: "https://github.com/example/pr/1"}, nil
 		},
@@ -100,8 +109,17 @@ func TestRunOnboard_DryRunEmitsWouldCreate(t *testing.T) {
 	if _, statErr := os.Stat(idPath); statErr == nil {
 		t.Errorf("identity file written on dry-run at %s", idPath)
 	}
-	if len(data.GeneratedFiles) != 3 {
-		t.Errorf("generated files: got %d, want 3", len(data.GeneratedFiles))
+	if len(data.GeneratedFiles) != 4 {
+		t.Errorf("generated files: got %d, want 4 (3 cell + aggregator)", len(data.GeneratedFiles))
+	}
+	var sawAggregator bool
+	for _, p := range data.GeneratedFiles {
+		if p == "clusters/harbor/engineers/kustomization.yaml" {
+			sawAggregator = true
+		}
+	}
+	if !sawAggregator {
+		t.Errorf("aggregator path missing from generated files: %v", data.GeneratedFiles)
 	}
 }
 
@@ -223,4 +241,94 @@ func TestRunOnboard_PropagatesIAMFailureWithAWSCreateFailed(t *testing.T) {
 	if err == nil || !strings.Contains(buf.String(), "aws-create-failed") {
 		t.Errorf("expected aws-create-failed; got %s", buf.String())
 	}
+}
+
+func TestRunOnboard_StaleBaseFailsBeforeAggregatorRead(t *testing.T) {
+	deps, _, _ := onboardStubs(t)
+	deps.ensureUpToDate = func(string, string) error {
+		return errors.New("local HEAD is 3 commit(s) behind origin/main; run `git pull origin main` first")
+	}
+	aggregatorCalled := false
+	deps.updateAggregator = func(string, string) (aggregator.Result, error) {
+		aggregatorCalled = true
+		return aggregator.Result{}, nil
+	}
+	var buf bytes.Buffer
+	err := runOnboard(context.Background(), onboardInput{Alias: "bdc", Apply: true}, &buf, deps)
+	if err == nil || !strings.Contains(buf.String(), "base-branch-stale") {
+		t.Errorf("expected base-branch-stale; got %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "git pull origin main") {
+		t.Errorf("error should tell engineer to pull; got %s", buf.String())
+	}
+	if aggregatorCalled {
+		t.Errorf("updateAggregator should not run when base is stale")
+	}
+}
+
+func TestRunOnboard_AggregatorAddedIsIncludedInPRFiles(t *testing.T) {
+	deps, _, _ := onboardStubs(t)
+	deps.updateAggregator = func(_, alias string) (aggregator.Result, error) {
+		return aggregator.Result{
+			Path:    "clusters/harbor/engineers/kustomization.yaml",
+			Content: []byte("synthetic-aggregator-body-for-" + alias),
+			Added:   true,
+		}, nil
+	}
+	var captured githubpr.Options
+	deps.createPR = func(opts githubpr.Options) (*githubpr.Result, error) {
+		captured = opts
+		return &githubpr.Result{Branch: opts.Branch, URL: "https://github.com/example/pr/1"}, nil
+	}
+	var buf bytes.Buffer
+	if err := runOnboard(context.Background(), onboardInput{Alias: "bdc", Apply: true}, &buf, deps); err != nil {
+		t.Fatalf("runOnboard: %v\n%s", err, buf.String())
+	}
+	body, ok := captured.Files["clusters/harbor/engineers/kustomization.yaml"]
+	if !ok {
+		t.Fatalf("aggregator path not in PR file map; got keys: %v", keys(captured.Files))
+	}
+	if !bytes.Contains(body, []byte("synthetic-aggregator-body-for-bdc")) {
+		t.Errorf("aggregator content not propagated; got %s", body)
+	}
+}
+
+func TestRunOnboard_AggregatorIdempotentSkipsPRFile(t *testing.T) {
+	deps, _, _ := onboardStubs(t)
+	deps.updateAggregator = func(string, string) (aggregator.Result, error) {
+		return aggregator.Result{
+			Path:    "clusters/harbor/engineers/kustomization.yaml",
+			Content: []byte("unchanged"),
+			Added:   false,
+		}, nil
+	}
+	var captured githubpr.Options
+	deps.createPR = func(opts githubpr.Options) (*githubpr.Result, error) {
+		captured = opts
+		return &githubpr.Result{Branch: opts.Branch, URL: "https://github.com/example/pr/1"}, nil
+	}
+	var buf bytes.Buffer
+	if err := runOnboard(context.Background(), onboardInput{Alias: "bdc", Apply: true}, &buf, deps); err != nil {
+		t.Fatalf("runOnboard: %v\n%s", err, buf.String())
+	}
+	if _, present := captured.Files["clusters/harbor/engineers/kustomization.yaml"]; present {
+		t.Errorf("aggregator path should be omitted when Added=false; got keys: %v", keys(captured.Files))
+	}
+	var env clioutput.Envelope
+	_ = json.Unmarshal(buf.Bytes(), &env)
+	var data OnboardResult
+	_ = json.Unmarshal(env.Data, &data)
+	for _, p := range data.GeneratedFiles {
+		if p == "clusters/harbor/engineers/kustomization.yaml" {
+			t.Errorf("aggregator path should not appear in GeneratedFiles when Added=false")
+		}
+	}
+}
+
+func keys(m map[string][]byte) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

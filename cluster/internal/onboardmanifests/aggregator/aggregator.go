@@ -1,0 +1,101 @@
+// Package aggregator updates the cell-aggregator kustomization at
+// `clusters/harbor/engineers/kustomization.yaml` so that each `seictl
+// onboard --apply` PR is fully self-wired into Flux.
+//
+// The grandparent file (`clusters/harbor/kustomization.yaml`) is a
+// one-time human-reviewed bootstrap and is intentionally not touched.
+// See sei-protocol/platform#249.
+package aggregator
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+
+	"gopkg.in/yaml.v3"
+)
+
+const aggregatorPath = "clusters/harbor/engineers/kustomization.yaml"
+
+// Result.Added=false means the alias was already present; Content is
+// the original bytes and callers should skip including the file in the
+// PR to keep the diff clean.
+type Result struct {
+	Path    string
+	Content []byte
+	Added   bool
+}
+
+// UpdateEngineers inserts alias into the aggregator's resources list,
+// sorted alphabetically. Idempotent. Assumes the aggregator exists —
+// ensure repoPath is at-or-ahead of sei-protocol/platform#249.
+func UpdateEngineers(repoPath, alias string) (Result, error) {
+	full := filepath.Join(repoPath, aggregatorPath)
+	raw, err := os.ReadFile(full)
+	if err != nil {
+		return Result{}, fmt.Errorf("read aggregator: %w", err)
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return Result{}, fmt.Errorf("parse aggregator: %w", err)
+	}
+	seq, err := findResourcesSeq(&doc)
+	if err != nil {
+		return Result{}, err
+	}
+
+	aliases := make([]string, 0, len(seq.Content)+1)
+	for _, n := range seq.Content {
+		if n.Kind != yaml.ScalarNode {
+			return Result{}, fmt.Errorf("aggregator resources entry is not a bare string at line %d", n.Line)
+		}
+		if n.Value == alias {
+			return Result{Path: aggregatorPath, Content: raw, Added: false}, nil
+		}
+		aliases = append(aliases, n.Value)
+	}
+	aliases = append(aliases, alias)
+	sort.Strings(aliases)
+
+	seq.Content = seq.Content[:0]
+	for _, a := range aliases {
+		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: a})
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return Result{}, fmt.Errorf("encode aggregator: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return Result{}, fmt.Errorf("close encoder: %w", err)
+	}
+	return Result{Path: aggregatorPath, Content: buf.Bytes(), Added: true}, nil
+}
+
+// findResourcesSeq errors if `resources` is missing or not a bare
+// sequence — the aggregator schema is constrained and we own it.
+func findResourcesSeq(doc *yaml.Node) (*yaml.Node, error) {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return nil, errors.New("aggregator is not a YAML document")
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil, errors.New("aggregator root is not a mapping")
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		k, v := root.Content[i], root.Content[i+1]
+		if k.Kind == yaml.ScalarNode && k.Value == "resources" {
+			if v.Kind != yaml.SequenceNode {
+				return nil, fmt.Errorf("aggregator `resources` is not a sequence (line %d)", v.Line)
+			}
+			return v, nil
+		}
+	}
+	return nil, errors.New("aggregator has no `resources` key")
+}

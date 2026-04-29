@@ -1,7 +1,3 @@
-// `seictl onboard` is harbor-only and single-account in v1; the
-// constants below pin those assumptions. Multi-cluster / multi-account
-// is a follow-up that would replace these with flags.
-
 package cluster
 
 import (
@@ -22,6 +18,7 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/githubpr"
 	"github.com/sei-protocol/seictl/cluster/internal/identity"
 	"github.com/sei-protocol/seictl/cluster/internal/onboardmanifests"
+	"github.com/sei-protocol/seictl/cluster/internal/onboardmanifests/aggregator"
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
 )
 
@@ -35,8 +32,10 @@ const (
 var onboardPRBodyTemplate string
 
 type OnboardResult struct {
-	Alias          string        `json:"alias"`
-	IdentityPath   string        `json:"identityPath"`
+	Alias        string `json:"alias"`
+	IdentityPath string `json:"identityPath"`
+	// Idempotent re-runs omit unchanged files (e.g. an aggregator entry
+	// already present in the resources list).
 	GeneratedFiles []string      `json:"generatedFiles"`
 	Branch         string        `json:"branch,omitempty"`
 	PRURL          string        `json:"prUrl,omitempty"`
@@ -60,29 +59,33 @@ type onboardInput struct {
 }
 
 type onboardDeps struct {
-	identityPath  func() (string, error)
-	getCaller     func(context.Context) (*aws.Caller, *clioutput.Error)
-	provisionIAM  func(ctx context.Context, scope aws.EngineerScope, dryRun bool) ([]aws.IAMArtifact, *clioutput.Error)
-	podIdentity   func(ctx context.Context, b aws.PodIdentityBinding, dryRun bool) (aws.PodIdentityArtifact, *clioutput.Error)
-	generateFiles func(cell onboardmanifests.Cell) ([]onboardmanifests.File, error)
-	checkGHAuth   func() error
-	checkClean    func(repoPath string) error
-	createPR      func(opts githubpr.Options) (*githubpr.Result, error)
-	discoverRepo  func(start string) (string, error)
-	writeIdentity func(path string, eng identity.Engineer) *clioutput.Error
+	identityPath     func() (string, error)
+	getCaller        func(context.Context) (*aws.Caller, *clioutput.Error)
+	provisionIAM     func(ctx context.Context, scope aws.EngineerScope, dryRun bool) ([]aws.IAMArtifact, *clioutput.Error)
+	podIdentity      func(ctx context.Context, b aws.PodIdentityBinding, dryRun bool) (aws.PodIdentityArtifact, *clioutput.Error)
+	generateFiles    func(cell onboardmanifests.Cell) ([]onboardmanifests.File, error)
+	updateAggregator func(repoPath, alias string) (aggregator.Result, error)
+	ensureUpToDate   func(repoPath, baseBranch string) error
+	checkGHAuth      func() error
+	checkClean       func(repoPath string) error
+	createPR         func(opts githubpr.Options) (*githubpr.Result, error)
+	discoverRepo     func(start string) (string, error)
+	writeIdentity    func(path string, eng identity.Engineer) *clioutput.Error
 }
 
 var defaultOnboardDeps = onboardDeps{
-	identityPath:  identity.DefaultPath,
-	getCaller:     aws.GetCaller,
-	provisionIAM:  aws.ProvisionIAM,
-	podIdentity:   aws.EnsurePodIdentity,
-	generateFiles: onboardmanifests.Generate,
-	checkGHAuth:   githubpr.CheckAuth,
-	checkClean:    githubpr.CheckCleanTree,
-	createPR:      githubpr.CreatePR,
-	discoverRepo:  githubpr.DiscoverRepo,
-	writeIdentity: identity.Write,
+	identityPath:     identity.DefaultPath,
+	getCaller:        aws.GetCaller,
+	provisionIAM:     aws.ProvisionIAM,
+	podIdentity:      aws.EnsurePodIdentity,
+	generateFiles:    onboardmanifests.Generate,
+	updateAggregator: aggregator.UpdateEngineers,
+	ensureUpToDate:   githubpr.EnsureBaseUpToDate,
+	checkGHAuth:      githubpr.CheckAuth,
+	checkClean:       githubpr.CheckCleanTree,
+	createPR:         githubpr.CreatePR,
+	discoverRepo:     githubpr.DiscoverRepo,
+	writeIdentity:    identity.Write,
 }
 
 var OnboardCmd = cli.Command{
@@ -178,6 +181,23 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 		generatedPaths[i] = f.Path
 	}
 
+	var aggRes aggregator.Result
+	if !in.NoPR {
+		if err := deps.ensureUpToDate(repoPath, "main"); err != nil {
+			return failOnboard(out, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatBaseBranchStale,
+				"%v", err))
+		}
+		var aerr error
+		aggRes, aerr = deps.updateAggregator(repoPath, in.Alias)
+		if aerr != nil {
+			return failOnboard(out, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatPRCreateFailed,
+				"update aggregator: %v", aerr))
+		}
+		if aggRes.Added {
+			generatedPaths = append(generatedPaths, aggRes.Path)
+		}
+	}
+
 	res := OnboardResult{
 		Alias:          in.Alias,
 		IdentityPath:   idPath,
@@ -195,6 +215,9 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 		fileBodies := map[string][]byte{}
 		for _, f := range files {
 			fileBodies[f.Path] = f.Content
+		}
+		if aggRes.Added {
+			fileBodies[aggRes.Path] = aggRes.Content
 		}
 		prRes, perr := deps.createPR(githubpr.Options{
 			RepoPath:      repoPath,
@@ -227,9 +250,9 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 	return nil
 }
 
-// identityConsistent enforces that a pre-existing engineer.json with a
-// different alias blocks onboard. Matching alias is fine (idempotent
-// rewrite happens later); missing file is fine (will be created).
+// Matching alias is fine (idempotent rewrite happens later); missing
+// file is fine (will be created). Mismatched alias blocks onboard to
+// prevent accidental cross-engineer overwrites.
 func identityConsistent(path, alias string) *clioutput.Error {
 	existing, err := identity.Read(path)
 	if err == nil {
@@ -268,11 +291,10 @@ func resolveRepo(explicit string, discover func(string) (string, error)) (string
 	return repo, nil
 }
 
-// refuseExistingAlias fails closed if an engineer cell already exists
-// at the target path. Mid-run idempotency for an in-progress onboard
-// (same engineer re-running) is the createPR layer's job; this guard
-// catches the cross-engineer case where Alice tries `--alias bob` and
-// would otherwise clobber bob's cell directory.
+// Mid-run idempotency for an in-progress onboard (same engineer
+// re-running) is the createPR layer's job; this guard catches the
+// cross-engineer case where Alice tries `--alias bob` and would
+// otherwise clobber bob's cell directory.
 func refuseExistingAlias(repoPath, alias string) *clioutput.Error {
 	cellDir := filepath.Join(repoPath, "clusters", "harbor", "engineers", alias)
 	if _, err := os.Stat(cellDir); err == nil {
