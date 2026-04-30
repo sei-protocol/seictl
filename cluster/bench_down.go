@@ -30,7 +30,14 @@ type benchDownResult struct {
 	ChainID   string               `json:"chainId"`
 	Namespace string               `json:"namespace"`
 	Resources []render.ManifestRef `json:"resources"`
-	DeletedAt *time.Time           `json:"deletedAt,omitempty"`
+	// DeletedAt is set only when every resource reached "deleted" or
+	// "not-found"; while any resource is still-terminating, the
+	// deletion has been requested but not completed.
+	DeletedAt *time.Time `json:"deletedAt,omitempty"`
+	// Hint is a human-readable next-step prompt populated when at
+	// least one resource is still-terminating, so an agent caller
+	// re-running `bench up` immediately knows to wait.
+	Hint string `json:"hint,omitempty"`
 }
 
 type benchDownInput struct {
@@ -121,13 +128,23 @@ func runBenchDown(ctx context.Context, in benchDownInput, out io.Writer, deps be
 		}
 	}
 
-	now := time.Now().UTC()
 	res := benchDownResult{
 		Name:      in.Name,
 		ChainID:   chainID,
 		Namespace: namespace,
 		Resources: resources,
-		DeletedAt: &now,
+	}
+	terminating := 0
+	for _, r := range results {
+		if r.Action == "still-terminating" {
+			terminating++
+		}
+	}
+	if terminating == 0 {
+		now := time.Now().UTC()
+		res.DeletedAt = &now
+	} else {
+		res.Hint = fmt.Sprintf("%d resource(s) still terminating; wait before re-running `bench up` with the same name", terminating)
 	}
 	if err := clioutput.Emit(out, clioutput.KindBenchDownResult, res); err != nil {
 		fmt.Fprintln(os.Stderr, err)
