@@ -54,6 +54,7 @@ var (
 			&cluster.ContextCmd,
 			&cluster.BenchCmd,
 			&cluster.ChainCmd,
+			&cluster.RPCCmd,
 			&cluster.OnboardCmd,
 		},
 		Flags: []cli.Flag{
