@@ -26,7 +26,7 @@ cluster/
   *_test.go                   # in-package tests
   internal/                   # importable only from cluster/...
     clioutput/                # JSON envelope contract (the MCP tool surface)
-    identity/                 # ~/.seictl/engineer.json
+    config/                   # ~/.seictl/config.json
     validate/                 # input policy
     kube/                     # kubeconfig loading
     aws/                      # STS GetCaller, ECR digest resolver

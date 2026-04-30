@@ -83,8 +83,8 @@ func TestError_ErrorString(t *testing.T) {
 		want string
 	}{
 		"no detail": {
-			err:  New(ExitIdentity, CatMissing, "engineer.json not found"),
-			want: "missing: engineer.json not found",
+			err:  New(ExitIdentity, CatMissing, "config.json not found"),
+			want: "missing: config.json not found",
 		},
 		"with detail": {
 			err:  New(ExitBench, CatImagePolicy, "registry not allowed").WithDetail("got: docker.io"),

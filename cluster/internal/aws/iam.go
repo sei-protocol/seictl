@@ -68,7 +68,7 @@ func ProvisionIAM(ctx context.Context, scope EngineerScope, dryRun bool) ([]IAMA
 	}
 	client := iam.NewFromConfig(cfg)
 
-	policyDoc, err := json.Marshal(seiloadPolicyDocument(scope))
+	policyDoc, err := json.Marshal(seictlPolicyDocument(scope))
 	if err != nil {
 		return nil, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatAWSCreateFailed,
 			"marshal policy doc: %v", err)
@@ -118,7 +118,7 @@ func ensurePolicy(ctx context.Context, c *iam.Client, scope EngineerScope, doc s
 		PolicyName:     awssdk.String(scope.PolicyName()),
 		Path:           awssdk.String(IAMPath),
 		PolicyDocument: awssdk.String(doc),
-		Description:    awssdk.String(fmt.Sprintf("seictl-managed: S3 results write scope for engineer %s", scope.Alias)),
+		Description:    awssdk.String(fmt.Sprintf("seictl-managed: permissions for engineer %s", scope.Alias)),
 		Tags:           seictlTags(scope),
 	})
 	if cerr != nil {
@@ -144,7 +144,7 @@ func ensureRole(ctx context.Context, c *iam.Client, scope EngineerScope, trust s
 		RoleName:                 awssdk.String(scope.RoleName()),
 		Path:                     awssdk.String(IAMPath),
 		AssumeRolePolicyDocument: awssdk.String(trust),
-		Description:              awssdk.String(fmt.Sprintf("seictl-managed: Pod Identity role for seictl SA in eng-%s", scope.Alias)),
+		Description:              awssdk.String(fmt.Sprintf("seictl-managed: Pod Identity role for seictl SA, engineer %s", scope.Alias)),
 		Tags:                     seictlTags(scope),
 	})
 	if cerr != nil {
@@ -205,7 +205,7 @@ func isNotFound(err error) bool {
 	return false
 }
 
-func seiloadPolicyDocument(scope EngineerScope) map[string]any {
+func seictlPolicyDocument(scope EngineerScope) map[string]any {
 	prefix := fmt.Sprintf("eng-%s/*", scope.Alias)
 	return map[string]any{
 		"Version": "2012-10-17",

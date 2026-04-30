@@ -73,7 +73,7 @@ seictl/
     kube/                    [new — client construction, kubeconfig resolution]
     render/                  [new — text/template renderer over embed.FS]
     aws/                     [new — ECR digest resolver, IAM + Pod Identity helpers]
-    identity/                [new — engineer.json read/write, validation]
+    config/                  [new — config.json read/write, validation]
     validate/                [new — input validation regexes]
     clioutput/               [new — Envelope, ErrorBody, exit-code mapping]
   templates/                 [new embed.FS root]
@@ -129,17 +129,17 @@ No required flags. Side-effect-free reads only.
 
 ```go
 type ContextResult struct {
-    KubeContext     string    `json:"kubeContext"`
-    Cluster         string    `json:"cluster"`         // derived from server URL or kubeconfig context name
-    Server          string    `json:"server"`
-    Namespace       string    `json:"namespace"`
-    AWSAccount      string    `json:"awsAccount"`
-    AWSRegion       string    `json:"awsRegion"`
-    AWSPrincipalARN string    `json:"awsPrincipalArn"`
-    Engineer        *Engineer `json:"engineer,omitempty"` // nil if engineer.json missing
+    KubeContext     string  `json:"kubeContext"`
+    Cluster         string  `json:"cluster"`         // derived from server URL or kubeconfig context name
+    Server          string  `json:"server"`
+    Namespace       string  `json:"namespace"`
+    AWSAccount      string  `json:"awsAccount"`
+    AWSRegion       string  `json:"awsRegion"`
+    AWSPrincipalARN string  `json:"awsPrincipalArn"`
+    Config          *Config `json:"config,omitempty"` // nil if config.json missing
 }
 
-type Engineer struct{ Alias, Name string }
+type Config struct{ Alias, Namespace string }
 ```
 
 Six fields. The Claude skill surfaces this to the engineer at the start of a session so they can confirm where they are and who they are.
@@ -147,7 +147,7 @@ Six fields. The Claude skill surfaces this to the engineer at the start of a ses
 ### `seictl onboard`
 
 ```
-seictl onboard --alias <alias> [--name <name>]
+seictl onboard --alias <alias>
                [--platform-repo <path>] [--no-pr] [--apply]
 ```
 
@@ -161,7 +161,8 @@ Without `--apply`: dry-run; prints what would be created.
 ```go
 type OnboardResult struct {
     Alias          string         `json:"alias"`
-    IdentityPath   string         `json:"identityPath"`
+    Namespace      string         `json:"namespace"`
+    ConfigPath     string         `json:"configPath"`
     GeneratedFiles []string       `json:"generatedFiles"`     // platform-repo paths
     Branch         string         `json:"branch,omitempty"`
     PRURL          string         `json:"prUrl,omitempty"`
@@ -181,7 +182,7 @@ seictl bench up --image <ref> --name <name>
                 [--size s|m|l] [--duration <duration>] [--apply]
 ```
 
-Required: `--image`, `--name`. Defaults: size `s`, duration `30m`, namespace = `eng-<alias>` from identity.
+Required: `--image`, `--name`. Defaults: size `s`, duration `30m`, namespace from `~/.seictl/config.json`.
 
 Default behavior is dry-run. `--apply` performs server-side apply.
 
@@ -329,7 +330,7 @@ Every resource seictl creates carries:
 |---|---|---|
 | `app.kubernetes.io/managed-by` | `seictl` | always |
 | `app.kubernetes.io/part-of` | `seictl-bench` or `seictl-onboard` | command |
-| `sei.io/engineer` | engineer alias from `~/.seictl/engineer.json` | always |
+| `sei.io/engineer` | engineer alias from `~/.seictl/config.json` | always |
 | `sei.io/bench-name` | the `--name` value | bench up |
 | `tide.sei.io/cell-type` | `personal` | onboard (cells-forward) |
 | `tide.sei.io/owner` | engineer alias | onboard (cells-forward) |
@@ -373,10 +374,11 @@ Engineer's SSO role currently has admin permissions (sufficient to create the ab
 
 Offboarding (v1.1 or manual): mirror — `eks:DeletePodIdentityAssociation`, `iam:DeleteRole`, `iam:DeletePolicy`, plus revert PR.
 
-### Identity file: `~/.seictl/engineer.json`
+### Config file: `~/.seictl/config.json`
 
 - Mode `0600`, parent dir `0700`. On read, refuse if perms loose.
-- Two fields only: `alias`, `name`.
+- Two fields, both required: `alias`, `namespace`.
+- `seictl onboard` writes the engineer convention `namespace = "eng-" + alias`. Non-engineer flows (nightly, CI) drop a shim with whatever namespace they operate against; verbs read it verbatim.
 - Integrity matters: a loose-perms file on a shared workstation is a path to onboarding-as-someone-else or benching into another engineer's namespace.
 
 ### Image registry policy
