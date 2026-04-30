@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/validate"
 )
 
 const (
@@ -65,6 +66,9 @@ func Read(path string) (*Engineer, *clioutput.Error) {
 	if e.Alias == "" {
 		return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatMalformed,
 			"engineer identity is missing required field: alias").WithDetail(path)
+	}
+	if e := validate.Alias(e.Alias); e != nil {
+		return nil, e.WithDetail(path)
 	}
 	return &e, nil
 }

@@ -119,6 +119,33 @@ func TestRead_MissingAliasField(t *testing.T) {
 	}
 }
 
+func TestRead_RejectsInvalidAlias(t *testing.T) {
+	cases := []struct {
+		name  string
+		alias string
+	}{
+		{"reserved", "kube-system"},
+		{"path-traversal", "../etc"},
+		{"glob", "*"},
+		{"uppercase", "Brandon"},
+		{"too-long", "this-alias-is-way-too-long-for-the-30-char-cap-on-aliases"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tightTempDir(t)
+			path := filepath.Join(dir, "engineer.json")
+			body, _ := json.Marshal(Engineer{Alias: tc.alias, Name: "Anon"})
+			if err := os.WriteFile(path, body, FileMode); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			_, cliErr := Read(path)
+			if cliErr == nil || cliErr.Category != clioutput.CatAliasInvalid {
+				t.Errorf("expected alias-invalid, got %+v", cliErr)
+			}
+		})
+	}
+}
+
 func TestRead_RefusesLoosePerms(t *testing.T) {
 	dir := tightTempDir(t)
 	path := filepath.Join(dir, "engineer.json")
