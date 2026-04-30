@@ -19,8 +19,8 @@ The substrate is the existing `seictl` binary, extended with a small set of reso
 
 | Layer | Verbs |
 |---|---|
-| **Composites (sugar)** | `bench up/down/list` (shipped), `qa up`, `shadow up` (deferred) |
-| **Primitives** | `chain`, `rpc`, `load`, `harness`, `rules` — each with `up | down | list | wait | logs` (deferred) |
+| **Composites (sugar)** | `bench up/down/list` (shipped); `shadow up` (deferred) |
+| **Primitives** | `chain`, `rpc`, `load`, `rules` — each with `up | down | list | wait | logs` (deferred) |
 | **Distribution** | Single binary; standalone `seictl` AND kubectl plugin via `kubectl-sei` symlink |
 
 **v1 ships effectively zero new code.** Today's `bench up` already covers the seiload-nightly use case (the LLD's primary Phase 1 consumer). Primitives land on demand with named triggers, not speculatively.
@@ -29,9 +29,10 @@ This document supersedes #143. The runtime workload contract from platform#235 (
 
 ## Goals
 
-- **One tool that bridges resource provisioning + test orchestration** for engineers and agents. CLI for humans, MCP for agents, kubectl-plugin for engineers already in their kubectl flow.
-- **Composable primitives over monolithic resources.** Engineers should be able to stand up a chain alone, peer an RPC fleet against it, fire a load harness — separately or composed.
-- **Workload contract parity with Phase 1** (platform#235): a Job manifest that runs under autobake's bash glue runs unchanged under `seictl load up`.
+- **One tool that provisions ephemeral chain infrastructure + in-cluster load generation** for engineers and agents. CLI for humans, MCP for agents, kubectl-plugin for engineers already in their kubectl flow.
+- **Composable primitives over monolithic resources.** Engineers should be able to stand up a chain alone, peer an RPC fleet against it, fire in-cluster load — separately or composed.
+- **Endpoints-as-output.** seictl emits the chain's RPC endpoints in its JSON envelope; out-of-cluster test binaries (qa-testing's TS suite, fuzzers, integration tests) consume those via env vars or flags and run wherever the engineer/CI invokes them. Their exit code + logs are the verdict.
+- **Workload contract parity with Phase 1** (platform#235): a Job manifest that runs under autobake's bash glue runs unchanged under `seictl load up`. Applies to in-cluster load Jobs only — not to external test binaries.
 - **GitOps- and ad-hoc-friendly**, without a CR. Engineers run commands directly; CI applies via `seictl ... -f manifest.yaml` (introduced only when a real consumer asks).
 - **No cross-tenant blast radius.** Same engineer-namespace by construction (already enforced by IAM-aligned label scoping in shipped verbs).
 - **MCP graduation is additive.** Each verb's JSON envelope is already the MCP tool-output shape; no separate translation layer.
@@ -41,7 +42,7 @@ This document supersedes #143. The runtime workload contract from platform#235 (
 These are not "deferred to v1.1" — they are explicit anti-features that the abandoned LLD's gravitational pull will keep tempting us to build. Resist.
 
 - **A unified `validation.sei.io/v1` YAML schema.** Each verb owns its inputs; composition lives in shell until a real consumer hand-rolls the same wrapper script twice.
-- **A generic `harness` substrate** as a "configurable container Job runner." If qa-testing migrates from its bash glue, build `qa up` with qa-testing's *specific* contract, not a configurable substrate that pretends to be generic.
+- **seictl as a test runner.** seictl provisions ephemeral chain infrastructure (validators, RPC, in-cluster load Jobs) and tears it down. Out-of-cluster test binaries — qa-testing's TS suite, integration tests, fuzzers, soak runners — run wherever the engineer or CI invokes them. They consume seictl-emitted endpoints via env vars / flags and surface verdicts as exit codes + logs. seictl is not a Bazel, not a pytest, not a `task` runner — it's the K8s-side resource lifecycle. Don't model "harness" as a primitive; the binaries already have CLIs.
 - **Symmetric verb sets for symmetry's sake.** `up | down | list | wait | logs` looks elegant in a table; in v1 most primitives ship with two or three verbs, not five. Add the rest when an engineer hits the gap.
 - **Observability-as-test-oracle in the CLI.** The LLD wanted this because it was building a single-CR pass/fail. Engineers have Grafana and Alertmanager. Codify recurring failure-mode queries as saved Grafana panels first; promote to a `rules watch` Job only if the panel approach demonstrably fails.
 - **Per-verb kubectl plugin symlinks** (`kubectl-bench`, `kubectl-onboard`, …). One `kubectl-sei` plugin preserves a single argv parser; per-verb symlinks would force an arg-rewriting fork.
@@ -52,17 +53,18 @@ These are not "deferred to v1.1" — they are explicit anti-features that the ab
 
 ### Primitive surface
 
-Five resource primitives, each independently `up`/`down`-able:
+Four resource primitives, each independently `up`/`down`-able:
 
 | Primitive | Provisions | Lifetime |
 |---|---|---|
 | `chain` | One SeiNodeDeployment of validators (genesis ceremony, peer mesh, chain-id) | long-ish — can outlive any single test |
 | `rpc` | One SND of full-nodes peering with a named chain | tied to chain or shorter |
-| `load` | A seiload Job firing traffic at chain/RPC endpoints, duration-bounded | ephemeral |
-| `harness` | An arbitrary container Job (qa-testing, fuzzer, integration suite) targeting endpoints | ephemeral |
+| `load` | An in-cluster load Job (seiload-style) firing traffic at chain/RPC endpoints, duration-bounded | ephemeral |
 | `rules` | Prometheus-watcher Job evaluating alert/query rules over a window, writing verdict | tied to test window |
 
 Each primitive's full verb surface — when materialized — is `up | down | list | wait | logs`. v1 ships subsets per primitive on demand.
+
+**External test binaries are NOT primitives.** A QA suite, fuzzer, or integration test runs as its own binary (Cobra/argparse/whatever) and consumes seictl-provisioned endpoints via env vars or flags. Its exit code + logs are the verdict. seictl emits endpoints in the JSON envelope of `chain up` / `rpc up` / `bench up`; downstream tooling reads them. This is the autobake pattern (the GHA workflow runs seiload as a Job because seiload is in-cluster load gen; the workflow itself runs externally and orchestrates).
 
 **Today's `bench up` is a composite over chain + rpc + load.** It stays as the headline command and the canonical 80%-case path. The internal implementation can be refactored later to call into shared `runChainUp` / `runRPCUp` / `runLoadUp` Go functions; that refactor is not v1.
 
@@ -74,7 +76,7 @@ The unit of identity is `(namespace, chain-id)`. Every object any primitive appl
 |---|---|---|
 | `app.kubernetes.io/managed-by` | `seictl` | Tooling discrimination |
 | `app.kubernetes.io/part-of` | `seictl` | Cluster-wide owner-scope |
-| `app.kubernetes.io/component` | `chain` \| `rpc` \| `load` \| `harness` \| `rules` | Primitive selector |
+| `app.kubernetes.io/component` | `chain` \| `rpc` \| `load` \| `rules` | Primitive selector |
 | `sei.io/engineer` | `<alias>` | IAM-aligned ownership; matches namespace `eng-<alias>` |
 | `sei.io/chain-id` | `<chain-id>` | Foreign key across primitives |
 | `sei.io/role` | `validator` \| `fullNode` (chain/rpc only) | SND-role disambiguation |
@@ -116,7 +118,7 @@ Each primitive has a typed terminal predicate:
 | Primitive | Terminal condition |
 |---|---|
 | `chain` / `rpc` | SND `status.phase=Ready` AND `readyReplicas=spec.replicas` |
-| `load` / `harness` | Job `status.conditions[Complete]=True` (succeeded) or `status.conditions[Failed]=True` |
+| `load` | Job `status.conditions[Complete]=True` (succeeded) or `status.conditions[Failed]=True` |
 | `rules` | Watcher Job terminal (verdict on `/dev/termination-log`) |
 
 `seictl <primitive> wait` is informer-backed (typed watch on the resource kind), exits on terminal. Default timeout per primitive: chain 20m, rpc 10m, load `duration+5m`, rules `duration+1m`. Override via `--timeout`.
@@ -126,6 +128,29 @@ Composites (`bench up`) compose primitive waits: `chain wait → rpc wait → lo
 **Foreground default.** `up` blocks until ready/terminal by default — engineers in a terminal expect blocking. `--no-wait` flips to fire-and-exit; agents and CI use this and call `wait` separately when they want to block.
 
 **stderr is the progress channel; stdout is the JSON envelope.** Streamed phase-transition lines go to stderr (e.g., `{"primitive":"chain","phase":"Initializing","ready":3,"desired":4}`); the typed result envelope still lands on stdout at the end. Engineers tail stderr and pipe stdout to `jq`.
+
+### Endpoint emission
+
+`chain up`, `rpc up`, and `bench up` emit RPC/REST endpoints in their JSON envelopes (already shipped in `bench up` via `ResultsS3URI` + manifest references; extend to include endpoint URLs when the primitives ship). Downstream tooling — engineer shell scripts, GHA workflows, MCP agents, external test binaries — reads them and acts. Two consumption shapes:
+
+```sh
+# Shell — pipeline
+ENDPOINTS=$(seictl bench up --image X --apply -o json | jq -r '.endpoints.rpc[0]')
+qa-testing-binary --rpc-url="$ENDPOINTS" --suite=evm
+exit_code=$?
+seictl bench down --name X
+exit $exit_code
+```
+
+```sh
+# GHA — env vars
+- run: seictl bench up --image ${{ env.IMAGE }} --apply
+- run: SEI_RPC_URL=$(seictl bench list -o json | jq -r '...') qa-testing-binary
+- if: always()
+  run: seictl bench down --name ${{ env.NAME }}
+```
+
+The endpoint shape is part of the `BenchUpResult` / `ChainUpResult` / `RPCUpResult` JSON envelope's contract — adding fields is backwards-compatible; renaming is not. Lock the field names early.
 
 ### `rules watch` — a Job, not a controller
 
@@ -183,12 +208,12 @@ Per-verb plugin symlinks (`kubectl-bench`, `kubectl-onboard`) are explicitly rej
 
 ### MCP graduation
 
-Each composite becomes a first-class MCP tool: `bench_up`, `shadow_up`, `qa_up`, etc. Their tool descriptions cover ~95% of agent traffic.
+Each composite becomes a first-class MCP tool: `bench_up` (shipped surface), `shadow_up` (deferred). Their tool descriptions cover ~95% of agent traffic.
 
 Primitives are exposed as a single decompose-shaped escape hatch:
 
 ```
-seictl_primitive(primitive: "chain"|"rpc"|"load"|"harness"|"rules",
+seictl_primitive(primitive: "chain"|"rpc"|"load"|"rules",
                  verb: "up"|"down"|"list"|"wait"|"logs",
                  args: { ... })
 ```
@@ -203,12 +228,12 @@ The JSON envelope is already MCP-output-shaped (`apiVersion: seictl.sei.io/v1` +
 |---|---|---|
 | `bench up`, `bench down`, `bench list` | **Shipped** | — |
 | `bench wait`, `bench logs` | **Defer** | Engineers run `bench list` in shell loops as workaround |
-| `chain up/down/list/wait/logs` standalone | **Defer** | A second composite (`qa up` / `shadow up`) gets approved AND a real engineer wants a chain without a load attached |
+| `chain up/down/list/wait/logs` standalone | **Defer** | A second composite (`shadow up`) is approved AND a real engineer wants a chain without a load attached |
 | `rpc up/down/list/wait/logs` standalone | **Defer** | First request to peer an RPC fleet against an existing chain (mid-run refresh, shadow replay) |
 | `load up/down` standalone | **Defer** | Engineer needs to re-run load against an in-flight bench without re-rolling validators |
-| `harness up/down` | **Defer** | qa-testing consumer commits to migrate from bash glue, with their specific contract |
 | `rules watch` | **Defer** | First "passed-but-validators-OOM" issue filed |
-| `qa up`, `shadow up` composites | **Defer** | Same trigger as their underlying primitives |
+| `shadow up` composite | **Defer** | Replayer is typed on `SeiNode.spec.replayer` today; un-defer if the typed-on-SeiNode path stops being sufficient |
+| `harness` primitive / `qa up` composite | **Out of scope (not deferred — rejected)** | External test binaries consume seictl endpoints; they're not seictl's domain |
 | `scenario run -f x.yaml` | **Defer hard** | Three composites exist and want the same orchestration shape |
 | `validation.sei.io/v1` YAML schema | **Defer** | An engineer hand-rolls the same wrapper script twice |
 | kubectl plugin install (one-line symlink) | **Document in v1** | — (zero code change) |
@@ -241,7 +266,7 @@ The complexity savings are large. The LLD itself was 1588 lines; this design rep
 
 ### E. `rules watch` as a sidecar inside the load Job (vs. its own Job)
 
-**Considered.** A sidecar would simplify lifecycle (one Job, two containers). Rejected for v1 because it forces every load workload to know about Prometheus, and breaks for opaque third-party harnesses (qa-testing). Standalone Job is the more decoupled shape. Reconsider if a real consumer wants the sidecar form.
+**Considered.** A sidecar would simplify lifecycle (one Job, two containers). Rejected for v1 because it forces every load workload to know about Prometheus when the rule-watch concern is independent of the load's traffic shape. Standalone Job is the more decoupled shape. Reconsider if a real consumer wants the sidecar form.
 
 ### F. Argo Workflows / Tekton
 
@@ -268,8 +293,8 @@ What we gain:
 ## Open questions
 
 1. **`seictl-rules-watcher` image distribution.** Built from this repo, published to which ECR? Reuse `189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/`? Owned image policy parity with seiload.
-2. **`harness` env var contract.** When qa-testing migrates, which envs are workload-specific vs platform-shared? The LLD reserved `${RESULT_DIR}` and a few others; a real consumer pins this.
-3. **Composite refactor priority.** When does `bench up` get refactored into shared `runChainUp` / `runRPCUp` / `runLoadUp` Go functions? Punt until a second composite (`shadow` or `qa`) actually wants them.
+2. **Endpoint field shape.** `chain up` / `rpc up` / `bench up` should emit RPC URLs in the JSON envelope. Field name (`endpoints.rpc[]`? `rpcUrls[]`?), per-pod vs aggregate, with-or-without-port — these need to be locked once and not renamed. What's the contract?
+3. **Composite refactor priority.** When does `bench up` get refactored into shared `runChainUp` / `runRPCUp` / `runLoadUp` Go functions? Punt until a second composite (`shadow up`) actually wants them.
 4. **JSON envelope embedding shape.** When composites embed primitive results, do we keep the existing flat `BenchUpResult` (current shape) for backwards-compat *and* add nested fields, or break compat at v2? Lean: keep both during a transition.
 5. **kubectl plugin discovery on engineer laptops.** Krew distribution, brew formula, just `go install` instructions? Pick one for v1 docs.
 
@@ -277,7 +302,7 @@ What we gain:
 
 - **sei-protocol/sei-k8s-controller#143** — abandoned ValidationRun CRD LLD (merged 2026-04-28). Read for the problem statement, OSS survey, and 18 resolved one-way-door decisions, several of which (e.g., the discriminator union) become moot here.
 - **sei-protocol/platform#235** — workload runtime contract (envs, exit codes, `${RESULT_DIR}`, S3 path convention). Kept verbatim. Already implemented in `seictl bench up`.
-- **`docs/design/cluster-cli.md`** — the shipped v1 LLD covering `context`, `bench`, `onboard`. This document extends its non-goals (rules watch, harness, scenario YAML) and adds the substrate framing without contradicting the verb surface it documents.
+- **`docs/design/cluster-cli.md`** — the shipped v1 LLD covering `context`, `bench`, `onboard`. This document extends its non-goals (rules watch, scenario YAML, "test runner" framing) and adds the substrate framing without contradicting the verb surface it documents.
 - **sei-protocol/sei-k8s-controller `api/v1alpha1/common_types.go`** — `LabelPeerSource` is the SND-controller mechanism the chain↔RPC peer discovery rides.
 - **autobake's existing pattern** — production proof that imperative-orchestrator-of-K8s-resources is the right shape for ephemeral test workloads.
 - Coral round (2026-04-30): platform-engineer (substrate), product-manager (scope discipline), product-engineer (cross-surface ergonomics). Outputs synthesized inline above.
