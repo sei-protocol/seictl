@@ -4,3 +4,6 @@ dist/
 build/
 seictl
 report_scan.go
+
+# Bugbash run-state archives (the live state file at .bugbash/<target>.yaml IS committed)
+.bugbash/archive/
