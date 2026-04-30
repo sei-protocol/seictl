@@ -107,7 +107,7 @@ func runBenchDown(ctx context.Context, in benchDownInput, out io.Writer, deps be
 		return failBenchDown(out, idErr)
 	}
 	if e := validate.Name(eng.Alias, in.Name); e != nil {
-		return failBenchDown(out, e)
+		return failBenchDown(out, e.ExitWith(clioutput.ExitBench))
 	}
 
 	namespace := in.Namespace
@@ -115,7 +115,7 @@ func runBenchDown(ctx context.Context, in benchDownInput, out io.Writer, deps be
 		namespace = "eng-" + eng.Alias
 	}
 	if e := validate.Namespace(namespace, eng.Alias); e != nil {
-		return failBenchDown(out, e)
+		return failBenchDown(out, e.ExitWith(clioutput.ExitBench))
 	}
 
 	chainID := fmt.Sprintf("bench-%s-%s", eng.Alias, in.Name)

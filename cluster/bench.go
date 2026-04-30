@@ -147,21 +147,21 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 	}
 
 	if e := validate.Image(in.Image); e != nil {
-		return failBenchUp(out, e)
+		return failBenchUp(out, e.ExitWith(clioutput.ExitBench))
 	}
 	if e := validate.Name(eng.Alias, in.Name); e != nil {
-		return failBenchUp(out, e)
+		return failBenchUp(out, e.ExitWith(clioutput.ExitBench))
 	}
 	if e := validate.Size(in.Size); e != nil {
-		return failBenchUp(out, e)
+		return failBenchUp(out, e.ExitWith(clioutput.ExitBench))
 	}
 	if e := validate.DurationMinutes(in.Duration); e != nil {
-		return failBenchUp(out, e)
+		return failBenchUp(out, e.ExitWith(clioutput.ExitBench))
 	}
 
 	namespace := "eng-" + eng.Alias
 	if e := validate.Namespace(namespace, eng.Alias); e != nil {
-		return failBenchUp(out, e)
+		return failBenchUp(out, e.ExitWith(clioutput.ExitBench))
 	}
 
 	if _, callerErr := deps.getCaller(ctx); callerErr != nil {

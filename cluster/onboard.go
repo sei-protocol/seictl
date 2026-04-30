@@ -111,7 +111,7 @@ var OnboardCmd = cli.Command{
 
 func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboardDeps) error {
 	if e := validate.Alias(in.Alias); e != nil {
-		return failOnboard(out, e)
+		return failOnboard(out, e.ExitWith(clioutput.ExitOnboard))
 	}
 
 	idPath, err := deps.identityPath()
