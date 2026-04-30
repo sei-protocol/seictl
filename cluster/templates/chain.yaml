@@ -1,0 +1,43 @@
+# Source: sei-protocol/platform autobake/templates/seinodedeployment.yaml
+# Vars: CHAIN_ID, NAMESPACE, ENGINEER_ALIAS, NAME, SEID_IMAGE,
+#       IMAGE_DIGEST_SHORT, VALIDATOR_COUNT
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+metadata:
+  name: ${CHAIN_ID}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: seictl
+    app.kubernetes.io/part-of: seictl-bench
+    app.kubernetes.io/component: chain
+    sei.io/chain-id: ${CHAIN_ID}
+    sei.io/engineer: ${ENGINEER_ALIAS}
+    sei.io/bench-name: ${NAME}
+    sei.io/image-sha: ${IMAGE_DIGEST_SHORT}
+    sei.io/role: validator
+spec:
+  replicas: ${VALIDATOR_COUNT}
+  deletionPolicy: Delete
+  updateStrategy:
+    type: InPlace
+  genesis:
+    chainId: ${CHAIN_ID}
+    stakingAmount: "10000000usei"
+  template:
+    metadata:
+      labels:
+        sei.io/chain-id: ${CHAIN_ID}
+        sei.io/engineer: ${ENGINEER_ALIAS}
+        sei.io/bench-name: ${NAME}
+        sei.io/role: validator
+    spec:
+      chainId: ${CHAIN_ID}
+      image: ${SEID_IMAGE}
+      entrypoint:
+        command: ["seid"]
+        args: ["start", "--home", "/sei"]
+      peers:
+        - label:
+            selector:
+              sei.io/chain-id: ${CHAIN_ID}
+      validator: {}

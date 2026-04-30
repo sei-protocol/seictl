@@ -12,6 +12,8 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	seiconfig "github.com/sei-protocol/sei-config"
+
 	"github.com/sei-protocol/seictl/cluster/internal/aws"
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 	"github.com/sei-protocol/seictl/cluster/internal/identity"
@@ -58,6 +60,7 @@ type benchUpResult struct {
 	RPCNodes     int                  `json:"rpcNodes"`
 	Duration     string               `json:"duration"`
 	ResultsS3URI string               `json:"resultsS3Uri"`
+	Endpoints    Endpoints            `json:"endpoints"`
 	DryRun       bool                 `json:"dryRun"`
 	Manifests    []render.ManifestRef `json:"manifests"`
 	AppliedAt    *time.Time           `json:"appliedAt,omitempty"`
@@ -200,6 +203,7 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 		RPCNodes:     sizeProfile.RPC,
 		Duration:     fmt.Sprintf("%dm", in.Duration),
 		ResultsS3URI: s3URI,
+		Endpoints:    deriveBenchEndpoints(chainID, namespace),
 		DryRun:       !in.Apply,
 		Manifests:    manifests,
 	}
@@ -273,7 +277,7 @@ func renderManifests(alias, name, namespace, chainID, seidImage, digestShort str
 		"CHAIN_ID":             chainID,
 		"NAMESPACE":            namespace,
 		"ENGINEER_ALIAS":       alias,
-		"BENCH_NAME":           name,
+		"NAME":                 name,
 		"SEID_IMAGE":           seidImage,
 		"SEILOAD_IMAGE":        defaultSeiloadImage,
 		"IMAGE_DIGEST_SHORT":   digestShort,
@@ -282,10 +286,15 @@ func renderManifests(alias, name, namespace, chainID, seidImage, digestShort str
 		"JOB_DEADLINE_SECONDS": strconv.Itoa(durationMin * 60),
 	}
 
-	sndYAML, e := renderEmbedded("snd.yaml", vars)
+	chainYAML, e := renderEmbedded("chain.yaml", vars)
 	if e != nil {
 		return nil, nil, e
 	}
+	rpcYAML, e := renderEmbedded("rpc-snd.yaml", vars)
+	if e != nil {
+		return nil, nil, e
+	}
+	sndYAML := bytes.Join([][]byte{chainYAML, rpcYAML}, []byte("\n---\n"))
 	jobYAML, e := renderEmbedded("seiload-job.yaml", vars)
 	if e != nil {
 		return nil, nil, e
@@ -363,6 +372,14 @@ func shortDigest(d string) string {
 		return d
 	}
 	return d[i+1 : i+1+12]
+}
+
+func deriveBenchEndpoints(chainID, namespace string) Endpoints {
+	host := fmt.Sprintf("%s-rpc-internal.%s.svc.cluster.local", chainID, namespace)
+	return Endpoints{
+		TendermintRpc: []string{fmt.Sprintf("http://%s:%d", host, seiconfig.PortRPC)},
+		EvmJsonRpc:    []string{fmt.Sprintf("http://%s:%d", host, seiconfig.PortEVMHTTP)},
+	}
 }
 
 // rpcEndpointsJSON formats the seiload profile's `endpoints` array
