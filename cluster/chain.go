@@ -20,8 +20,6 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
 )
 
-const defaultChainValidators = 4
-
 // Field names mirror downstream env-var contracts (SEI_TENDERMINT_RPC,
 // SEI_EVM_JSON_RPC) — rename = break two contracts.
 type Endpoints struct {
@@ -77,9 +75,9 @@ var ChainCmd = cli.Command{
 			Usage: "Render or apply a validator-only SeiNodeDeployment",
 			Flags: append(kubeconfigFlags(),
 				&cli.StringFlag{Name: "image", Required: true, Usage: "ECR image ref"},
-				&cli.StringFlag{Name: "name", Required: true, Usage: "Chain name (forms part of chain-id)"},
-				&cli.IntFlag{Name: "validators", Value: defaultChainValidators, Usage: "Validator count (1-21)"},
-				&cli.BoolFlag{Name: "apply", Usage: "Server-side apply the rendered manifest; default is dry-run"},
+				&cli.StringFlag{Name: "name", Required: true, Usage: "Chain name"},
+				&cli.IntFlag{Name: "validators", Required: true, Usage: "Validator count (1-21)"},
+				&cli.BoolFlag{Name: "apply", Usage: "Server-side apply the rendered manifest"},
 			),
 			Action: func(ctx context.Context, command *cli.Command) error {
 				return runChainUpCmd(ctx, chainUpInput{

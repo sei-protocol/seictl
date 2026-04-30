@@ -21,13 +21,13 @@ func TestRunRPCDown(t *testing.T) {
 			dryRunListFn: func(_ context.Context, _ *kube.Client, opts kube.ListOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				capturedSelector = opts.LabelSelector
 				return []kube.DeleteResult{
-					{Kind: "SeiNodeDeployment", Name: "bench-bdc-qa-rpc-default", Namespace: "eng-bdc", Action: "would-delete"},
+					{Kind: "SeiNodeDeployment", Name: "bench-bdc-qa-rpc-primary", Namespace: "eng-bdc", Action: "would-delete"},
 				}, nil
 			},
 		}
 		var buf bytes.Buffer
-		_ = runRPCDown(context.Background(), rpcDownInput{ChainID: "bench-bdc-qa", Name: "default", DryRun: true}, &buf, deps)
-		want := "sei.io/engineer=bdc,sei.io/chain-id=bench-bdc-qa,sei.io/rpc-name=default,app.kubernetes.io/component=rpc"
+		_ = runRPCDown(context.Background(), rpcDownInput{ChainID: "bench-bdc-qa", Name: "primary", DryRun: true}, &buf, deps)
+		want := "sei.io/engineer=bdc,sei.io/chain-id=bench-bdc-qa,sei.io/rpc-name=primary,app.kubernetes.io/component=rpc"
 		if capturedSelector != want {
 			t.Errorf("selector: got %q\nwant %q", capturedSelector, want)
 		}
@@ -43,7 +43,7 @@ func TestRunRPCDown(t *testing.T) {
 			},
 		}
 		var buf bytes.Buffer
-		err := runRPCDown(context.Background(), rpcDownInput{ChainID: "bench-bdc-qa", Name: "default", DryRun: true}, &buf, deps)
+		err := runRPCDown(context.Background(), rpcDownInput{ChainID: "bench-bdc-qa", Name: "primary", DryRun: true}, &buf, deps)
 		if err != nil {
 			t.Fatalf("runRPCDown: %v", err)
 		}
@@ -63,12 +63,12 @@ func TestRunRPCDown(t *testing.T) {
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 			deleteFn: func(context.Context, *kube.Client, kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				return []kube.DeleteResult{
-					{Kind: "SeiNodeDeployment", Name: "bench-bdc-qa-rpc-default", Namespace: "eng-bdc", Action: "deleted"},
+					{Kind: "SeiNodeDeployment", Name: "bench-bdc-qa-rpc-primary", Namespace: "eng-bdc", Action: "deleted"},
 				}, nil
 			},
 		}
 		var buf bytes.Buffer
-		err := runRPCDown(context.Background(), rpcDownInput{ChainID: "bench-bdc-qa", Name: "default"}, &buf, deps)
+		err := runRPCDown(context.Background(), rpcDownInput{ChainID: "bench-bdc-qa", Name: "primary"}, &buf, deps)
 		if err != nil {
 			t.Fatalf("runRPCDown: %v", err)
 		}
@@ -81,6 +81,31 @@ func TestRunRPCDown(t *testing.T) {
 		}
 	})
 
+	t.Run("delete reports still-terminating in hint", func(t *testing.T) {
+		path := writeEngineerFile(t, "bdc")
+		deps := rpcDownDeps{
+			identityPath:  func() (string, error) { return path, nil },
+			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
+			deleteFn: func(context.Context, *kube.Client, kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
+				return []kube.DeleteResult{
+					{Kind: "SeiNodeDeployment", Name: "bench-bdc-qa-rpc-primary", Namespace: "eng-bdc", Action: "still-terminating"},
+				}, nil
+			},
+		}
+		var buf bytes.Buffer
+		_ = runRPCDown(context.Background(), rpcDownInput{ChainID: "bench-bdc-qa", Name: "primary"}, &buf, deps)
+		var env clioutput.Envelope
+		_ = json.Unmarshal(buf.Bytes(), &env)
+		var data rpcDownResult
+		_ = json.Unmarshal(env.Data, &data)
+		if data.DeletedAt != nil {
+			t.Errorf("DeletedAt should be nil when something still terminating")
+		}
+		if !strings.Contains(data.Hint, "still terminating") {
+			t.Errorf("expected still-terminating hint; got %q", data.Hint)
+		}
+	})
+
 	t.Run("rejects empty chain-id", func(t *testing.T) {
 		path := writeEngineerFile(t, "bdc")
 		deps := rpcDownDeps{
@@ -88,7 +113,7 @@ func TestRunRPCDown(t *testing.T) {
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 		}
 		var buf bytes.Buffer
-		err := runRPCDown(context.Background(), rpcDownInput{ChainID: "", Name: "default"}, &buf, deps)
+		err := runRPCDown(context.Background(), rpcDownInput{ChainID: "", Name: "primary"}, &buf, deps)
 		if err == nil {
 			t.Fatalf("expected error")
 		}

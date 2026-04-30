@@ -122,11 +122,11 @@ var BenchCmd = cli.Command{
 			Name:  "up",
 			Usage: "Render or apply a benchmark workload",
 			Flags: append(kubeconfigFlags(),
-				&cli.StringFlag{Name: "image", Required: true, Usage: "ECR image ref to bench"},
-				&cli.StringFlag{Name: "name", Required: true, Usage: "Bench name (forms part of chain-id)"},
+				&cli.StringFlag{Name: "image", Required: true, Usage: "ECR image ref"},
+				&cli.StringFlag{Name: "name", Required: true, Usage: "Bench name"},
 				&cli.StringFlag{Name: "size", Value: "s", Usage: "s|m|l"},
 				&cli.IntFlag{Name: "duration", Value: 30, Usage: "Bench duration in minutes (1-240)"},
-				&cli.BoolFlag{Name: "apply", Usage: "Server-side apply the rendered manifests; default is dry-run"},
+				&cli.BoolFlag{Name: "apply", Usage: "Server-side apply the rendered manifests"},
 			),
 			Action: func(ctx context.Context, command *cli.Command) error {
 				return runBenchUp(ctx, benchUpInput{

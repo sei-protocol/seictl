@@ -86,9 +86,9 @@ var benchDownCmd = &cli.Command{
 	Name:  "down",
 	Usage: "Tear down a benchmark by name",
 	Flags: append(kubeconfigFlags(),
-		&cli.StringFlag{Name: "name", Required: true, Usage: "Bench name to tear down"},
-		&cli.StringFlag{Name: "namespace", Aliases: []string{"n"}, Usage: "Namespace (defaults to eng-<alias>)"},
-		&cli.BoolFlag{Name: "dry-run", Usage: "List the resources that would be deleted without deleting them"},
+		&cli.StringFlag{Name: "name", Required: true, Usage: "Bench name"},
+		&cli.StringFlag{Name: "namespace", Aliases: []string{"n"}, Usage: "Namespace override"},
+		&cli.BoolFlag{Name: "dry-run", Usage: "List resources that would be deleted without deleting them"},
 	),
 	Action: func(ctx context.Context, command *cli.Command) error {
 		return runBenchDown(ctx, benchDownInput{

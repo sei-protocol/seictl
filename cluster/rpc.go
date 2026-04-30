@@ -20,14 +20,9 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
 )
 
-const (
-	defaultRPCReplicas = 2
-	defaultRPCName     = "default"
-)
-
 type rpcUpResult struct {
 	ChainID     string               `json:"chainId"`
-	Name        string               `json:"name"`
+	RPCName     string               `json:"rpcName"`
 	Namespace   string               `json:"namespace"`
 	ImageRef    string               `json:"imageRef"`
 	ImageDigest string               `json:"imageDigest"`
@@ -73,11 +68,11 @@ var RPCCmd = cli.Command{
 			Name:  "up",
 			Usage: "Render or apply an RPC fleet against a named chain",
 			Flags: append(kubeconfigFlags(),
-				&cli.StringFlag{Name: "chain", Required: true, Usage: "Chain ID to peer with (e.g. bench-bdc-qa)"},
-				&cli.StringFlag{Name: "name", Value: defaultRPCName, Usage: "RPC fleet name (lets multiple fleets attach to one chain)"},
+				&cli.StringFlag{Name: "chain", Required: true, Usage: "Chain ID"},
+				&cli.StringFlag{Name: "name", Required: true, Usage: "RPC fleet name"},
 				&cli.StringFlag{Name: "image", Required: true, Usage: "ECR image ref"},
-				&cli.IntFlag{Name: "replicas", Value: defaultRPCReplicas, Usage: "RPC replica count (1-21)"},
-				&cli.BoolFlag{Name: "apply", Usage: "Server-side apply the rendered manifest; default is dry-run"},
+				&cli.IntFlag{Name: "replicas", Required: true, Usage: "RPC replica count (1-21)"},
+				&cli.BoolFlag{Name: "apply", Usage: "Server-side apply the rendered manifest"},
 			),
 			Action: func(ctx context.Context, command *cli.Command) error {
 				return runRPCUpCmd(ctx, rpcUpInput{
@@ -148,7 +143,7 @@ func runRPCUp(ctx context.Context, in rpcUpInput, deps rpcDeps) (rpcUpResult, *c
 
 	res := rpcUpResult{
 		ChainID:     in.ChainID,
-		Name:        in.Name,
+		RPCName:     in.Name,
 		Namespace:   namespace,
 		ImageRef:    in.Image,
 		ImageDigest: digest,

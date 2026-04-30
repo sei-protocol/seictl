@@ -10,6 +10,7 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: seictl
     app.kubernetes.io/part-of: seictl-bench
+    app.kubernetes.io/component: load
     sei.io/chain-id: ${CHAIN_ID}
     sei.io/engineer: ${ENGINEER_ALIAS}
     sei.io/bench-name: ${NAME}

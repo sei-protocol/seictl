@@ -232,5 +232,13 @@ func TestRunChainUp(t *testing.T) {
 				t.Errorf("rendered doc missing label %q\n--- doc ---\n%s", want, body)
 			}
 		}
+
+		// rpc.yaml's peer selector targets sei.io/role=validator on
+		// pod labels; this template MUST keep that label on the pod
+		// template metadata or RPC peering silently breaks.
+		podSection := body[strings.Index(body, "  template:"):]
+		if !strings.Contains(podSection, "sei.io/role: validator") {
+			t.Errorf("validator pod template must carry sei.io/role: validator (load-bearing for rpc peer discovery)\n%s", podSection)
+		}
 	})
 }

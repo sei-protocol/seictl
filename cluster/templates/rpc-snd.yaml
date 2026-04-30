@@ -15,8 +15,9 @@ metadata:
     sei.io/chain-id: ${CHAIN_ID}
     sei.io/engineer: ${ENGINEER_ALIAS}
     sei.io/bench-name: ${NAME}
-    sei.io/image-sha: ${IMAGE_DIGEST_SHORT}
     sei.io/role: rpc
+  annotations:
+    sei.io/image-sha: ${IMAGE_DIGEST_SHORT}
 spec:
   replicas: ${RPC_COUNT}
   deletionPolicy: Delete

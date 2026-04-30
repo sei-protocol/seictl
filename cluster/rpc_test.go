@@ -33,7 +33,7 @@ func TestRunRPCUp(t *testing.T) {
 		var buf bytes.Buffer
 		err := runRPCUpCmd(context.Background(), rpcUpInput{
 			ChainID:  "bench-bdc-qa",
-			Name:     "default",
+			Name:     "primary",
 			Image:    "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:v1.2.3",
 			Replicas: 2,
 		}, &buf, stubRPCDeps(t, "bdc"))
@@ -56,15 +56,15 @@ func TestRunRPCUp(t *testing.T) {
 		if err := json.Unmarshal(env.Data, &data); err != nil {
 			t.Fatalf("data unmarshal: %v", err)
 		}
-		if data.ChainID != "bench-bdc-qa" || data.Name != "default" || data.Replicas != 2 {
+		if data.ChainID != "bench-bdc-qa" || data.RPCName != "primary" || data.Replicas != 2 {
 			t.Errorf("envelope fields: %+v", data)
 		}
 		if !data.DryRun {
 			t.Errorf("dryRun should be true")
 		}
 
-		wantTM := "http://bench-bdc-qa-rpc-default-internal.eng-bdc.svc.cluster.local:26657"
-		wantEVM := "http://bench-bdc-qa-rpc-default-internal.eng-bdc.svc.cluster.local:8545"
+		wantTM := "http://bench-bdc-qa-rpc-primary-internal.eng-bdc.svc.cluster.local:26657"
+		wantEVM := "http://bench-bdc-qa-rpc-primary-internal.eng-bdc.svc.cluster.local:8545"
 		if len(data.Endpoints.TendermintRpc) != 1 || data.Endpoints.TendermintRpc[0] != wantTM {
 			t.Errorf("tendermintRpc: got %v, want [%s]", data.Endpoints.TendermintRpc, wantTM)
 		}
@@ -76,7 +76,7 @@ func TestRunRPCUp(t *testing.T) {
 			t.Fatalf("expected 1 manifest; got %d", len(data.Manifests))
 		}
 		m := data.Manifests[0]
-		if m.Kind != "SeiNodeDeployment" || m.Name != "bench-bdc-qa-rpc-default" {
+		if m.Kind != "SeiNodeDeployment" || m.Name != "bench-bdc-qa-rpc-primary" {
 			t.Errorf("manifest: %+v", m)
 		}
 	})
@@ -108,7 +108,7 @@ func TestRunRPCUp(t *testing.T) {
 		var buf bytes.Buffer
 		err := runRPCUpCmd(context.Background(), rpcUpInput{
 			ChainID:  "",
-			Name:     "default",
+			Name:     "primary",
 			Image:    "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:v1",
 			Replicas: 2,
 		}, &buf, stubRPCDeps(t, "bdc"))
@@ -122,7 +122,7 @@ func TestRunRPCUp(t *testing.T) {
 			var buf bytes.Buffer
 			err := runRPCUpCmd(context.Background(), rpcUpInput{
 				ChainID:  "bench-bdc-qa",
-				Name:     "default",
+				Name:     "primary",
 				Image:    "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:v1",
 				Replicas: n,
 			}, &buf, stubRPCDeps(t, "bdc"))
@@ -136,7 +136,7 @@ func TestRunRPCUp(t *testing.T) {
 		var buf bytes.Buffer
 		err := runRPCUpCmd(context.Background(), rpcUpInput{
 			ChainID:  "bench-bdc-qa",
-			Name:     "default",
+			Name:     "primary",
 			Image:    "docker.io/sei/sei-chain:v1",
 			Replicas: 2,
 		}, &buf, stubRPCDeps(t, "bdc"))
@@ -167,7 +167,7 @@ func TestRunRPCUp(t *testing.T) {
 		var buf bytes.Buffer
 		err := runRPCUpCmd(context.Background(), rpcUpInput{
 			ChainID:  "bench-bdc-qa",
-			Name:     "default",
+			Name:     "primary",
 			Image:    "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:v1",
 			Replicas: 2,
 			Apply:    true,
@@ -192,7 +192,7 @@ func TestRunRPCUp(t *testing.T) {
 		var buf bytes.Buffer
 		err := runRPCUpCmd(context.Background(), rpcUpInput{
 			ChainID:  "bench-bdc-qa",
-			Name:     "default",
+			Name:     "primary",
 			Image:    "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:v1",
 			Replicas: 2,
 		}, &buf, deps)
@@ -205,7 +205,7 @@ func TestRunRPCUp(t *testing.T) {
 	})
 
 	t.Run("rendered manifest has rpc component label and peer selector", func(t *testing.T) {
-		docs, _, err := renderRPCManifests("bdc", "bench-bdc-qa", "default", "eng-bdc", "img@sha256:0", "0123456789ab", 2)
+		docs, _, err := renderRPCManifests("bdc", "bench-bdc-qa", "primary", "eng-bdc", "img@sha256:0", "0123456789ab", 2)
 		if err != nil {
 			t.Fatalf("render: %v", err)
 		}
@@ -218,7 +218,7 @@ func TestRunRPCUp(t *testing.T) {
 			"app.kubernetes.io/part-of: seictl",
 			"sei.io/role: rpc",
 			"sei.io/chain-id: bench-bdc-qa",
-			"sei.io/rpc-name: default",
+			"sei.io/rpc-name: primary",
 			"sei.io/engineer: bdc",
 		} {
 			if !strings.Contains(body, want) {

@@ -92,11 +92,11 @@ var OnboardCmd = cli.Command{
 	Name:  "onboard",
 	Usage: "Provision a new engineer's harbor footprint (IAM + namespace cell)",
 	Flags: []cli.Flag{
-		&cli.StringFlag{Name: "alias", Required: true, Usage: "Engineer alias (matches namespace eng-<alias>)"},
-		&cli.StringFlag{Name: "name", Usage: "Engineer display name (recorded in identity file)"},
-		&cli.StringFlag{Name: "platform-repo", Usage: "Path to local sei-protocol/platform clone (default: walk up from CWD)"},
-		&cli.BoolFlag{Name: "no-pr", Usage: "Generate manifests + AWS, skip the PR creation step"},
-		&cli.BoolFlag{Name: "apply", Usage: "Perform the side effects; default is dry-run"},
+		&cli.StringFlag{Name: "alias", Required: true, Usage: "Engineer alias"},
+		&cli.StringFlag{Name: "name", Usage: "Engineer display name"},
+		&cli.StringFlag{Name: "platform-repo", Usage: "Path to local sei-protocol/platform clone"},
+		&cli.BoolFlag{Name: "no-pr", Usage: "Skip PR creation"},
+		&cli.BoolFlag{Name: "apply", Usage: "Perform side effects"},
 	},
 	Action: func(ctx context.Context, command *cli.Command) error {
 		return runOnboard(ctx, onboardInput{
