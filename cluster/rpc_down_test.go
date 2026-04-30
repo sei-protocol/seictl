@@ -13,10 +13,10 @@ import (
 
 func TestRunRPCDown(t *testing.T) {
 	t.Run("dry-run uses chain-id + rpc-name + component=rpc selector", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		var capturedSelector string
 		deps := rpcDownDeps{
-			identityPath:  func() (string, error) { return path, nil },
+			configPath:    func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 			dryRunListFn: func(_ context.Context, _ *kube.Client, opts kube.ListOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				capturedSelector = opts.LabelSelector
@@ -34,9 +34,9 @@ func TestRunRPCDown(t *testing.T) {
 	})
 
 	t.Run("dry-run with no matches surfaces hint", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := rpcDownDeps{
-			identityPath:  func() (string, error) { return path, nil },
+			configPath:    func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 			dryRunListFn: func(context.Context, *kube.Client, kube.ListOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				return nil, nil
@@ -57,9 +57,9 @@ func TestRunRPCDown(t *testing.T) {
 	})
 
 	t.Run("delete sets DeletedAt when nothing is terminating", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := rpcDownDeps{
-			identityPath:  func() (string, error) { return path, nil },
+			configPath:    func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 			deleteFn: func(context.Context, *kube.Client, kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				return []kube.DeleteResult{
@@ -82,9 +82,9 @@ func TestRunRPCDown(t *testing.T) {
 	})
 
 	t.Run("delete reports still-terminating in hint", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := rpcDownDeps{
-			identityPath:  func() (string, error) { return path, nil },
+			configPath:    func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 			deleteFn: func(context.Context, *kube.Client, kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				return []kube.DeleteResult{
@@ -107,9 +107,9 @@ func TestRunRPCDown(t *testing.T) {
 	})
 
 	t.Run("rejects empty chain-id", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := rpcDownDeps{
-			identityPath:  func() (string, error) { return path, nil },
+			configPath:    func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 		}
 		var buf bytes.Buffer

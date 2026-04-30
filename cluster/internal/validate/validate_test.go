@@ -110,24 +110,23 @@ func TestDurationMinutes(t *testing.T) {
 
 func TestNamespace(t *testing.T) {
 	tests := map[string]struct {
-		ns, alias string
-		wantErr   bool
-		category  string
+		ns       string
+		wantErr  bool
+		category string
 	}{
-		"matches alias":      {ns: "eng-bdc", alias: "bdc"},
-		"read-only no alias": {ns: "eng-bdc", alias: ""},
-		"alias mismatch":     {ns: "eng-other", alias: "bdc", wantErr: true, category: clioutput.CatNamespacePolicy},
-		"too long":           {ns: strings.Repeat("a", 64), alias: "", wantErr: true, category: clioutput.CatNamespacePolicy},
-		"uppercase":          {ns: "Bad", alias: "", wantErr: true, category: clioutput.CatNamespacePolicy},
-		"underscore":         {ns: "bad_ns", alias: "", wantErr: true, category: clioutput.CatNamespacePolicy},
-		"starts with hyphen": {ns: "-bad", alias: "", wantErr: true, category: clioutput.CatNamespacePolicy},
-		"empty":              {ns: "", alias: "", wantErr: true, category: clioutput.CatNamespacePolicy},
+		"engineer-style":     {ns: "eng-bdc"},
+		"plain":              {ns: "nightly"},
+		"too long":           {ns: strings.Repeat("a", 64), wantErr: true, category: clioutput.CatNamespacePolicy},
+		"uppercase":          {ns: "Bad", wantErr: true, category: clioutput.CatNamespacePolicy},
+		"underscore":         {ns: "bad_ns", wantErr: true, category: clioutput.CatNamespacePolicy},
+		"starts with hyphen": {ns: "-bad", wantErr: true, category: clioutput.CatNamespacePolicy},
+		"empty":              {ns: "", wantErr: true, category: clioutput.CatNamespacePolicy},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := Namespace(tc.ns, tc.alias)
+			got := Namespace(tc.ns)
 			if (got != nil) != tc.wantErr {
-				t.Errorf("Namespace(%q,%q) err=%v, wantErr=%v", tc.ns, tc.alias, got, tc.wantErr)
+				t.Errorf("Namespace(%q) err=%v, wantErr=%v", tc.ns, got, tc.wantErr)
 			}
 			if tc.wantErr && got != nil && got.Category != tc.category {
 				t.Errorf("category: got %q, want %q", got.Category, tc.category)

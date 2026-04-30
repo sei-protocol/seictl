@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: bench-seiload
+  name: seictl
   namespace: {{.Namespace}}
   labels:
     app.kubernetes.io/managed-by: flux

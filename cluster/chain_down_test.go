@@ -13,9 +13,9 @@ import (
 
 func stubChainDownDeps(t *testing.T, alias string) chainDownDeps {
 	t.Helper()
-	path := writeEngineerFile(t, alias)
+	path := writeConfigFile(t, alias)
 	return chainDownDeps{
-		identityPath:  func() (string, error) { return path, nil },
+		configPath:    func() (string, error) { return path, nil },
 		newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 		deleteFn: func(context.Context, *kube.Client, kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
 			t.Fatalf("deleteFn should not be called on dry-run path")
@@ -54,10 +54,10 @@ func TestRunChainDown(t *testing.T) {
 	})
 
 	t.Run("dry-run uses chain-id selector", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		var capturedSelector string
 		deps := chainDownDeps{
-			identityPath:  func() (string, error) { return path, nil },
+			configPath:    func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 			dryRunListFn: func(_ context.Context, _ *kube.Client, opts kube.ListOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				capturedSelector = opts.LabelSelector
@@ -75,9 +75,9 @@ func TestRunChainDown(t *testing.T) {
 	})
 
 	t.Run("delete sets DeletedAt when nothing is terminating", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := chainDownDeps{
-			identityPath:  func() (string, error) { return path, nil },
+			configPath:    func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 			deleteFn: func(context.Context, *kube.Client, kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				return []kube.DeleteResult{
@@ -103,9 +103,9 @@ func TestRunChainDown(t *testing.T) {
 	})
 
 	t.Run("delete reports still-terminating in hint", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := chainDownDeps{
-			identityPath:  func() (string, error) { return path, nil },
+			configPath:    func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 			deleteFn: func(context.Context, *kube.Client, kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				return []kube.DeleteResult{

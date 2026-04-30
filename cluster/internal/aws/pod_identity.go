@@ -28,11 +28,11 @@ type PodIdentityBinding struct {
 	Region         string
 }
 
-// EnsurePodIdentity creates the bench-seiload association if it
-// doesn't exist. EKS exposes no Get-by-tuple API, so we list-then-
-// match. A pre-existing association bound to a different role is a
-// hard failure — silently rebinding could grant the engineer access
-// to the wrong S3 prefix.
+// EnsurePodIdentity creates the seictl SA association if it doesn't
+// exist. EKS exposes no Get-by-tuple API, so we list-then-match.
+// A pre-existing association bound to a different role is a hard
+// failure — silently rebinding could grant the engineer access to
+// the wrong S3 prefix.
 func EnsurePodIdentity(ctx context.Context, b PodIdentityBinding, dryRun bool) (PodIdentityArtifact, *clioutput.Error) {
 	cfg, err := awscfg.LoadDefaultConfig(ctx, awscfg.WithRegion(b.Region))
 	if err != nil {

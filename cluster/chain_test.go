@@ -20,10 +20,10 @@ const chainTestDigest = "sha256:abcdef1234567890abcdef1234567890abcdef1234567890
 
 func stubChainDeps(t *testing.T, alias string) chainDeps {
 	t.Helper()
-	path := writeEngineerFile(t, alias)
+	path := writeConfigFile(t, alias)
 	return chainDeps{
 		resolveDigest: func(context.Context, string) (string, *clioutput.Error) { return chainTestDigest, nil },
-		identityPath:  func() (string, error) { return path, nil },
+		configPath:    func() (string, error) { return path, nil },
 		apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 			t.Fatalf("apply should not be called on dry-run path")
 			return nil, nil
@@ -119,10 +119,10 @@ func TestRunChainUp(t *testing.T) {
 	})
 
 	t.Run("apply happy path sets appliedAt", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := chainDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) { return chainTestDigest, nil },
-			identityPath:  func() (string, error) { return path, nil },
+			configPath:    func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{ContextName: "harbor", Namespace: "eng-bdc"}, nil
 			},
@@ -169,7 +169,7 @@ func TestRunChainUp(t *testing.T) {
 	t.Run("missing identity surfaces typed error", func(t *testing.T) {
 		deps := chainDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) { return chainTestDigest, nil },
-			identityPath:  func() (string, error) { return "", errors.New("home unset") },
+			configPath:    func() (string, error) { return "", errors.New("home unset") },
 		}
 		var buf bytes.Buffer
 		err := runChainUpCmd(context.Background(), chainUpInput{
@@ -186,13 +186,13 @@ func TestRunChainUp(t *testing.T) {
 	})
 
 	t.Run("propagates digest-resolution errors", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := chainDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
 				return "", clioutput.New(clioutput.ExitBench, clioutput.CatImageResolution, "ecr unavailable")
 			},
-			identityPath: func() (string, error) { return path, nil },
-			getCaller:    okCaller,
+			configPath: func() (string, error) { return path, nil },
+			getCaller:  okCaller,
 		}
 		var buf bytes.Buffer
 		err := runChainUpCmd(context.Background(), chainUpInput{

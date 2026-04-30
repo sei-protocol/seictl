@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
-	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/config"
 	"github.com/sei-protocol/seictl/cluster/internal/kube"
 )
 
@@ -49,13 +49,13 @@ type benchListInput struct {
 }
 
 type benchListDeps struct {
-	identityPath  func() (string, error)
+	configPath    func() (string, error)
 	newKubeClient func(kube.Options) (*kube.Client, *clioutput.Error)
 	listFn        func(ctx context.Context, kc *kube.Client, opts kube.ListOptions) ([]unstructured.Unstructured, *clioutput.Error)
 }
 
 var defaultBenchListDeps = benchListDeps{
-	identityPath:  identity.DefaultPath,
+	configPath:    config.DefaultPath,
 	newKubeClient: kube.New,
 	listFn:        listFromCluster,
 }
@@ -86,16 +86,16 @@ var benchListCmd = &cli.Command{
 }
 
 func runBenchList(ctx context.Context, in benchListInput, out io.Writer, deps benchListDeps) error {
-	eng, idErr := loadEngineer(deps.identityPath)
+	cfg, idErr := loadConfig(deps.configPath)
 	if idErr != nil {
 		return failBenchList(out, idErr)
 	}
 
 	namespace := in.Namespace
 	if namespace == "" {
-		namespace = "eng-" + eng.Alias
+		namespace = cfg.Namespace
 	}
-	selector := fmt.Sprintf("app.kubernetes.io/part-of=%s,sei.io/engineer=%s", benchPartOf, eng.Alias)
+	selector := fmt.Sprintf("app.kubernetes.io/part-of=%s,sei.io/engineer=%s", benchPartOf, cfg.Alias)
 
 	kc, kerr := deps.newKubeClient(kube.Options{Kubeconfig: in.Kubeconfig, Context: in.Context})
 	if kerr != nil {

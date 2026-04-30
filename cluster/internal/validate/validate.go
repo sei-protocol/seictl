@@ -130,20 +130,14 @@ func ChainID(s string) *Error {
 	return nil
 }
 
-// Namespace enforces RFC-1123 label shape. If alias is non-empty, also
-// enforces the side-effecting-verb policy that the namespace equals
-// `eng-<alias>`. Pass empty alias for read-only verbs.
-func Namespace(ns, alias string) *Error {
+// Namespace enforces RFC-1123 label shape. Convention enforcement
+// (e.g. namespace = "eng-<alias>" for engineer cells) lives in
+// `seictl onboard` — verbs read namespace verbatim from config so
+// non-engineer flows can operate against arbitrary namespaces.
+func Namespace(ns string) *Error {
 	if len(ns) > maxK8sLabel || !namespaceRe.MatchString(ns) {
 		return newErr(clioutput.CatNamespacePolicy,
 			"namespace %q is not a valid RFC-1123 label", ns)
-	}
-	if alias != "" {
-		want := "eng-" + alias
-		if ns != want {
-			return newErr(clioutput.CatNamespacePolicy,
-				"namespace must equal %q for engineer %q (got %q)", want, alias, ns)
-		}
 	}
 	return nil
 }

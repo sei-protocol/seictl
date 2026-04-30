@@ -12,8 +12,8 @@ import (
 
 	"github.com/sei-protocol/seictl/cluster/internal/aws"
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/config"
 	"github.com/sei-protocol/seictl/cluster/internal/githubpr"
-	"github.com/sei-protocol/seictl/cluster/internal/identity"
 	"github.com/sei-protocol/seictl/cluster/internal/onboardmanifests"
 	"github.com/sei-protocol/seictl/cluster/internal/onboardmanifests/aggregator"
 )
@@ -23,7 +23,7 @@ import (
 func onboardStubs(t *testing.T) (onboardDeps, string, string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "seictl")
-	idPath := filepath.Join(root, "engineer.json")
+	cfgPath := filepath.Join(root, "config.json")
 	repoPath := t.TempDir()
 	// Create .git and clusters/harbor markers so DiscoverRepo would
 	// resolve. Tests that exercise discovery go through deps.discoverRepo.
@@ -31,7 +31,7 @@ func onboardStubs(t *testing.T) (onboardDeps, string, string) {
 	_ = os.MkdirAll(filepath.Join(repoPath, "clusters", "harbor"), 0o755)
 
 	deps := onboardDeps{
-		identityPath: func() (string, error) { return idPath, nil },
+		configPath: func() (string, error) { return cfgPath, nil },
 		getCaller: func(context.Context) (*aws.Caller, *clioutput.Error) {
 			return &aws.Caller{Account: "189176372795", Region: "eu-central-1", PrincipalARN: "arn:aws:sts::...:bdc"}, nil
 		},
@@ -72,17 +72,17 @@ func onboardStubs(t *testing.T) (onboardDeps, string, string) {
 		createPR: func(opts githubpr.Options) (*githubpr.Result, error) {
 			return &githubpr.Result{Branch: opts.Branch, URL: "https://github.com/example/pr/1"}, nil
 		},
-		discoverRepo:  func(string) (string, error) { return repoPath, nil },
-		writeIdentity: identity.Write,
+		discoverRepo: func(string) (string, error) { return repoPath, nil },
+		writeConfig:  config.Write,
 	}
-	return deps, idPath, repoPath
+	return deps, cfgPath, repoPath
 }
 
 func TestRunOnboard_DryRunEmitsWouldCreate(t *testing.T) {
-	deps, idPath, _ := onboardStubs(t)
+	deps, cfgPath, _ := onboardStubs(t)
 
 	var buf bytes.Buffer
-	err := runOnboard(context.Background(), onboardInput{Alias: "bdc", Name: "Brandon"}, &buf, deps)
+	err := runOnboard(context.Background(), onboardInput{Alias: "bdc"}, &buf, deps)
 	if err != nil {
 		t.Fatalf("runOnboard: %v\nbody=%s", err, buf.String())
 	}
@@ -105,9 +105,9 @@ func TestRunOnboard_DryRunEmitsWouldCreate(t *testing.T) {
 			t.Errorf("expected would-create on dry-run; got %s on %s", r.Action, r.Kind)
 		}
 	}
-	// Identity file should NOT be written on dry-run.
-	if _, statErr := os.Stat(idPath); statErr == nil {
-		t.Errorf("identity file written on dry-run at %s", idPath)
+	// Config file should NOT be written on dry-run.
+	if _, statErr := os.Stat(cfgPath); statErr == nil {
+		t.Errorf("config file written on dry-run at %s", cfgPath)
 	}
 	if len(data.GeneratedFiles) != 4 {
 		t.Errorf("generated files: got %d, want 4 (3 cell + aggregator)", len(data.GeneratedFiles))
@@ -124,10 +124,10 @@ func TestRunOnboard_DryRunEmitsWouldCreate(t *testing.T) {
 }
 
 func TestRunOnboard_ApplyHappyPath(t *testing.T) {
-	deps, idPath, _ := onboardStubs(t)
+	deps, cfgPath, _ := onboardStubs(t)
 
 	var buf bytes.Buffer
-	err := runOnboard(context.Background(), onboardInput{Alias: "bdc", Name: "Brandon", Apply: true}, &buf, deps)
+	err := runOnboard(context.Background(), onboardInput{Alias: "bdc", Apply: true}, &buf, deps)
 	if err != nil {
 		t.Fatalf("runOnboard: %v\nbody=%s", err, buf.String())
 	}
@@ -145,18 +145,21 @@ func TestRunOnboard_ApplyHappyPath(t *testing.T) {
 	if data.Branch == "" {
 		t.Errorf("Branch should be set")
 	}
+	if data.Namespace != "eng-bdc" {
+		t.Errorf("namespace: got %q, want eng-bdc", data.Namespace)
+	}
 	for _, r := range data.AWSResources {
 		if r.Action != "create" {
 			t.Errorf("expected create; got %s", r.Action)
 		}
 	}
-	// Identity file written.
-	got, idErr := identity.Read(idPath)
+	// Config file written.
+	got, idErr := config.Read(cfgPath)
 	if idErr != nil {
-		t.Fatalf("identity not written: %v", idErr)
+		t.Fatalf("config not written: %v", idErr)
 	}
-	if got.Alias != "bdc" || got.Name != "Brandon" {
-		t.Errorf("identity content: %+v", got)
+	if got.Alias != "bdc" || got.Namespace != "eng-bdc" {
+		t.Errorf("config content: %+v", got)
 	}
 }
 
@@ -195,8 +198,8 @@ func TestRunOnboard_RejectsBadAlias(t *testing.T) {
 }
 
 func TestRunOnboard_RejectsConflictingIdentity(t *testing.T) {
-	deps, idPath, _ := onboardStubs(t)
-	if e := identity.Write(idPath, identity.Engineer{Alias: "alice", Name: "Alice"}); e != nil {
+	deps, cfgPath, _ := onboardStubs(t)
+	if e := config.Write(cfgPath, config.Config{Alias: "alice", Namespace: "eng-alice"}); e != nil {
 		t.Fatalf("seed: %v", e)
 	}
 	var buf bytes.Buffer

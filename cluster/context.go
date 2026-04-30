@@ -10,35 +10,35 @@ import (
 
 	"github.com/sei-protocol/seictl/cluster/internal/aws"
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
-	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/config"
 	"github.com/sei-protocol/seictl/cluster/internal/kube"
 )
 
 type contextResult struct {
-	KubeContext     string             `json:"kubeContext"`
-	Cluster         string             `json:"cluster"`
-	Server          string             `json:"server"`
-	Namespace       string             `json:"namespace"`
-	AWSAccount      string             `json:"awsAccount"`
-	AWSRegion       string             `json:"awsRegion"`
-	AWSPrincipalARN string             `json:"awsPrincipalArn"`
-	Engineer        *identity.Engineer `json:"engineer,omitempty"`
+	KubeContext     string         `json:"kubeContext"`
+	Cluster         string         `json:"cluster"`
+	Server          string         `json:"server"`
+	Namespace       string         `json:"namespace"`
+	AWSAccount      string         `json:"awsAccount"`
+	AWSRegion       string         `json:"awsRegion"`
+	AWSPrincipalARN string         `json:"awsPrincipalArn"`
+	Config          *config.Config `json:"config,omitempty"`
 }
 
-// contextDeps lets tests stub the AWS and identity reads.
+// contextDeps lets tests stub the AWS and config reads.
 type contextDeps struct {
-	getCaller    func(context.Context) (*aws.Caller, *clioutput.Error)
-	identityPath func() (string, error)
+	getCaller  func(context.Context) (*aws.Caller, *clioutput.Error)
+	configPath func() (string, error)
 }
 
 var defaultContextDeps = contextDeps{
-	getCaller:    aws.GetCaller,
-	identityPath: identity.DefaultPath,
+	getCaller:  aws.GetCaller,
+	configPath: config.DefaultPath,
 }
 
 var ContextCmd = cli.Command{
 	Name:  "context",
-	Usage: "Print cluster + identity ground truth as a JSON envelope",
+	Usage: "Print cluster + config ground truth as a JSON envelope",
 	Flags: kubeconfigFlags(),
 	Action: func(ctx context.Context, command *cli.Command) error {
 		return runContext(ctx, command.String("kubeconfig"), command.String("context"), os.Stdout, defaultContextDeps)
@@ -72,14 +72,14 @@ func runContext(ctx context.Context, kubeconfig, kubeContext string, out io.Writ
 	res.AWSRegion = caller.Region
 	res.AWSPrincipalARN = caller.PrincipalARN
 
-	if path, err := deps.identityPath(); err == nil {
-		eng, idErr := identity.Read(path)
+	if path, err := deps.configPath(); err == nil {
+		cfg, idErr := config.Read(path)
 		if idErr != nil && idErr.Category != clioutput.CatMissing {
 			_ = clioutput.EmitError(out, clioutput.KindContextResult, idErr)
 			return cli.Exit("", idErr.Code)
 		}
-		if eng != nil {
-			res.Engineer = eng
+		if cfg != nil {
+			res.Config = cfg
 		}
 	}
 

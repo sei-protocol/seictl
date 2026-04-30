@@ -54,7 +54,7 @@ func TestRunContext(t *testing.T) {
 					PrincipalARN: "arn:aws:sts::189176372795:assumed-role/eng/bdc",
 				}, nil
 			},
-			identityPath: func() (string, error) {
+			configPath: func() (string, error) {
 				return "", errors.New("no identity in test")
 			},
 		}
@@ -81,8 +81,8 @@ func TestRunContext(t *testing.T) {
 		if data.AWSAccount != "189176372795" || data.AWSRegion != "eu-central-1" {
 			t.Errorf("aws fields: %+v", data)
 		}
-		if data.Engineer != nil {
-			t.Errorf("engineer should be nil when identityPath unreachable, got %+v", data.Engineer)
+		if data.Config != nil {
+			t.Errorf("config should be nil when configPath unreachable, got %+v", data.Config)
 		}
 	})
 
@@ -94,7 +94,7 @@ func TestRunContext(t *testing.T) {
 				return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatAWSUnavailable,
 					"AWS_PROFILE not set; ~/.aws/config has profile \"sei\"")
 			},
-			identityPath: func() (string, error) {
+			configPath: func() (string, error) {
 				return "", errors.New("skip")
 			},
 		}
@@ -129,7 +129,7 @@ func TestRunContext(t *testing.T) {
 			getCaller: func(context.Context) (*aws.Caller, *clioutput.Error) {
 				return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatAWSUnavailable, "skip")
 			},
-			identityPath: func() (string, error) { return "", errors.New("skip") },
+			configPath: func() (string, error) { return "", errors.New("skip") },
 		}
 
 		var buf bytes.Buffer

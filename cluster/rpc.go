@@ -14,7 +14,7 @@ import (
 
 	"github.com/sei-protocol/seictl/cluster/internal/aws"
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
-	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/config"
 	"github.com/sei-protocol/seictl/cluster/internal/kube"
 	"github.com/sei-protocol/seictl/cluster/internal/render"
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
@@ -45,7 +45,7 @@ type rpcUpInput struct {
 
 type rpcDeps struct {
 	resolveDigest func(context.Context, string) (string, *clioutput.Error)
-	identityPath  func() (string, error)
+	configPath    func() (string, error)
 	newKubeClient func(kube.Options) (*kube.Client, *clioutput.Error)
 	apply         func(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
 	getCaller     func(context.Context) (*aws.Caller, *clioutput.Error)
@@ -53,7 +53,7 @@ type rpcDeps struct {
 
 var defaultRPCDeps = rpcDeps{
 	resolveDigest: aws.ResolveDigest,
-	identityPath:  identity.DefaultPath,
+	configPath:    config.DefaultPath,
 	newKubeClient: kube.New,
 	apply:         applyToCluster,
 	getCaller:     aws.GetCaller,
@@ -102,7 +102,7 @@ func runRPCUpCmd(ctx context.Context, in rpcUpInput, out io.Writer, deps rpcDeps
 }
 
 func runRPCUp(ctx context.Context, in rpcUpInput, deps rpcDeps) (rpcUpResult, *clioutput.Error) {
-	eng, idErr := loadEngineer(deps.identityPath)
+	cfg, idErr := loadConfig(deps.configPath)
 	if idErr != nil {
 		return rpcUpResult{}, idErr
 	}
@@ -112,16 +112,13 @@ func runRPCUp(ctx context.Context, in rpcUpInput, deps rpcDeps) (rpcUpResult, *c
 	if e := validate.Image(in.Image); e != nil {
 		return rpcUpResult{}, e.ExitWith(clioutput.ExitBench)
 	}
-	if e := validate.Name(eng.Alias, in.Name); e != nil {
+	if e := validate.Name(cfg.Alias, in.Name); e != nil {
 		return rpcUpResult{}, e.ExitWith(clioutput.ExitBench)
 	}
 	if e := validate.RPCReplicas(in.Replicas); e != nil {
 		return rpcUpResult{}, e.ExitWith(clioutput.ExitBench)
 	}
-	namespace := "eng-" + eng.Alias
-	if e := validate.Namespace(namespace, eng.Alias); e != nil {
-		return rpcUpResult{}, e.ExitWith(clioutput.ExitBench)
-	}
+	namespace := cfg.Namespace
 	if _, callerErr := deps.getCaller(ctx); callerErr != nil {
 		return rpcUpResult{}, callerErr
 	}
@@ -136,7 +133,7 @@ func runRPCUp(ctx context.Context, in rpcUpInput, deps rpcDeps) (rpcUpResult, *c
 	}
 
 	digestShort := shortDigest(digest)
-	docs, manifests, rerr := renderRPCManifests(eng.Alias, in.ChainID, in.Name, namespace, seidImage, digestShort, in.Replicas)
+	docs, manifests, rerr := renderRPCManifests(cfg.Alias, in.ChainID, in.Name, namespace, seidImage, digestShort, in.Replicas)
 	if rerr != nil {
 		return rpcUpResult{}, rerr
 	}

@@ -2,7 +2,7 @@
 // discoverability (`aws iam list-policies --path-prefix /seictl/`) and
 // for scoped-down caller policies (e.g. `iam:PassRole` conditioned on
 // `Resource: arn:aws:iam::*:role/seictl/*`). Per-engineer policies and
-// roles share their name — harbor-bench-seiload-eng-<alias> — and are
+// roles share their name — harbor-seictl-eng-<alias> — and are
 // tagged with ManagedBy=seictl + Engineer=<alias> so drift on re-run
 // is detectable.
 
@@ -37,7 +37,7 @@ type EngineerScope struct {
 }
 
 func (e EngineerScope) PolicyName() string {
-	return fmt.Sprintf("%s-bench-seiload-eng-%s", e.Cluster, e.Alias)
+	return fmt.Sprintf("%s-seictl-eng-%s", e.Cluster, e.Alias)
 }
 
 func (e EngineerScope) RoleName() string {
@@ -118,7 +118,7 @@ func ensurePolicy(ctx context.Context, c *iam.Client, scope EngineerScope, doc s
 		PolicyName:     awssdk.String(scope.PolicyName()),
 		Path:           awssdk.String(IAMPath),
 		PolicyDocument: awssdk.String(doc),
-		Description:    awssdk.String(fmt.Sprintf("seictl-managed: bench-seiload write scope for engineer %s", scope.Alias)),
+		Description:    awssdk.String(fmt.Sprintf("seictl-managed: S3 results write scope for engineer %s", scope.Alias)),
 		Tags:           seictlTags(scope),
 	})
 	if cerr != nil {
@@ -144,7 +144,7 @@ func ensureRole(ctx context.Context, c *iam.Client, scope EngineerScope, trust s
 		RoleName:                 awssdk.String(scope.RoleName()),
 		Path:                     awssdk.String(IAMPath),
 		AssumeRolePolicyDocument: awssdk.String(trust),
-		Description:              awssdk.String(fmt.Sprintf("seictl-managed: Pod Identity role for bench-seiload SA in eng-%s", scope.Alias)),
+		Description:              awssdk.String(fmt.Sprintf("seictl-managed: Pod Identity role for seictl SA in eng-%s", scope.Alias)),
 		Tags:                     seictlTags(scope),
 	})
 	if cerr != nil {
@@ -186,7 +186,7 @@ func seictlTags(scope EngineerScope) []iamtypes.Tag {
 	return []iamtypes.Tag{
 		{Key: awssdk.String("ManagedBy"), Value: awssdk.String("seictl")},
 		{Key: awssdk.String("Engineer"), Value: awssdk.String(scope.Alias)},
-		{Key: awssdk.String("Component"), Value: awssdk.String("bench-seiload")},
+		{Key: awssdk.String("Component"), Value: awssdk.String("seictl")},
 		{Key: awssdk.String("Cluster"), Value: awssdk.String(scope.Cluster)},
 	}
 }

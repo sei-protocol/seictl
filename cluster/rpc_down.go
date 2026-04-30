@@ -10,7 +10,7 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
-	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/config"
 	"github.com/sei-protocol/seictl/cluster/internal/kube"
 	"github.com/sei-protocol/seictl/cluster/internal/render"
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
@@ -38,14 +38,14 @@ type rpcDownInput struct {
 }
 
 type rpcDownDeps struct {
-	identityPath  func() (string, error)
+	configPath    func() (string, error)
 	newKubeClient func(kube.Options) (*kube.Client, *clioutput.Error)
 	deleteFn      func(ctx context.Context, kc *kube.Client, opts kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error)
 	dryRunListFn  func(ctx context.Context, kc *kube.Client, opts kube.ListOptions) ([]kube.DeleteResult, *clioutput.Error)
 }
 
 var defaultRPCDownDeps = rpcDownDeps{
-	identityPath:  identity.DefaultPath,
+	configPath:    config.DefaultPath,
 	newKubeClient: kube.New,
 	deleteFn:      deleteFromCluster,
 	dryRunListFn:  dryRunListFromCluster,
@@ -73,27 +73,27 @@ var rpcDownCmd = &cli.Command{
 }
 
 func runRPCDown(ctx context.Context, in rpcDownInput, out io.Writer, deps rpcDownDeps) error {
-	eng, idErr := loadEngineer(deps.identityPath)
+	cfg, idErr := loadConfig(deps.configPath)
 	if idErr != nil {
 		return failRPCDown(out, idErr)
 	}
 	if e := validate.ChainID(in.ChainID); e != nil {
 		return failRPCDown(out, e.ExitWith(clioutput.ExitBench))
 	}
-	if e := validate.Name(eng.Alias, in.Name); e != nil {
+	if e := validate.Name(cfg.Alias, in.Name); e != nil {
 		return failRPCDown(out, e.ExitWith(clioutput.ExitBench))
 	}
 
 	namespace := in.Namespace
 	if namespace == "" {
-		namespace = "eng-" + eng.Alias
+		namespace = cfg.Namespace
 	}
-	if e := validate.Namespace(namespace, eng.Alias); e != nil {
+	if e := validate.Namespace(namespace); e != nil {
 		return failRPCDown(out, e.ExitWith(clioutput.ExitBench))
 	}
 
 	selector := fmt.Sprintf("sei.io/engineer=%s,sei.io/chain-id=%s,sei.io/rpc-name=%s,app.kubernetes.io/component=rpc",
-		eng.Alias, in.ChainID, in.Name)
+		cfg.Alias, in.ChainID, in.Name)
 
 	kc, kerr := deps.newKubeClient(kube.Options{Kubeconfig: in.Kubeconfig, Context: in.Context})
 	if kerr != nil {
