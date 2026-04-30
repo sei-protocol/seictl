@@ -53,6 +53,7 @@ const (
 	CatPRCreateFailed      = "pr-create-failed"
 	CatAWSCreateFailed     = "aws-create-failed"
 	CatBaseBranchStale     = "base-branch-stale"
+	CatWrongAccount        = "wrong-account"
 
 	CatMalformed       = "malformed"
 	CatMissing         = "missing"
