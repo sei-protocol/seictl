@@ -100,6 +100,89 @@ func TestRunBenchDown(t *testing.T) {
 		}
 	})
 
+	t.Run("dry-run lists resources without deleting", func(t *testing.T) {
+		path := writeEngineerFile(t, "bdc")
+		var capturedSelector string
+		deleteCalled := false
+		deps := benchDownDeps{
+			identityPath: func() (string, error) { return path, nil },
+			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
+				return &kube.Client{Namespace: "eng-bdc"}, nil
+			},
+			deleteFn: func(context.Context, *kube.Client, kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
+				deleteCalled = true
+				return nil, nil
+			},
+			dryRunListFn: func(_ context.Context, _ *kube.Client, opts kube.ListOptions) ([]kube.DeleteResult, *clioutput.Error) {
+				capturedSelector = opts.LabelSelector
+				return []kube.DeleteResult{
+					{Kind: "SeiNodeDeployment", Name: "bench-bdc-demo", Namespace: "eng-bdc", Action: "would-delete"},
+					{Kind: "Job", Name: "seiload-bench-bdc-demo", Namespace: "eng-bdc", Action: "would-delete"},
+				}, nil
+			},
+		}
+		var buf bytes.Buffer
+		err := runBenchDown(context.Background(), benchDownInput{Name: "demo", DryRun: true}, &buf, deps)
+		if err != nil {
+			t.Fatalf("runBenchDown: %v\nbody=%s", err, buf.String())
+		}
+		if deleteCalled {
+			t.Errorf("deleteFn must not be called on --dry-run")
+		}
+		if capturedSelector != "sei.io/engineer=bdc,sei.io/bench-name=demo" {
+			t.Errorf("selector: got %q", capturedSelector)
+		}
+		var env clioutput.Envelope
+		_ = json.Unmarshal(buf.Bytes(), &env)
+		var data benchDownResult
+		_ = json.Unmarshal(env.Data, &data)
+		if !data.DryRun {
+			t.Errorf("envelope DryRun should be true")
+		}
+		if data.DeletedAt != nil {
+			t.Errorf("DeletedAt should be nil on dry-run; got %v", data.DeletedAt)
+		}
+		if data.Hint != "" {
+			t.Errorf("Hint should be empty when dry-run finds matches; got %q", data.Hint)
+		}
+		if len(data.Resources) != 2 {
+			t.Errorf("resources: got %d, want 2", len(data.Resources))
+		}
+		for _, r := range data.Resources {
+			if r.Action != "would-delete" {
+				t.Errorf("expected would-delete action; got %q on %s", r.Action, r.Kind)
+			}
+		}
+	})
+
+	t.Run("dry-run on absent bench returns empty resources with disambiguating hint", func(t *testing.T) {
+		path := writeEngineerFile(t, "bdc")
+		deps := benchDownDeps{
+			identityPath: func() (string, error) { return path, nil },
+			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
+				return &kube.Client{Namespace: "eng-bdc"}, nil
+			},
+			dryRunListFn: func(context.Context, *kube.Client, kube.ListOptions) ([]kube.DeleteResult, *clioutput.Error) {
+				return nil, nil
+			},
+		}
+		var buf bytes.Buffer
+		err := runBenchDown(context.Background(), benchDownInput{Name: "missing", DryRun: true}, &buf, deps)
+		if err != nil {
+			t.Fatalf("runBenchDown: %v\nbody=%s", err, buf.String())
+		}
+		var env clioutput.Envelope
+		_ = json.Unmarshal(buf.Bytes(), &env)
+		var data benchDownResult
+		_ = json.Unmarshal(env.Data, &data)
+		if !data.DryRun || data.DeletedAt != nil || len(data.Resources) != 0 {
+			t.Errorf("expected dry-run/empty/nil-deletedAt; got %+v", data)
+		}
+		if !strings.Contains(data.Hint, "may not exist or already be torn down") {
+			t.Errorf("Hint should disambiguate the empty result for agent callers; got %q", data.Hint)
+		}
+	})
+
 	t.Run("rejects bad name with validation category", func(t *testing.T) {
 		path := writeEngineerFile(t, "bdc")
 		var buf bytes.Buffer

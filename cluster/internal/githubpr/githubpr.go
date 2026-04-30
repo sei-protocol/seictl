@@ -105,6 +105,9 @@ func CreatePR(opts Options) (*Result, error) {
 	if _, err := runIn(opts.RepoPath, "git", "fetch", "origin", opts.BaseBranch); err != nil {
 		return nil, fmt.Errorf("git fetch: %w", err)
 	}
+	if err := refuseLossyCheckout(opts.RepoPath, opts.Branch); err != nil {
+		return nil, err
+	}
 	if _, err := runIn(opts.RepoPath, "git", "checkout", "-B", opts.Branch, "origin/"+opts.BaseBranch); err != nil {
 		return nil, fmt.Errorf("git checkout branch: %w", err)
 	}
@@ -180,6 +183,20 @@ func DiscoverRepo(start string) (string, error) {
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+func refuseLossyCheckout(repoPath, branch string) error {
+	if _, err := runIn(repoPath, "git", "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
+		return nil
+	}
+	countOut, err := runIn(repoPath, "git", "rev-list", "--count", "origin/"+branch+".."+branch)
+	if err != nil {
+		return fmt.Errorf("local branch %q exists with no remote tracking ref; refusing `git checkout -B` so its commits are not discarded — `git switch %s` to inspect or `git reflog` to recover, then `git branch -D %s` to start fresh", branch, branch, branch)
+	}
+	if count := strings.TrimSpace(string(countOut)); count != "0" {
+		return fmt.Errorf("local branch %q has %s commit(s) ahead of origin/%s; refusing `git checkout -B` so they are not discarded — `git switch %s` to inspect or `git reflog` to recover, then `git branch -D %s` to start fresh", branch, count, branch, branch, branch)
+	}
+	return nil
 }
 
 func runIn(dir string, name string, args ...string) ([]byte, error) {

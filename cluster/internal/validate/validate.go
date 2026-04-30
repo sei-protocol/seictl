@@ -46,45 +46,60 @@ var (
 	}
 )
 
-func Alias(s string) *clioutput.Error {
+// Error is a validation failure carrying the CLI category and message.
+// Callers attach the exit code at the call site via ExitWith — validation
+// owns the WHAT (this input is invalid, here is why); the caller owns the
+// WHEN/WHERE (which verb is failing, hence which exit code).
+type Error struct {
+	Category string
+	Message  string
+}
+
+func (e *Error) Error() string { return e.Category + ": " + e.Message }
+
+func (e *Error) ExitWith(code int) *clioutput.Error {
+	return clioutput.New(code, e.Category, e.Message)
+}
+
+func newErr(category, format string, args ...any) *Error {
+	return &Error{Category: category, Message: fmt.Sprintf(format, args...)}
+}
+
+func Alias(s string) *Error {
 	if !aliasRe.MatchString(s) {
-		return clioutput.Newf(clioutput.ExitOnboard, clioutput.CatAliasInvalid,
-			"alias %q does not match %s", s, aliasRe)
+		return newErr(clioutput.CatAliasInvalid, "alias %q does not match %s", s, aliasRe)
 	}
 	if _, denied := aliasDenyList[s]; denied {
-		return clioutput.Newf(clioutput.ExitOnboard, clioutput.CatAliasInvalid,
-			"alias %q is reserved", s)
+		return newErr(clioutput.CatAliasInvalid, "alias %q is reserved", s)
 	}
 	return nil
 }
 
 // Name validates a benchmark name and enforces the combined
 // `bench-<alias>-<name>` chain-id stays within K8s' 63-char label cap.
-func Name(alias, name string) *clioutput.Error {
+func Name(alias, name string) *Error {
 	if !nameRe.MatchString(name) {
-		return clioutput.Newf(clioutput.ExitBench, clioutput.CatValidation,
-			"name %q does not match %s", name, nameRe)
+		return newErr(clioutput.CatValidation, "name %q does not match %s", name, nameRe)
 	}
 	chainID := fmt.Sprintf("bench-%s-%s", alias, name)
 	if len(chainID) > maxK8sLabel {
-		return clioutput.Newf(clioutput.ExitBench, clioutput.CatValidation,
+		return newErr(clioutput.CatValidation,
 			"combined chain-id %q is %d chars, max %d", chainID, len(chainID), maxK8sLabel)
 	}
 	return nil
 }
 
-func Size(s string) *clioutput.Error {
+func Size(s string) *Error {
 	switch s {
 	case BenchSizeSmall, BenchSizeMedium, BenchSizeLarge:
 		return nil
 	}
-	return clioutput.Newf(clioutput.ExitBench, clioutput.CatValidation,
-		"size %q is not one of s|m|l", s)
+	return newErr(clioutput.CatValidation, "size %q is not one of s|m|l", s)
 }
 
-func DurationMinutes(n int) *clioutput.Error {
+func DurationMinutes(n int) *Error {
 	if n < BenchDurationMin || n > BenchDurationMax {
-		return clioutput.Newf(clioutput.ExitBench, clioutput.CatValidation,
+		return newErr(clioutput.CatValidation,
 			"duration %d minutes is out of range [%d, %d]", n, BenchDurationMin, BenchDurationMax)
 	}
 	return nil
@@ -93,15 +108,15 @@ func DurationMinutes(n int) *clioutput.Error {
 // Namespace enforces RFC-1123 label shape. If alias is non-empty, also
 // enforces the side-effecting-verb policy that the namespace equals
 // `eng-<alias>`. Pass empty alias for read-only verbs.
-func Namespace(ns, alias string) *clioutput.Error {
+func Namespace(ns, alias string) *Error {
 	if len(ns) > maxK8sLabel || !namespaceRe.MatchString(ns) {
-		return clioutput.Newf(clioutput.ExitBench, clioutput.CatNamespacePolicy,
+		return newErr(clioutput.CatNamespacePolicy,
 			"namespace %q is not a valid RFC-1123 label", ns)
 	}
 	if alias != "" {
 		want := "eng-" + alias
 		if ns != want {
-			return clioutput.Newf(clioutput.ExitBench, clioutput.CatNamespacePolicy,
+			return newErr(clioutput.CatNamespacePolicy,
 				"namespace must equal %q for engineer %q (got %q)", want, alias, ns)
 		}
 	}
@@ -110,34 +125,31 @@ func Namespace(ns, alias string) *clioutput.Error {
 
 // Image enforces the registry policy (ECR-only, sei/* prefix, tag or
 // digest required). Digest resolution lives in internal/aws.
-func Image(ref string) *clioutput.Error {
+func Image(ref string) *Error {
 	if ref == "" {
-		return clioutput.New(clioutput.ExitBench, clioutput.CatImagePolicy,
-			"image is required")
+		return newErr(clioutput.CatImagePolicy, "image is required")
 	}
 	slash := strings.IndexByte(ref, '/')
 	if slash < 0 {
-		return clioutput.Newf(clioutput.ExitBench, clioutput.CatImagePolicy,
-			"image %q is missing registry hostname", ref)
+		return newErr(clioutput.CatImagePolicy, "image %q is missing registry hostname", ref)
 	}
 	host := ref[:slash]
 	if host != AllowedRegistry {
-		return clioutput.Newf(clioutput.ExitBench, clioutput.CatImagePolicy,
+		return newErr(clioutput.CatImagePolicy,
 			"image registry must be %s (got %s)", AllowedRegistry, host)
 	}
 	rest := ref[slash+1:]
 	if !strings.HasPrefix(rest, AllowedRepoPrefix) {
-		return clioutput.Newf(clioutput.ExitBench, clioutput.CatImagePolicy,
+		return newErr(clioutput.CatImagePolicy,
 			"image repo must start with %q (got %q)", AllowedRepoPrefix, rest)
 	}
 	repoTail := rest[len(AllowedRepoPrefix):]
 	if repoTail == "" {
-		return clioutput.Newf(clioutput.ExitBench, clioutput.CatImagePolicy,
+		return newErr(clioutput.CatImagePolicy,
 			"image %q is missing repo name after %q", ref, AllowedRepoPrefix)
 	}
 	if !strings.ContainsAny(repoTail, ":@") {
-		return clioutput.Newf(clioutput.ExitBench, clioutput.CatImagePolicy,
-			"image %q must specify a tag or digest", ref)
+		return newErr(clioutput.CatImagePolicy, "image %q must specify a tag or digest", ref)
 	}
 	return nil
 }
