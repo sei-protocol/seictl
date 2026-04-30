@@ -99,6 +99,15 @@ func TestRunBenchUp(t *testing.T) {
 		if data.ResultsS3URI != want {
 			t.Errorf("s3 uri: got %q, want %q", data.ResultsS3URI, want)
 		}
+
+		wantTM := "http://bench-bdc-demo-rpc-internal.eng-bdc.svc.cluster.local:26657"
+		wantEVM := "http://bench-bdc-demo-rpc-internal.eng-bdc.svc.cluster.local:8545"
+		if len(data.Endpoints.TendermintRpc) != 1 || data.Endpoints.TendermintRpc[0] != wantTM {
+			t.Errorf("tendermintRpc: got %v, want [%s]", data.Endpoints.TendermintRpc, wantTM)
+		}
+		if len(data.Endpoints.EvmJsonRpc) != 1 || data.Endpoints.EvmJsonRpc[0] != wantEVM {
+			t.Errorf("evmJsonRpc: got %v, want [%s]", data.Endpoints.EvmJsonRpc, wantEVM)
+		}
 		if len(data.Manifests) != 4 {
 			t.Fatalf("expected 4 manifests (validator SND, rpc SND, seiload Job, profile CM); got %d", len(data.Manifests))
 		}

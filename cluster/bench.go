@@ -12,6 +12,8 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	seiconfig "github.com/sei-protocol/sei-config"
+
 	"github.com/sei-protocol/seictl/cluster/internal/aws"
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 	"github.com/sei-protocol/seictl/cluster/internal/identity"
@@ -58,9 +60,17 @@ type benchUpResult struct {
 	RPCNodes     int                  `json:"rpcNodes"`
 	Duration     string               `json:"duration"`
 	ResultsS3URI string               `json:"resultsS3Uri"`
+	Endpoints    Endpoints            `json:"endpoints"`
 	DryRun       bool                 `json:"dryRun"`
 	Manifests    []render.ManifestRef `json:"manifests"`
 	AppliedAt    *time.Time           `json:"appliedAt,omitempty"`
+}
+
+// Field names mirror downstream env-var contracts (SEI_TENDERMINT_RPC,
+// SEI_EVM_JSON_RPC) — rename = break two contracts.
+type Endpoints struct {
+	TendermintRpc []string `json:"tendermintRpc"`
+	EvmJsonRpc    []string `json:"evmJsonRpc"`
 }
 
 type benchUpInput struct {
@@ -200,6 +210,7 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 		RPCNodes:     sizeProfile.RPC,
 		Duration:     fmt.Sprintf("%dm", in.Duration),
 		ResultsS3URI: s3URI,
+		Endpoints:    deriveEndpoints(chainID, namespace),
 		DryRun:       !in.Apply,
 		Manifests:    manifests,
 	}
@@ -363,6 +374,14 @@ func shortDigest(d string) string {
 		return d
 	}
 	return d[i+1 : i+1+12]
+}
+
+func deriveEndpoints(chainID, namespace string) Endpoints {
+	host := fmt.Sprintf("%s-rpc-internal.%s.svc.cluster.local", chainID, namespace)
+	return Endpoints{
+		TendermintRpc: []string{fmt.Sprintf("http://%s:%d", host, seiconfig.PortRPC)},
+		EvmJsonRpc:    []string{fmt.Sprintf("http://%s:%d", host, seiconfig.PortEVMHTTP)},
+	}
 }
 
 // rpcEndpointsJSON formats the seiload profile's `endpoints` array

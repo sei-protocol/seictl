@@ -131,36 +131,27 @@ Composites (`bench up`) compose primitive waits: `chain wait → rpc wait → lo
 
 ### Endpoint emission
 
-`chain up`, `rpc up`, and `bench up` emit per-pod endpoint URLs in their JSON envelopes (already shipped in `bench up` via `ResultsS3URI` + manifest references; extend to include `endpoints` when the primitives ship). Downstream tooling — engineer shell scripts, GHA workflows, MCP agents, external test binaries — reads them and acts.
+`bench up` emits aggregate ClusterIP URLs for the rendered RPC fleet in its JSON envelope. Downstream tooling — engineer shell scripts, GHA workflows, MCP agents, external test binaries — reads them and acts.
 
-**Endpoint contract (locked):** split by RPC type, list per type, per-pod URLs.
+**Endpoint contract (locked):** split by RPC type, list per type. v1 emits a single-element list per type pointing at the SeiNodeDeployment's internal ClusterIP Service (which kube-proxy load-balances across healthy pods). Per-pod entries are additive when a consumer needs sharding.
 
 ```json
 {
   "endpoints": {
-    "tendermintRpc": [
-      "http://bench-bdc-foo-rpc-0.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:26657",
-      "http://bench-bdc-foo-rpc-1.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:26657"
-    ],
-    "evmJsonRpc": [
-      "http://bench-bdc-foo-rpc-0.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:8545",
-      "http://bench-bdc-foo-rpc-1.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:8545"
-    ],
-    "cosmosGrpc": [
-      "bench-bdc-foo-rpc-0.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:9090",
-      "bench-bdc-foo-rpc-1.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:9090"
-    ]
+    "tendermintRpc": ["http://bench-bdc-foo-rpc-internal.eng-bdc.svc.cluster.local:26657"],
+    "evmJsonRpc":    ["http://bench-bdc-foo-rpc-internal.eng-bdc.svc.cluster.local:8545"]
   }
 }
 ```
 
-Three rules behind the shape:
+Two rules behind the shape:
 
 - **Split by RPC type, not flat-with-discriminator.** Most consumers know which port they want (seiload by profile, qa-testing's mocha by suite). A flat list with a `{type, url}` object would force every consumer to filter; the split eliminates that.
-- **Per-pod, not aggregate.** Consumers shard, round-robin, or pick a single replica. Per-pod URLs give them the option; an aggregate Service URL only allows kube-proxy round-robin.
-- **Full URLs (with scheme + port) for HTTP types; `host:port` for gRPC** because gRPC clients don't take `http://` prefixes — Sei's gRPC is h2c.
+- **List per type.** Single-element today, multi-element when per-pod sharding lands. Consumers can already do `endpoints.evmJsonRpc[0]` and stay forwards-compatible.
 
-Adding new endpoint types (e.g. `evmWebSocket`, `cosmosLcd`) is backwards-compatible. Renaming or restructuring `endpoints.<type>` is not — these field names are the contract.
+Why aggregate, not per-pod, in v1: the SND controller already publishes the internal ClusterIP Service via `.status.internalService` for stateless HTTP types (RPC, EVM HTTP, REST). kube-proxy load-balances across healthy pods. Per-pod URLs are needed only for sharding consumers (seiload generates its own profile config separately) and for stateful protocols like gRPC + EVM WebSocket where kube-proxy L4 LB doesn't work — both deferred until a real consumer asks.
+
+Adding new endpoint types (e.g. `evmWebSocket`, `cosmosGrpc`, `cosmosLcd`) is backwards-compatible. Renaming or restructuring `endpoints.<type>` is not — these field names are the contract.
 
 Two consumption shapes:
 
@@ -187,7 +178,7 @@ exit $exit_code
 
 The first concrete external test binary consuming this contract is the qa-testing TS/mocha harness. Its design lives in [`sei-protocol/qa-testing` `docs/design/seictl-harness.md`](https://github.com/sei-protocol/qa-testing/blob/main/docs/design/seictl-harness.md) and exists as a reference for how downstream tooling adopts the endpoint contract:
 
-- **Env-var names** mirror the JSON envelope's field names — `SEI_EVM_JSON_RPC` reads `endpoints.evmJsonRpc[0]`, `SEI_TENDERMINT_RPC` reads `endpoints.tendermintRpc[0]`, `SEI_COSMOS_GRPC` reads `endpoints.cosmosGrpc[0]`. Renaming either side breaks the integration.
+- **Env-var names** mirror the JSON envelope's field names — `SEI_EVM_JSON_RPC` reads `endpoints.evmJsonRpc[0]`, `SEI_TENDERMINT_RPC` reads `endpoints.tendermintRpc[0]`. Renaming either side breaks the integration.
 - **Exit codes** follow platform#235's `0` / `1` / `2` (pass / test fail / infra fail). The harness wraps mocha and classifies failures.
 - **One-line stdout summary** (`{"passed":N,"failed":M,"exitCode":0,"reportPath":"..."}`) lets seictl-driven loops parse the verdict without reading the mochawesome JSON.
 
