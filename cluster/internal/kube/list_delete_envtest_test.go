@@ -141,6 +141,54 @@ func TestDelete_LabelSelectorDeletesMatchingObjects(t *testing.T) {
 	}
 }
 
+func TestDelete_StillTerminatingWhenFinalizerHolds(t *testing.T) {
+	ns := testEnv.UniqueNamespace(t, "del-term")
+	kc := newTestClient(t)
+
+	// Seed a CM with a finalizer; envtest has no controller to release it,
+	// so DeleteWithOptions sets deletionTimestamp and the object lingers.
+	cs, err := kubernetes.NewForConfig(testEnv.RESTConfig())
+	if err != nil {
+		t.Fatalf("clientset: %v", err)
+	}
+	_, err = cs.CoreV1().ConfigMaps(ns).Create(context.Background(),
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "stuck",
+				Namespace:  ns,
+				Labels:     map[string]string{"sei.io/bench-name": "demo"},
+				Finalizers: []string{"seictl.test/hold"},
+			},
+			Data: map[string]string{"k": "v"},
+		},
+		metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("seed cm: %v", err)
+	}
+
+	results, err := kc.Delete(context.Background(), kube.DeleteOptions{
+		Namespace:     ns,
+		Resources:     []string{"configmaps"},
+		LabelSelector: "sei.io/bench-name=demo",
+	})
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results: got %d, want 1", len(results))
+	}
+	if results[0].Action != "still-terminating" {
+		t.Errorf("action: got %q, want \"still-terminating\"", results[0].Action)
+	}
+
+	// Release the finalizer so the test cleans up.
+	cm, gerr := cs.CoreV1().ConfigMaps(ns).Get(context.Background(), "stuck", metav1.GetOptions{})
+	if gerr == nil {
+		cm.Finalizers = nil
+		_, _ = cs.CoreV1().ConfigMaps(ns).Update(context.Background(), cm, metav1.UpdateOptions{})
+	}
+}
+
 func TestDelete_EmptyResultOnNoMatches(t *testing.T) {
 	ns := testEnv.UniqueNamespace(t, "del-empty")
 	kc := newTestClient(t)

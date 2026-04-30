@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/resource"
 	"k8s.io/utils/ptr"
@@ -72,6 +73,20 @@ func (c *Client) Delete(ctx context.Context, opts DeleteOptions) ([]DeleteResult
 				return fmt.Errorf("delete %s/%s in %s: %w", info.Mapping.GroupVersionKind.Kind, info.Name, info.Namespace, err)
 			}
 		}
+		// FinalizerDeleteDependents is K8s machinery the apiserver auto-adds
+		// when foreground propagation is requested; counting it as "real"
+		// false-positives on childless objects in the brief window before
+		// GC reaps. A read-side error here is silently treated as "deleted"
+		// — the apiserver already accepted the delete.
+		if action == "deleted" {
+			if got, gerr := helper.Get(info.Namespace, info.Name); gerr == nil {
+				if accessor, aerr := meta.Accessor(got); aerr == nil {
+					if !accessor.GetDeletionTimestamp().IsZero() && hasRealFinalizer(accessor.GetFinalizers()) {
+						action = "still-terminating"
+					}
+				}
+			}
+		}
 		results = append(results, DeleteResult{
 			Kind:      info.Mapping.GroupVersionKind.Kind,
 			Name:      info.Name,
@@ -84,4 +99,13 @@ func (c *Client) Delete(ctx context.Context, opts DeleteOptions) ([]DeleteResult
 		return nil, wrapMappingErr(visitErr)
 	}
 	return results, nil
+}
+
+func hasRealFinalizer(fs []string) bool {
+	for _, f := range fs {
+		if f != metav1.FinalizerDeleteDependents {
+			return true
+		}
+	}
+	return false
 }

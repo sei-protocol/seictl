@@ -65,6 +65,41 @@ func TestRunBenchDown(t *testing.T) {
 		}
 	})
 
+	t.Run("omits deletedAt and emits hint when any resource is still-terminating", func(t *testing.T) {
+		path := writeEngineerFile(t, "bdc")
+		deps := benchDownDeps{
+			identityPath: func() (string, error) { return path, nil },
+			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
+				return &kube.Client{Namespace: "eng-bdc"}, nil
+			},
+			deleteFn: func(context.Context, *kube.Client, kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
+				return []kube.DeleteResult{
+					{Kind: "SeiNodeDeployment", Name: "bench-bdc-demo", Namespace: "eng-bdc", Action: "still-terminating"},
+					{Kind: "Job", Name: "seiload-bench-bdc-demo", Namespace: "eng-bdc", Action: "deleted"},
+					{Kind: "ConfigMap", Name: "seiload-profile-bench-bdc-demo", Namespace: "eng-bdc", Action: "deleted"},
+				}, nil
+			},
+		}
+		var buf bytes.Buffer
+		err := runBenchDown(context.Background(), benchDownInput{Name: "demo"}, &buf, deps)
+		if err != nil {
+			t.Fatalf("runBenchDown: %v\nbody=%s", err, buf.String())
+		}
+		var env clioutput.Envelope
+		_ = json.Unmarshal(buf.Bytes(), &env)
+		var data benchDownResult
+		_ = json.Unmarshal(env.Data, &data)
+		if data.DeletedAt != nil {
+			t.Errorf("deletedAt should be nil when any resource is still-terminating; got %v", data.DeletedAt)
+		}
+		if !strings.Contains(data.Hint, "still terminating") {
+			t.Errorf("hint should mention still-terminating; got %q", data.Hint)
+		}
+		if !strings.Contains(data.Hint, "bench up") {
+			t.Errorf("hint should mention bench up so the operator knows what to wait for; got %q", data.Hint)
+		}
+	})
+
 	t.Run("rejects bad name with validation category", func(t *testing.T) {
 		path := writeEngineerFile(t, "bdc")
 		var buf bytes.Buffer
