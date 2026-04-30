@@ -1,16 +1,21 @@
 target: cluster
 target_path: cluster/
 started: "2026-04-29T19:00:00Z"
-updated: "2026-04-29T19:45:00Z"
-note: "Dry-run validation of /bugbash skill — pass 1 partial. Discovery complete (35 candidates). 3 candidates challenger-passed: 1 refuted, 2 downgraded to Low. 32 candidates remain pending challenger."
+updated: "2026-04-29T22:00:00Z"
+note: |
+  Pass 1 + Pass 2 partial. Pass 1 surfaced 35 raw candidates; sampled 3 → 2 confirmed Lows + 1 refute.
+  Pass 2 ran the merge phase on the 32 remaining (32 → 31, one merge: render.Render non-defensive).
+  Sampled 10 merged candidates through parallel challengers under the refined skill (Tide PR #17).
+  Pass 2 added 4 confirmed findings (2 High, 1 Medium, 1 Low) + 6 refutations.
+  Run not at convergence; ~22 candidates remain pending.
 experts:
   - kubernetes-specialist
   - platform-engineer
   - network-specialist
   - security-specialist
   - product-manager
-pass: 1
-convergence_counter: 0
+pass: 2
+convergence_counter: 0  # 4 new findings of severity ≥ Medium in pass 2 (Items 3, 4, 5 are ≥ Medium); Item 6 is Low
 findings:
   - id: 1
     severity: Low
@@ -19,6 +24,7 @@ findings:
     expert_challenger: kubernetes-specialist
     challenger_verdict: downgrade
     severity_proposed_by_finder: Critical
+    pass: 1
   - id: 2
     severity: Low
     title: "Add --dry-run flag to bench down"
@@ -26,10 +32,73 @@ findings:
     expert_challenger: kubernetes-specialist
     challenger_verdict: downgrade
     severity_proposed_by_finder: High
+    pass: 1
+  - id: 3
+    severity: High
+    title: "Fail fast on Job spec mutation in bench up"
+    expert_finder: kubernetes-specialist
+    expert_challenger: platform-engineer
+    challenger_verdict: confirm
+    pass: 2
+  - id: 4
+    severity: High
+    title: "Don't claim deletion complete until foreground propagation finishes"
+    expert_finder: kubernetes-specialist
+    expert_challenger: product-manager
+    challenger_verdict: confirm
+    pass: 2
+  - id: 5
+    severity: Medium
+    title: "Verify caller AWS account matches onboardAccount before IAM creation"
+    expert_finder: network-specialist
+    expert_challenger: product-manager
+    challenger_verdict: downgrade
+    severity_proposed_by_finder: High
+    pass: 2
+  - id: 6
+    severity: Low
+    title: "Refuse git checkout -B on branch with local commits ahead of tracking ref"
+    expert_finder: platform-engineer
+    expert_challenger: security-specialist
+    challenger_verdict: downgrade
+    severity_proposed_by_finder: High
+    pass: 2
 refuted:
   - title: "Apply has no rollback on partial failure"
     expert_finder: kubernetes-specialist
     expert_challenger: platform-engineer
+    pass: 1
     reason: "'all-or-nothing' in docstring refers to return-value contract, not cluster-state transactionality. SSA across multiple objects has no K8s transaction primitive; LLD chose re-run as recovery; bench down cleans up by label regardless of prior apply outcome."
-candidates_pending_challenger: 32  # listed in docs/bugbash/cluster.md "Pending Challenger Pass" section
+  - title: "Identity write after PR succeeds → half-onboarded engineer"
+    expert_finder: platform-engineer
+    expert_challenger: security-specialist
+    pass: 2
+    reason: "Re-running onboard --alias <same> is fully recoverable: IAM + Pod Identity are idempotent (return 'exists'), --no-pr skips the cell-dir guard. IAM/PR are durable shared state; local identity is cheap to recreate. Missing local identity is fail-closed."
+  - title: "No NetworkPolicy in onboard manifests"
+    expert_finder: network-specialist
+    expert_challenger: kubernetes-specialist
+    pass: 2
+    reason: "Out of scope for seictl. Platform's harbor design uses Cilium policyEnforcementMode: default; per-namespace policies authored in platform/Flux repo. IMDS bypass sub-claim misframed (IMDS hardening is node-level; Pod Identity uses 169.254.170.23, not IMDS). Default-deny baseline already tracked as platform follow-up."
+  - title: "render.Render is non-defensive (merged: os.Expand bare $VAR + ${VAR} unescaped substitution)"
+    expert_finders: [kubernetes-specialist, security-specialist]
+    expert_challenger: platform-engineer
+    pass: 2
+    merged_in_pass_2: true
+    reason: "Both symptoms blocked by existing controls. Bare $VAR caught by fail-closed missing-vars block (loud CatTemplateRender, not silent). YAML-injection blocked by validate.Namespace's regex requiring [a-z0-9-]+ (no newlines/quotes/colons). Two finder framings didn't share a root cause; merge was a false positive."
+  - title: "kubeconfig users[].exec plugin = arbitrary code execution"
+    expert_finder: security-specialist
+    expert_challenger: kubernetes-specialist
+    pass: 2
+    reason: "Standard kubectl-equivalent behavior; honoring users[].exec is the documented mechanism for aws eks get-token and the entire managed-cluster auth ecosystem. Threat model already implies filesystem write as engineer, which subsumes the attack vector. Tightening would break aws-eks-token-provider with no real defense uplift."
+  - title: "onboard doesn't generate a kubeconfig"
+    expert_finder: product-manager
+    expert_challenger: platform-engineer
+    pass: 2
+    reason: "Verb's documented Usage is 'Provision a new engineer's harbor footprint (IAM + namespace cell)' — no kubeconfig promise. No Role/RoleBinding is explicitly documented decision (engineers operate as cluster-admin via SSO; scoped identity tracked in seictl#80). Cluster access comes from SSO + aws eks update-kubeconfig pre-onboard."
+  - title: "Pod Identity association race vs. bench Job admission"
+    expert_finder: network-specialist
+    expert_challenger: kubernetes-specialist
+    pass: 2
+    reason: "Hours-to-days human PR-merge step between onboard and first bench up dwarfs any plausible EKS consistency lag (sub-second in practice). Pod Identity webhook injects creds at admission time; missing association produces explicit NoCredentialProviders/403, not silent failure. seictl's surface ends at bench up apply; seiload's runtime errors are out of scope."
+candidates_pending_challenger: 22  # listed in docs/bugbash/cluster.md "Pending Challenger Pass" section
 verdicts: {}
