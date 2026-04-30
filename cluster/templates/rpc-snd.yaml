@@ -1,6 +1,6 @@
 # Source: sei-protocol/platform autobake/templates/seinodedeployment.yaml
 # Vars: CHAIN_ID, NAMESPACE, ENGINEER_ALIAS, NAME, SEID_IMAGE,
-#       IMAGE_DIGEST_SHORT, RPC_COUNT
+#       IMAGE_DIGEST_SHORT, RPC_COUNT, PART_OF
 # RPC fleet — block-syncs from validators and serves EVM JSON-RPC.
 # Inherits genesis from the validator SND's ceremony via S3.
 apiVersion: sei.io/v1alpha1
@@ -10,7 +10,7 @@ metadata:
   namespace: ${NAMESPACE}
   labels:
     app.kubernetes.io/managed-by: seictl
-    app.kubernetes.io/part-of: seictl-bench
+    app.kubernetes.io/part-of: ${PART_OF}
     app.kubernetes.io/component: rpc
     sei.io/chain-id: ${CHAIN_ID}
     sei.io/engineer: ${ENGINEER_ALIAS}

@@ -183,6 +183,7 @@ func renderChainManifests(alias, name, namespace, chainID, seidImage, digestShor
 		"SEID_IMAGE":         seidImage,
 		"IMAGE_DIGEST_SHORT": digestShort,
 		"VALIDATOR_COUNT":    strconv.Itoa(validators),
+		"PART_OF":            "seictl",
 	}
 	chainYAML, e := renderEmbedded("chain.yaml", vars)
 	if e != nil {

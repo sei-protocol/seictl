@@ -284,6 +284,7 @@ func renderManifests(alias, name, namespace, chainID, seidImage, digestShort str
 		"VALIDATOR_COUNT":      strconv.Itoa(validators),
 		"RPC_COUNT":            strconv.Itoa(rpcCount),
 		"JOB_DEADLINE_SECONDS": strconv.Itoa(durationMin * 60),
+		"PART_OF":              benchPartOf,
 	}
 
 	chainYAML, e := renderEmbedded("chain.yaml", vars)

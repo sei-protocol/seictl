@@ -1,6 +1,6 @@
 # Source: sei-protocol/platform autobake/templates/seinodedeployment.yaml
 # Vars: CHAIN_ID, NAMESPACE, ENGINEER_ALIAS, NAME, SEID_IMAGE,
-#       IMAGE_DIGEST_SHORT, VALIDATOR_COUNT
+#       IMAGE_DIGEST_SHORT, VALIDATOR_COUNT, PART_OF
 apiVersion: sei.io/v1alpha1
 kind: SeiNodeDeployment
 metadata:
@@ -8,7 +8,7 @@ metadata:
   namespace: ${NAMESPACE}
   labels:
     app.kubernetes.io/managed-by: seictl
-    app.kubernetes.io/part-of: seictl-bench
+    app.kubernetes.io/part-of: ${PART_OF}
     app.kubernetes.io/component: chain
     sei.io/chain-id: ${CHAIN_ID}
     sei.io/engineer: ${ENGINEER_ALIAS}
