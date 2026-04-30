@@ -24,6 +24,8 @@ const (
 	KindBenchListResult = "BenchListResult"
 	KindChainUpResult   = "ChainUpResult"
 	KindChainDownResult = "ChainDownResult"
+	KindRPCUpResult     = "RPCUpResult"
+	KindRPCDownResult   = "RPCDownResult"
 	KindOnboardResult   = "OnboardResult"
 )
 

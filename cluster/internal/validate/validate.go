@@ -113,6 +113,23 @@ func Validators(n int) *Error {
 	return nil
 }
 
+func RPCReplicas(n int) *Error {
+	if n < 1 || n > 21 {
+		return newErr(clioutput.CatValidation,
+			"rpc replica count %d is out of range [1, 21]", n)
+	}
+	return nil
+}
+
+// ChainID enforces a non-empty bech32-friendly chain identifier.
+// Engineers usually pass the value emitted by `chain up`'s envelope.
+func ChainID(s string) *Error {
+	if s == "" {
+		return newErr(clioutput.CatValidation, "chain-id must not be empty")
+	}
+	return nil
+}
+
 // Namespace enforces RFC-1123 label shape. If alias is non-empty, also
 // enforces the side-effecting-verb policy that the namespace equals
 // `eng-<alias>`. Pass empty alias for read-only verbs.

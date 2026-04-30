@@ -1,0 +1,45 @@
+# Source: sei-protocol/platform autobake/templates/seinodedeployment.yaml
+# Vars: CHAIN_ID, RPC_NAME, NAMESPACE, ENGINEER_ALIAS, SEID_IMAGE,
+#       IMAGE_DIGEST_SHORT, RPC_COUNT, PART_OF
+# Standalone RPC fleet that peers with an existing chain's validators
+# via LabelPeerSource. Multi-fleet capable: name = ${CHAIN_ID}-rpc-${RPC_NAME}.
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+metadata:
+  name: ${CHAIN_ID}-rpc-${RPC_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: seictl
+    app.kubernetes.io/part-of: ${PART_OF}
+    app.kubernetes.io/component: rpc
+    sei.io/chain-id: ${CHAIN_ID}
+    sei.io/engineer: ${ENGINEER_ALIAS}
+    sei.io/rpc-name: ${RPC_NAME}
+    sei.io/image-sha: ${IMAGE_DIGEST_SHORT}
+    sei.io/role: rpc
+spec:
+  replicas: ${RPC_COUNT}
+  deletionPolicy: Delete
+  updateStrategy:
+    type: InPlace
+  template:
+    metadata:
+      labels:
+        sei.io/chain-id: ${CHAIN_ID}
+        sei.io/engineer: ${ENGINEER_ALIAS}
+        sei.io/rpc-name: ${RPC_NAME}
+        sei.io/role: rpc
+    spec:
+      chainId: ${CHAIN_ID}
+      image: ${SEID_IMAGE}
+      entrypoint:
+        command: ["seid"]
+        args: ["start", "--home", "/sei"]
+      peers:
+        - label:
+            selector:
+              sei.io/chain-id: ${CHAIN_ID}
+              sei.io/role: validator
+      fullNode: {}
+      overrides:
+        evm.ws_enabled: "true"
