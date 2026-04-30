@@ -1,0 +1,35 @@
+target: cluster
+target_path: cluster/
+started: "2026-04-29T19:00:00Z"
+updated: "2026-04-29T19:45:00Z"
+note: "Dry-run validation of /bugbash skill — pass 1 partial. Discovery complete (35 candidates). 3 candidates challenger-passed: 1 refuted, 2 downgraded to Low. 32 candidates remain pending challenger."
+experts:
+  - kubernetes-specialist
+  - platform-engineer
+  - network-specialist
+  - security-specialist
+  - product-manager
+pass: 1
+convergence_counter: 0
+findings:
+  - id: 1
+    severity: Low
+    title: "Re-validate engineer alias on identity.Read"
+    expert_finder: security-specialist
+    expert_challenger: kubernetes-specialist
+    challenger_verdict: downgrade
+    severity_proposed_by_finder: Critical
+  - id: 2
+    severity: Low
+    title: "Add --dry-run flag to bench down"
+    expert_finder: product-manager
+    expert_challenger: kubernetes-specialist
+    challenger_verdict: downgrade
+    severity_proposed_by_finder: High
+refuted:
+  - title: "Apply has no rollback on partial failure"
+    expert_finder: kubernetes-specialist
+    expert_challenger: platform-engineer
+    reason: "'all-or-nothing' in docstring refers to return-value contract, not cluster-state transactionality. SSA across multiple objects has no K8s transaction primitive; LLD chose re-run as recovery; bench down cleans up by label regardless of prior apply outcome."
+candidates_pending_challenger: 32  # listed in docs/bugbash/cluster.md "Pending Challenger Pass" section
+verdicts: {}
