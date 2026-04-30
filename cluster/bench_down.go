@@ -164,7 +164,12 @@ func runBenchDown(ctx context.Context, in benchDownInput, out io.Writer, deps be
 		Resources: resources,
 		DryRun:    in.DryRun,
 	}
-	if !in.DryRun {
+	switch {
+	case in.DryRun:
+		if len(results) == 0 {
+			res.Hint = fmt.Sprintf("no resources match selector %q in namespace %q — bench may not exist or already be torn down", selector, namespace)
+		}
+	default:
 		terminating := 0
 		for _, r := range results {
 			if r.Action == "still-terminating" {

@@ -142,6 +142,9 @@ func TestRunBenchDown(t *testing.T) {
 		if data.DeletedAt != nil {
 			t.Errorf("DeletedAt should be nil on dry-run; got %v", data.DeletedAt)
 		}
+		if data.Hint != "" {
+			t.Errorf("Hint should be empty when dry-run finds matches; got %q", data.Hint)
+		}
 		if len(data.Resources) != 2 {
 			t.Errorf("resources: got %d, want 2", len(data.Resources))
 		}
@@ -152,7 +155,7 @@ func TestRunBenchDown(t *testing.T) {
 		}
 	})
 
-	t.Run("dry-run on absent bench returns empty resources, no DeletedAt", func(t *testing.T) {
+	t.Run("dry-run on absent bench returns empty resources with disambiguating hint", func(t *testing.T) {
 		path := writeEngineerFile(t, "bdc")
 		deps := benchDownDeps{
 			identityPath: func() (string, error) { return path, nil },
@@ -174,6 +177,9 @@ func TestRunBenchDown(t *testing.T) {
 		_ = json.Unmarshal(env.Data, &data)
 		if !data.DryRun || data.DeletedAt != nil || len(data.Resources) != 0 {
 			t.Errorf("expected dry-run/empty/nil-deletedAt; got %+v", data)
+		}
+		if !strings.Contains(data.Hint, "may not exist or already be torn down") {
+			t.Errorf("Hint should disambiguate the empty result for agent callers; got %q", data.Hint)
 		}
 	})
 

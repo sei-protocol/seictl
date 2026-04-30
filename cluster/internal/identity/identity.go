@@ -67,8 +67,10 @@ func Read(path string) (*Engineer, *clioutput.Error) {
 		return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatMalformed,
 			"engineer identity is missing required field: alias").WithDetail(path)
 	}
-	if e := validate.Alias(e.Alias); e != nil {
-		return nil, e.WithDetail(path)
+	if vErr := validate.Alias(e.Alias); vErr != nil {
+		// validate.Alias hardcodes ExitOnboard; rebrand for the read-side surface.
+		vErr.Code = clioutput.ExitIdentity
+		return nil, vErr.WithDetail(path)
 	}
 	return &e, nil
 }

@@ -142,6 +142,9 @@ func TestRead_RejectsInvalidAlias(t *testing.T) {
 			if cliErr == nil || cliErr.Category != clioutput.CatAliasInvalid {
 				t.Errorf("expected alias-invalid, got %+v", cliErr)
 			}
+			if cliErr != nil && cliErr.Code != clioutput.ExitIdentity {
+				t.Errorf("exit code: got %d, want %d (read-side errors must not surface ExitOnboard)", cliErr.Code, clioutput.ExitIdentity)
+			}
 		})
 	}
 }
