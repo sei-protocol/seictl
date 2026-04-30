@@ -183,6 +183,16 @@ exit $exit_code
   run: seictl bench down --name ${{ env.NAME }}
 ```
 
+### Reference consumer: qa-testing harness
+
+The first concrete external test binary consuming this contract is the qa-testing TS/mocha harness. Its design lives in [`sei-protocol/qa-testing` `docs/design/seictl-harness.md`](https://github.com/sei-protocol/qa-testing/blob/main/docs/design/seictl-harness.md) and exists as a reference for how downstream tooling adopts the endpoint contract:
+
+- **Env-var names** mirror the JSON envelope's field names — `SEI_EVM_JSON_RPC` reads `endpoints.evmJsonRpc[0]`, `SEI_TENDERMINT_RPC` reads `endpoints.tendermintRpc[0]`, `SEI_COSMOS_GRPC` reads `endpoints.cosmosGrpc[0]`. Renaming either side breaks the integration.
+- **Exit codes** follow platform#235's `0` / `1` / `2` (pass / test fail / infra fail). The harness wraps mocha and classifies failures.
+- **One-line stdout summary** (`{"passed":N,"failed":M,"exitCode":0,"reportPath":"..."}`) lets seictl-driven loops parse the verdict without reading the mochawesome JSON.
+
+The harness is intentionally NOT a seictl primitive (rejected per Non-goals §"seictl as a test runner") — it's an exemplar of the external-binary pattern. Future test binaries (fuzzers, soak runners, integration suites) follow the same pattern: read the locked env-var names, exit with the typed contract, surface a stdout summary.
+
 ### `rules watch` — a Job, not a controller
 
 The CRD LLD designed an in-process polling loop (`monitor-task-completion`) that watched the load Job + Prometheus + emitted verdict to status. Translating to "a Job in the cluster":
