@@ -1,4 +1,4 @@
-package identity
+package config
 
 import (
 	"encoding/json"
@@ -12,9 +12,9 @@ import (
 func TestWrite_RoundTrip(t *testing.T) {
 	// t.TempDir() returns a directory with mode 0755; Write refuses loose
 	// parents, so write into a fresh subdir it can create with 0700.
-	path := filepath.Join(t.TempDir(), "seictl", "engineer.json")
+	path := filepath.Join(t.TempDir(), "seictl", "config.json")
 
-	if err := Write(path, Engineer{Alias: "bdc", Name: "Brandon"}); err != nil {
+	if err := Write(path, Config{Alias: "bdc", Namespace: "eng-bdc"}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -22,7 +22,7 @@ func TestWrite_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if got.Alias != "bdc" || got.Name != "Brandon" {
+	if got.Alias != "bdc" || got.Namespace != "eng-bdc" {
 		t.Errorf("round-trip mismatch: got %+v", got)
 	}
 
@@ -37,9 +37,9 @@ func TestWrite_RoundTrip(t *testing.T) {
 
 func TestWrite_CreatesParentDirWithStrictMode(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "nested", "engineer.json")
+	path := filepath.Join(root, "nested", "config.json")
 
-	if err := Write(path, Engineer{Alias: "bdc", Name: "Brandon"}); err != nil {
+	if err := Write(path, Config{Alias: "bdc", Namespace: "eng-bdc"}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	dirInfo, statErr := os.Stat(filepath.Dir(path))
@@ -57,9 +57,9 @@ func TestWrite_RefusesLooseParentDir(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	path := filepath.Join(dir, "engineer.json")
+	path := filepath.Join(dir, "config.json")
 
-	cliErr := Write(path, Engineer{Alias: "bdc", Name: "Brandon"})
+	cliErr := Write(path, Config{Alias: "bdc", Namespace: "eng-bdc"})
 	if cliErr == nil {
 		t.Fatalf("expected refusal, got nil")
 	}
@@ -70,9 +70,19 @@ func TestWrite_RefusesLooseParentDir(t *testing.T) {
 
 func TestWrite_RejectsEmptyAlias(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "engineer.json")
+	path := filepath.Join(dir, "config.json")
 
-	cliErr := Write(path, Engineer{Alias: "", Name: "Anon"})
+	cliErr := Write(path, Config{Alias: "", Namespace: "eng-bdc"})
+	if cliErr == nil || cliErr.Category != clioutput.CatMalformed {
+		t.Errorf("expected malformed error, got %+v", cliErr)
+	}
+}
+
+func TestWrite_RejectsEmptyNamespace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cliErr := Write(path, Config{Alias: "bdc", Namespace: ""})
 	if cliErr == nil || cliErr.Category != clioutput.CatMalformed {
 		t.Errorf("expected malformed error, got %+v", cliErr)
 	}
@@ -94,7 +104,7 @@ func TestRead_Missing(t *testing.T) {
 
 func TestRead_Malformed(t *testing.T) {
 	dir := tightTempDir(t)
-	path := filepath.Join(dir, "engineer.json")
+	path := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(path, []byte("not-json"), FileMode); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -107,8 +117,22 @@ func TestRead_Malformed(t *testing.T) {
 
 func TestRead_MissingAliasField(t *testing.T) {
 	dir := tightTempDir(t)
-	path := filepath.Join(dir, "engineer.json")
-	body, _ := json.Marshal(Engineer{Name: "Anon"})
+	path := filepath.Join(dir, "config.json")
+	body, _ := json.Marshal(Config{Namespace: "eng-bdc"})
+	if err := os.WriteFile(path, body, FileMode); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	_, cliErr := Read(path)
+	if cliErr == nil || cliErr.Category != clioutput.CatMalformed {
+		t.Errorf("expected malformed, got %+v", cliErr)
+	}
+}
+
+func TestRead_MissingNamespaceField(t *testing.T) {
+	dir := tightTempDir(t)
+	path := filepath.Join(dir, "config.json")
+	body, _ := json.Marshal(Config{Alias: "bdc"})
 	if err := os.WriteFile(path, body, FileMode); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -133,8 +157,8 @@ func TestRead_RejectsInvalidAlias(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := tightTempDir(t)
-			path := filepath.Join(dir, "engineer.json")
-			body, _ := json.Marshal(Engineer{Alias: tc.alias, Name: "Anon"})
+			path := filepath.Join(dir, "config.json")
+			body, _ := json.Marshal(Config{Alias: tc.alias, Namespace: "eng-bdc"})
 			if err := os.WriteFile(path, body, FileMode); err != nil {
 				t.Fatalf("seed: %v", err)
 			}
@@ -149,10 +173,23 @@ func TestRead_RejectsInvalidAlias(t *testing.T) {
 	}
 }
 
+func TestRead_RejectsInvalidNamespace(t *testing.T) {
+	dir := tightTempDir(t)
+	path := filepath.Join(dir, "config.json")
+	body, _ := json.Marshal(Config{Alias: "bdc", Namespace: "Not-Valid"})
+	if err := os.WriteFile(path, body, FileMode); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, cliErr := Read(path)
+	if cliErr == nil || cliErr.Category != clioutput.CatNamespacePolicy {
+		t.Errorf("expected namespace-policy, got %+v", cliErr)
+	}
+}
+
 func TestRead_RefusesLoosePerms(t *testing.T) {
 	dir := tightTempDir(t)
-	path := filepath.Join(dir, "engineer.json")
-	body, _ := json.Marshal(Engineer{Alias: "bdc", Name: "Brandon"})
+	path := filepath.Join(dir, "config.json")
+	body, _ := json.Marshal(Config{Alias: "bdc", Namespace: "eng-bdc"})
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -186,7 +223,7 @@ func TestDefaultPath_PointsUnderHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DefaultPath: %v", err)
 	}
-	want := filepath.Join(home, ".seictl", "engineer.json")
+	want := filepath.Join(home, ".seictl", "config.json")
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

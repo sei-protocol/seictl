@@ -15,8 +15,8 @@ import (
 
 	"github.com/sei-protocol/seictl/cluster/internal/aws"
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
+	"github.com/sei-protocol/seictl/cluster/internal/config"
 	"github.com/sei-protocol/seictl/cluster/internal/githubpr"
-	"github.com/sei-protocol/seictl/cluster/internal/identity"
 	"github.com/sei-protocol/seictl/cluster/internal/onboardmanifests"
 	"github.com/sei-protocol/seictl/cluster/internal/onboardmanifests/aggregator"
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
@@ -32,8 +32,9 @@ const (
 var onboardPRBodyTemplate string
 
 type OnboardResult struct {
-	Alias        string `json:"alias"`
-	IdentityPath string `json:"identityPath"`
+	Alias      string `json:"alias"`
+	Namespace  string `json:"namespace"`
+	ConfigPath string `json:"configPath"`
 	// Idempotent re-runs omit unchanged files (e.g. an aggregator entry
 	// already present in the resources list).
 	GeneratedFiles []string      `json:"generatedFiles"`
@@ -52,14 +53,13 @@ type AWSResource struct {
 
 type onboardInput struct {
 	Alias        string
-	Name         string
 	PlatformRepo string
 	NoPR         bool
 	Apply        bool
 }
 
 type onboardDeps struct {
-	identityPath     func() (string, error)
+	configPath       func() (string, error)
 	getCaller        func(context.Context) (*aws.Caller, *clioutput.Error)
 	provisionIAM     func(ctx context.Context, scope aws.EngineerScope, dryRun bool) ([]aws.IAMArtifact, *clioutput.Error)
 	podIdentity      func(ctx context.Context, b aws.PodIdentityBinding, dryRun bool) (aws.PodIdentityArtifact, *clioutput.Error)
@@ -70,11 +70,11 @@ type onboardDeps struct {
 	checkClean       func(repoPath string) error
 	createPR         func(opts githubpr.Options) (*githubpr.Result, error)
 	discoverRepo     func(start string) (string, error)
-	writeIdentity    func(path string, eng identity.Engineer) *clioutput.Error
+	writeConfig      func(path string, c config.Config) *clioutput.Error
 }
 
 var defaultOnboardDeps = onboardDeps{
-	identityPath:     identity.DefaultPath,
+	configPath:       config.DefaultPath,
 	getCaller:        aws.GetCaller,
 	provisionIAM:     aws.ProvisionIAM,
 	podIdentity:      aws.EnsurePodIdentity,
@@ -85,7 +85,7 @@ var defaultOnboardDeps = onboardDeps{
 	checkClean:       githubpr.CheckCleanTree,
 	createPR:         githubpr.CreatePR,
 	discoverRepo:     githubpr.DiscoverRepo,
-	writeIdentity:    identity.Write,
+	writeConfig:      config.Write,
 }
 
 var OnboardCmd = cli.Command{
@@ -93,7 +93,6 @@ var OnboardCmd = cli.Command{
 	Usage: "Provision a new engineer's harbor footprint (IAM + namespace cell)",
 	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "alias", Required: true, Usage: "Engineer alias"},
-		&cli.StringFlag{Name: "name", Usage: "Engineer display name"},
 		&cli.StringFlag{Name: "platform-repo", Usage: "Path to local sei-protocol/platform clone"},
 		&cli.BoolFlag{Name: "no-pr", Usage: "Skip PR creation"},
 		&cli.BoolFlag{Name: "apply", Usage: "Perform side effects"},
@@ -101,7 +100,6 @@ var OnboardCmd = cli.Command{
 	Action: func(ctx context.Context, command *cli.Command) error {
 		return runOnboard(ctx, onboardInput{
 			Alias:        command.String("alias"),
-			Name:         command.String("name"),
 			PlatformRepo: command.String("platform-repo"),
 			NoPR:         command.Bool("no-pr"),
 			Apply:        command.Bool("apply"),
@@ -114,12 +112,13 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 		return failOnboard(out, e.ExitWith(clioutput.ExitOnboard))
 	}
 
-	idPath, err := deps.identityPath()
+	cfgPath, err := deps.configPath()
 	if err != nil {
 		return failOnboard(out, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatMissing,
-			"resolve identity path: %v", err))
+			"resolve config path: %v", err))
 	}
-	if e := identityConsistent(idPath, in.Alias); e != nil {
+	namespace := "eng-" + in.Alias
+	if e := configConsistent(cfgPath, in.Alias); e != nil {
 		return failOnboard(out, e)
 	}
 
@@ -168,8 +167,8 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 	}
 	piArt, piErr := deps.podIdentity(ctx, aws.PodIdentityBinding{
 		Cluster:        scope.Cluster,
-		Namespace:      "eng-" + in.Alias,
-		ServiceAccount: "bench-seiload",
+		Namespace:      namespace,
+		ServiceAccount: "seictl",
 		RoleARN:        scope.RoleARN(),
 		Region:         scope.Region,
 	}, dryRun)
@@ -177,7 +176,7 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 		return failOnboard(out, piErr)
 	}
 
-	files, ferr := deps.generateFiles(onboardmanifests.Cell{Alias: in.Alias})
+	files, ferr := deps.generateFiles(onboardmanifests.Cell{Alias: in.Alias, Namespace: namespace})
 	if ferr != nil {
 		return failOnboard(out, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatPRCreateFailed,
 			"generate manifests: %v", ferr))
@@ -206,7 +205,8 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 
 	res := OnboardResult{
 		Alias:          in.Alias,
-		IdentityPath:   idPath,
+		Namespace:      namespace,
+		ConfigPath:     cfgPath,
 		GeneratedFiles: generatedPaths,
 		AWSResources:   awsArtifactsToResources(iamArts, piArt),
 		DryRun:         dryRun,
@@ -243,8 +243,8 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 	}
 
 	if in.Apply {
-		eng := identity.Engineer{Alias: in.Alias, Name: in.Name}
-		if e := deps.writeIdentity(idPath, eng); e != nil {
+		cfg := config.Config{Alias: in.Alias, Namespace: namespace}
+		if e := deps.writeConfig(cfgPath, cfg); e != nil {
 			return failOnboard(out, e)
 		}
 	}
@@ -259,12 +259,12 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 // Matching alias is fine (idempotent rewrite happens later); missing
 // file is fine (will be created). Mismatched alias blocks onboard to
 // prevent accidental cross-engineer overwrites.
-func identityConsistent(path, alias string) *clioutput.Error {
-	existing, err := identity.Read(path)
+func configConsistent(path, alias string) *clioutput.Error {
+	existing, err := config.Read(path)
 	if err == nil {
 		if existing.Alias != alias {
 			return clioutput.Newf(clioutput.ExitIdentity, clioutput.CatMalformed,
-				"identity file at %s has alias %q, refusing to overwrite with %q; remove the file deliberately",
+				"seictl config at %s has alias %q, refusing to overwrite with %q; remove the file deliberately",
 				path, existing.Alias, alias)
 		}
 		return nil

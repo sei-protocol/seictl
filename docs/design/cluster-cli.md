@@ -73,7 +73,7 @@ seictl/
     kube/                    [new — client construction, kubeconfig resolution]
     render/                  [new — text/template renderer over embed.FS]
     aws/                     [new — ECR digest resolver, IAM + Pod Identity helpers]
-    identity/                [new — engineer.json read/write, validation]
+    config/                  [new — config.json read/write, validation]
     validate/                [new — input validation regexes]
     clioutput/               [new — Envelope, ErrorBody, exit-code mapping]
   templates/                 [new embed.FS root]
@@ -83,7 +83,7 @@ seictl/
     seiload-job.yaml.tmpl
     autobake_evm_transfer.json.tmpl
     namespace.yaml.tmpl
-    bench-seiload-sa.yaml.tmpl
+    seictl-sa.yaml.tmpl
     kustomization.yaml.tmpl
   Makefile                   [edit: lint-strict]
   docs/design/cluster-cli.md [this file]
@@ -129,17 +129,17 @@ No required flags. Side-effect-free reads only.
 
 ```go
 type ContextResult struct {
-    KubeContext     string    `json:"kubeContext"`
-    Cluster         string    `json:"cluster"`         // derived from server URL or kubeconfig context name
-    Server          string    `json:"server"`
-    Namespace       string    `json:"namespace"`
-    AWSAccount      string    `json:"awsAccount"`
-    AWSRegion       string    `json:"awsRegion"`
-    AWSPrincipalARN string    `json:"awsPrincipalArn"`
-    Engineer        *Engineer `json:"engineer,omitempty"` // nil if engineer.json missing
+    KubeContext     string  `json:"kubeContext"`
+    Cluster         string  `json:"cluster"`         // derived from server URL or kubeconfig context name
+    Server          string  `json:"server"`
+    Namespace       string  `json:"namespace"`
+    AWSAccount      string  `json:"awsAccount"`
+    AWSRegion       string  `json:"awsRegion"`
+    AWSPrincipalARN string  `json:"awsPrincipalArn"`
+    Config          *Config `json:"config,omitempty"` // nil if config.json missing
 }
 
-type Engineer struct{ Alias, Name string }
+type Config struct{ Alias, Namespace string }
 ```
 
 Six fields. The Claude skill surfaces this to the engineer at the start of a session so they can confirm where they are and who they are.
@@ -147,13 +147,13 @@ Six fields. The Claude skill surfaces this to the engineer at the start of a ses
 ### `seictl onboard`
 
 ```
-seictl onboard --alias <alias> [--name <name>]
+seictl onboard --alias <alias>
                [--platform-repo <path>] [--no-pr] [--apply]
 ```
 
 With `--apply`, performs both side effects:
 
-1. Generates `clusters/harbor/engineers/<alias>/{kustomization,namespace,bench-seiload-sa}.yaml` in the platform repo, branches `<alias>/onboard-<alias>`, opens a PR via `gh`.
+1. Generates `clusters/harbor/engineers/<alias>/{kustomization,namespace,seictl-sa}.yaml` in the platform repo, branches `<alias>/onboard-<alias>`, opens a PR via `gh`.
 2. Creates the IAM policy + Pod Identity association directly via AWS SDK in the engineer's SSO session — `iam:CreatePolicy`, `iam:CreateRole`, `iam:AttachRolePolicy`, `eks:CreatePodIdentityAssociation`. No Terraform.
 
 Without `--apply`: dry-run; prints what would be created.
@@ -161,7 +161,8 @@ Without `--apply`: dry-run; prints what would be created.
 ```go
 type OnboardResult struct {
     Alias          string         `json:"alias"`
-    IdentityPath   string         `json:"identityPath"`
+    Namespace      string         `json:"namespace"`
+    ConfigPath     string         `json:"configPath"`
     GeneratedFiles []string       `json:"generatedFiles"`     // platform-repo paths
     Branch         string         `json:"branch,omitempty"`
     PRURL          string         `json:"prUrl,omitempty"`
@@ -181,7 +182,7 @@ seictl bench up --image <ref> --name <name>
                 [--size s|m|l] [--duration <duration>] [--apply]
 ```
 
-Required: `--image`, `--name`. Defaults: size `s`, duration `30m`, namespace = `eng-<alias>` from identity.
+Required: `--image`, `--name`. Defaults: size `s`, duration `30m`, namespace from `~/.seictl/config.json`.
 
 Default behavior is dry-run. `--apply` performs server-side apply.
 
@@ -329,7 +330,7 @@ Every resource seictl creates carries:
 |---|---|---|
 | `app.kubernetes.io/managed-by` | `seictl` | always |
 | `app.kubernetes.io/part-of` | `seictl-bench` or `seictl-onboard` | command |
-| `sei.io/engineer` | engineer alias from `~/.seictl/engineer.json` | always |
+| `sei.io/engineer` | engineer alias from `~/.seictl/config.json` | always |
 | `sei.io/bench-name` | the `--name` value | bench up |
 | `tide.sei.io/cell-type` | `personal` | onboard (cells-forward) |
 | `tide.sei.io/owner` | engineer alias | onboard (cells-forward) |
@@ -366,17 +367,18 @@ Single source of truth in `internal/validate/`. Commands call `validate.Alias(s)
 
 `seictl onboard --apply` creates resources directly via AWS SDK:
 
-1. **IAM policy** `harbor-bench-seiload-eng-<alias>` — per-engineer scoped to the shared validation-results bucket under the engineer's namespace prefix: `s3:ListBucket` with `s3:prefix=["eng-<alias>/*"]` and `s3:PutObject` on `arn:aws:s3:::harbor-validation-results/eng-<alias>/*`. Mirrors the platform's nightly policy (`harbor-nightly-seiload`); shared policies are explicitly rejected as a security risk that doesn't scale.
-2. **Pod Identity association** via `eks:CreatePodIdentityAssociation` for `(cluster=harbor, namespace=eng-<alias>, service_account=bench-seiload, role_arn=<policy-attached-role>)`
+1. **IAM policy** `harbor-seictl-eng-<alias>` — per-engineer scoped to the shared validation-results bucket under the engineer's namespace prefix: `s3:ListBucket` with `s3:prefix=["eng-<alias>/*"]` and `s3:PutObject` on `arn:aws:s3:::harbor-validation-results/eng-<alias>/*`. Mirrors the platform's nightly policy (`harbor-nightly-seiload`); shared policies are explicitly rejected as a security risk that doesn't scale.
+2. **Pod Identity association** via `eks:CreatePodIdentityAssociation` for `(cluster=harbor, namespace=eng-<alias>, service_account=seictl, role_arn=<policy-attached-role>)`
 
 Engineer's SSO role currently has admin permissions (sufficient to create the above). When SSO permissions get scoped down, the LLD revisits.
 
 Offboarding (v1.1 or manual): mirror — `eks:DeletePodIdentityAssociation`, `iam:DeleteRole`, `iam:DeletePolicy`, plus revert PR.
 
-### Identity file: `~/.seictl/engineer.json`
+### Config file: `~/.seictl/config.json`
 
 - Mode `0600`, parent dir `0700`. On read, refuse if perms loose.
-- Two fields only: `alias`, `name`.
+- Two fields, both required: `alias`, `namespace`.
+- `seictl onboard` writes the engineer convention `namespace = "eng-" + alias`. Non-engineer flows (nightly, CI) drop a shim with whatever namespace they operate against; verbs read it verbatim.
 - Integrity matters: a loose-perms file on a shared workstation is a path to onboarding-as-someone-else or benching into another engineer's namespace.
 
 ### Image registry policy
@@ -463,8 +465,8 @@ Standard set already in seictl: `errcheck`, `govet`, `staticcheck`, `revive`, `g
 2. `seictl bench up --image <ref> --name demo --size s --duration 5m` (no `--apply`) renders SND-validator (4 replicas), SND-RPC (1 replica), profile ConfigMap, seiload Job — golden-file equality against `testdata/bench-up-s.golden.yaml`. Exits `0`. Output includes `dryRun: true`.
 3. `seictl bench up ... --apply` against a dev/harbor cluster creates all four resources, populates `appliedAt`, returns `0`. Subsequent `seictl bench list` shows the run.
 4. `seictl bench up --name X` re-run while the previous bench is still alive: idempotent (no error, returns same result), or rejects with exit `10` (category `name-collision`) — confirmed behavior either way.
-5. `seictl onboard --alias bdc --no-pr --apply` against a clean platform-repo checkout creates `clusters/harbor/engineers/bdc/{kustomization,namespace,bench-seiload-sa}.yaml` and writes `~/.seictl/engineer.json`. With `--apply` and `gh` authenticated: opens a PR, captures URL in result. With AWS SDK calls: creates IAM policy and Pod Identity association.
-6. `~/.seictl/engineer.json` written with mode `0600`; loose-perms file rejected with exit `40` (category `perms-loose`).
+5. `seictl onboard --alias bdc --no-pr --apply` against a clean platform-repo checkout creates `clusters/harbor/engineers/bdc/{kustomization,namespace,seictl-sa}.yaml` and writes `~/.seictl/config.json`. With `--apply` and `gh` authenticated: opens a PR, captures URL in result. With AWS SDK calls: creates IAM policy and Pod Identity association.
+6. `~/.seictl/config.json` written with mode `0600`; loose-perms file rejected with exit `40` (category `perms-loose`).
 7. `seictl bench up --image <bad-registry-ref>` exits `10` (category `image-policy`) without contacting ECR.
 
 ---

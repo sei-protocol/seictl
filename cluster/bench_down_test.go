@@ -14,10 +14,10 @@ import (
 
 func TestRunBenchDown(t *testing.T) {
 	t.Run("emits BenchDownResult with per-resource actions and appliedAt", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		var capturedSelector string
 		deps := benchDownDeps{
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{Namespace: "eng-bdc"}, nil
 			},
@@ -66,9 +66,9 @@ func TestRunBenchDown(t *testing.T) {
 	})
 
 	t.Run("omits deletedAt and emits hint when any resource is still-terminating", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := benchDownDeps{
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{Namespace: "eng-bdc"}, nil
 			},
@@ -101,11 +101,11 @@ func TestRunBenchDown(t *testing.T) {
 	})
 
 	t.Run("dry-run lists resources without deleting", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		var capturedSelector string
 		deleteCalled := false
 		deps := benchDownDeps{
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{Namespace: "eng-bdc"}, nil
 			},
@@ -156,9 +156,9 @@ func TestRunBenchDown(t *testing.T) {
 	})
 
 	t.Run("dry-run on absent bench returns empty resources with disambiguating hint", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := benchDownDeps{
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{Namespace: "eng-bdc"}, nil
 			},
@@ -184,10 +184,10 @@ func TestRunBenchDown(t *testing.T) {
 	})
 
 	t.Run("rejects bad name with validation category", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		var buf bytes.Buffer
 		err := runBenchDown(context.Background(), benchDownInput{Name: "Bad-Name"}, &buf, benchDownDeps{
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				t.Fatalf("kube client should not be constructed for invalid name")
 				return nil, nil
@@ -200,10 +200,10 @@ func TestRunBenchDown(t *testing.T) {
 	})
 
 	t.Run("propagates kubeconfig errors with ExitIdentity", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		var buf bytes.Buffer
 		err := runBenchDown(context.Background(), benchDownInput{Name: "demo"}, &buf, benchDownDeps{
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatKubeconfigParse, "no kubeconfig")
 			},
@@ -218,10 +218,10 @@ func TestRunBenchDown(t *testing.T) {
 	})
 
 	t.Run("propagates delete errors with finalizer-stuck category", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		var buf bytes.Buffer
 		err := runBenchDown(context.Background(), benchDownInput{Name: "demo"}, &buf, benchDownDeps{
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{}, nil
 			},
@@ -237,7 +237,7 @@ func TestRunBenchDown(t *testing.T) {
 	t.Run("missing identity surfaces typed error", func(t *testing.T) {
 		var buf bytes.Buffer
 		err := runBenchDown(context.Background(), benchDownInput{Name: "demo"}, &buf, benchDownDeps{
-			identityPath: func() (string, error) { return "", errors.New("home unset") },
+			configPath: func() (string, error) { return "", errors.New("home unset") },
 		})
 		if err == nil || !strings.Contains(buf.String(), `"category": "missing"`) {
 			t.Errorf("expected missing identity; got %s", buf.String())

@@ -16,10 +16,10 @@ const rpcTestDigest = "sha256:fedcba0987654321fedcba0987654321fedcba0987654321fe
 
 func stubRPCDeps(t *testing.T, alias string) rpcDeps {
 	t.Helper()
-	path := writeEngineerFile(t, alias)
+	path := writeConfigFile(t, alias)
 	return rpcDeps{
 		resolveDigest: func(context.Context, string) (string, *clioutput.Error) { return rpcTestDigest, nil },
-		identityPath:  func() (string, error) { return path, nil },
+		configPath:    func() (string, error) { return path, nil },
 		apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 			t.Fatalf("apply should not be called on dry-run path")
 			return nil, nil
@@ -146,10 +146,10 @@ func TestRunRPCUp(t *testing.T) {
 	})
 
 	t.Run("apply happy path sets appliedAt", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := rpcDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) { return rpcTestDigest, nil },
-			identityPath:  func() (string, error) { return path, nil },
+			configPath:    func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{ContextName: "harbor", Namespace: "eng-bdc"}, nil
 			},
@@ -187,7 +187,7 @@ func TestRunRPCUp(t *testing.T) {
 	t.Run("missing identity surfaces typed error", func(t *testing.T) {
 		deps := rpcDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) { return rpcTestDigest, nil },
-			identityPath:  func() (string, error) { return "", errors.New("home unset") },
+			configPath:    func() (string, error) { return "", errors.New("home unset") },
 		}
 		var buf bytes.Buffer
 		err := runRPCUpCmd(context.Background(), rpcUpInput{

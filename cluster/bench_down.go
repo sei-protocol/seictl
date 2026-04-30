@@ -10,7 +10,7 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
-	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/config"
 	"github.com/sei-protocol/seictl/cluster/internal/kube"
 	"github.com/sei-protocol/seictl/cluster/internal/render"
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
@@ -44,14 +44,14 @@ type benchDownInput struct {
 }
 
 type benchDownDeps struct {
-	identityPath  func() (string, error)
+	configPath    func() (string, error)
 	newKubeClient func(kube.Options) (*kube.Client, *clioutput.Error)
 	deleteFn      func(ctx context.Context, kc *kube.Client, opts kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error)
 	dryRunListFn  func(ctx context.Context, kc *kube.Client, opts kube.ListOptions) ([]kube.DeleteResult, *clioutput.Error)
 }
 
 var defaultBenchDownDeps = benchDownDeps{
-	identityPath:  identity.DefaultPath,
+	configPath:    config.DefaultPath,
 	newKubeClient: kube.New,
 	deleteFn:      deleteFromCluster,
 	dryRunListFn:  dryRunListFromCluster,
@@ -102,24 +102,24 @@ var benchDownCmd = &cli.Command{
 }
 
 func runBenchDown(ctx context.Context, in benchDownInput, out io.Writer, deps benchDownDeps) error {
-	eng, idErr := loadEngineer(deps.identityPath)
+	cfg, idErr := loadConfig(deps.configPath)
 	if idErr != nil {
 		return failBenchDown(out, idErr)
 	}
-	if e := validate.Name(eng.Alias, in.Name); e != nil {
+	if e := validate.Name(cfg.Alias, in.Name); e != nil {
 		return failBenchDown(out, e.ExitWith(clioutput.ExitBench))
 	}
 
 	namespace := in.Namespace
 	if namespace == "" {
-		namespace = "eng-" + eng.Alias
+		namespace = cfg.Namespace
 	}
-	if e := validate.Namespace(namespace, eng.Alias); e != nil {
+	if e := validate.Namespace(namespace); e != nil {
 		return failBenchDown(out, e.ExitWith(clioutput.ExitBench))
 	}
 
-	chainID := fmt.Sprintf("bench-%s-%s", eng.Alias, in.Name)
-	selector := fmt.Sprintf("sei.io/engineer=%s,sei.io/bench-name=%s", eng.Alias, in.Name)
+	chainID := fmt.Sprintf("bench-%s-%s", cfg.Alias, in.Name)
+	selector := fmt.Sprintf("sei.io/engineer=%s,sei.io/bench-name=%s", cfg.Alias, in.Name)
 
 	kc, kerr := deps.newKubeClient(kube.Options{Kubeconfig: in.Kubeconfig, Context: in.Context})
 	if kerr != nil {

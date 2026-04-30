@@ -6,7 +6,7 @@ import (
 )
 
 func TestGenerate_ReturnsThreeFilesAtExpectedPaths(t *testing.T) {
-	files, err := Generate(Cell{Alias: "bdc"})
+	files, err := Generate(Cell{Alias: "bdc", Namespace: "eng-bdc"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -14,9 +14,9 @@ func TestGenerate_ReturnsThreeFilesAtExpectedPaths(t *testing.T) {
 		t.Fatalf("files: got %d, want 3", len(files))
 	}
 	want := map[string]bool{
-		"clusters/harbor/engineers/bdc/namespace.yaml":        false,
-		"clusters/harbor/engineers/bdc/bench-seiload-sa.yaml": false,
-		"clusters/harbor/engineers/bdc/kustomization.yaml":    false,
+		"clusters/harbor/engineers/bdc/namespace.yaml":     false,
+		"clusters/harbor/engineers/bdc/seictl-sa.yaml":     false,
+		"clusters/harbor/engineers/bdc/kustomization.yaml": false,
 	}
 	for _, f := range files {
 		if _, ok := want[f.Path]; !ok {
@@ -32,7 +32,7 @@ func TestGenerate_ReturnsThreeFilesAtExpectedPaths(t *testing.T) {
 }
 
 func TestGenerate_NamespaceContent(t *testing.T) {
-	files, _ := Generate(Cell{Alias: "bdc"})
+	files, _ := Generate(Cell{Alias: "bdc", Namespace: "eng-bdc"})
 	ns := contentFor(t, files, "namespace.yaml")
 	if !strings.Contains(ns, "name: eng-bdc") {
 		t.Errorf("namespace name: %s", ns)
@@ -46,9 +46,9 @@ func TestGenerate_NamespaceContent(t *testing.T) {
 }
 
 func TestGenerate_ServiceAccountHasNoIRSAAnnotation(t *testing.T) {
-	files, _ := Generate(Cell{Alias: "bdc"})
-	sa := contentFor(t, files, "bench-seiload-sa.yaml")
-	if !strings.Contains(sa, "name: bench-seiload") {
+	files, _ := Generate(Cell{Alias: "bdc", Namespace: "eng-bdc"})
+	sa := contentFor(t, files, "seictl-sa.yaml")
+	if !strings.Contains(sa, "name: seictl") {
 		t.Errorf("SA name: %s", sa)
 	}
 	// The IRSA/Pod-Identity confusion: ensure we never accidentally
@@ -60,9 +60,9 @@ func TestGenerate_ServiceAccountHasNoIRSAAnnotation(t *testing.T) {
 }
 
 func TestGenerate_KustomizationReferencesBoth(t *testing.T) {
-	files, _ := Generate(Cell{Alias: "bdc"})
+	files, _ := Generate(Cell{Alias: "bdc", Namespace: "eng-bdc"})
 	k := contentFor(t, files, "kustomization.yaml")
-	if !strings.Contains(k, "namespace.yaml") || !strings.Contains(k, "bench-seiload-sa.yaml") {
+	if !strings.Contains(k, "namespace.yaml") || !strings.Contains(k, "seictl-sa.yaml") {
 		t.Errorf("kustomization missing resource refs: %s", k)
 	}
 }

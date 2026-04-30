@@ -14,7 +14,7 @@ import (
 
 	"github.com/sei-protocol/seictl/cluster/internal/aws"
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
-	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/config"
 	"github.com/sei-protocol/seictl/cluster/internal/kube"
 	"github.com/sei-protocol/seictl/cluster/internal/render"
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
@@ -51,7 +51,7 @@ type chainUpInput struct {
 
 type chainDeps struct {
 	resolveDigest func(context.Context, string) (string, *clioutput.Error)
-	identityPath  func() (string, error)
+	configPath    func() (string, error)
 	newKubeClient func(kube.Options) (*kube.Client, *clioutput.Error)
 	apply         func(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
 	getCaller     func(context.Context) (*aws.Caller, *clioutput.Error)
@@ -59,7 +59,7 @@ type chainDeps struct {
 
 var defaultChainDeps = chainDeps{
 	resolveDigest: aws.ResolveDigest,
-	identityPath:  identity.DefaultPath,
+	configPath:    config.DefaultPath,
 	newKubeClient: kube.New,
 	apply:         applyToCluster,
 	getCaller:     aws.GetCaller,
@@ -106,23 +106,20 @@ func runChainUpCmd(ctx context.Context, in chainUpInput, out io.Writer, deps cha
 }
 
 func runChainUp(ctx context.Context, in chainUpInput, deps chainDeps) (chainUpResult, *clioutput.Error) {
-	eng, idErr := loadEngineer(deps.identityPath)
+	cfg, idErr := loadConfig(deps.configPath)
 	if idErr != nil {
 		return chainUpResult{}, idErr
 	}
 	if e := validate.Image(in.Image); e != nil {
 		return chainUpResult{}, e.ExitWith(clioutput.ExitBench)
 	}
-	if e := validate.Name(eng.Alias, in.Name); e != nil {
+	if e := validate.Name(cfg.Alias, in.Name); e != nil {
 		return chainUpResult{}, e.ExitWith(clioutput.ExitBench)
 	}
 	if e := validate.Validators(in.Validators); e != nil {
 		return chainUpResult{}, e.ExitWith(clioutput.ExitBench)
 	}
-	namespace := "eng-" + eng.Alias
-	if e := validate.Namespace(namespace, eng.Alias); e != nil {
-		return chainUpResult{}, e.ExitWith(clioutput.ExitBench)
-	}
+	namespace := cfg.Namespace
 	if _, callerErr := deps.getCaller(ctx); callerErr != nil {
 		return chainUpResult{}, callerErr
 	}
@@ -136,10 +133,10 @@ func runChainUp(ctx context.Context, in chainUpInput, deps chainDeps) (chainUpRe
 		return chainUpResult{}, clioutput.Newf(clioutput.ExitBench, clioutput.CatImageResolution, "%v", err)
 	}
 
-	chainID := fmt.Sprintf("bench-%s-%s", eng.Alias, in.Name)
+	chainID := fmt.Sprintf("bench-%s-%s", cfg.Alias, in.Name)
 	digestShort := shortDigest(digest)
 
-	docs, manifests, rerr := renderChainManifests(eng.Alias, in.Name, namespace, chainID, seidImage, digestShort, in.Validators)
+	docs, manifests, rerr := renderChainManifests(cfg.Alias, in.Name, namespace, chainID, seidImage, digestShort, in.Validators)
 	if rerr != nil {
 		return chainUpResult{}, rerr
 	}

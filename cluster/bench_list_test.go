@@ -68,7 +68,7 @@ func newJob(t *testing.T, name, chainID, ns string, active int, condComplete boo
 
 func TestRunBenchList(t *testing.T) {
 	t.Run("aggregates SNDs and Job into one BenchSummary per chain-id", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		snds := []unstructured.Unstructured{
 			newSND(t, "bench-bdc-demo", "validator", "bench-bdc-demo", "eng-bdc", 4, 3, "Running", "abc123"),
 			newSND(t, "bench-bdc-demo-rpc", "rpc", "bench-bdc-demo", "eng-bdc", 1, 1, "", "abc123"),
@@ -79,7 +79,7 @@ func TestRunBenchList(t *testing.T) {
 
 		var listCalls int
 		deps := benchListDeps{
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{Namespace: "eng-bdc"}, nil
 			},
@@ -139,10 +139,10 @@ func TestRunBenchList(t *testing.T) {
 	})
 
 	t.Run("empty cluster returns empty items", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		var buf bytes.Buffer
 		err := runBenchList(context.Background(), benchListInput{}, &buf, benchListDeps{
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{}, nil
 			},
@@ -163,12 +163,12 @@ func TestRunBenchList(t *testing.T) {
 	})
 
 	t.Run("completed job surfaces Succeeded phase", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		jobs := []unstructured.Unstructured{
 			newJob(t, "seiload-bench-bdc-demo", "bench-bdc-demo", "eng-bdc", 0, true),
 		}
 		deps := benchListDeps{
-			identityPath:  func() (string, error) { return path, nil },
+			configPath:    func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 			listFn: func(_ context.Context, _ *kube.Client, opts kube.ListOptions) ([]unstructured.Unstructured, *clioutput.Error) {
 				if opts.Resources[0] == "jobs.batch" {

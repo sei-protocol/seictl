@@ -16,7 +16,7 @@ import (
 
 	"github.com/sei-protocol/seictl/cluster/internal/aws"
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
-	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/config"
 	"github.com/sei-protocol/seictl/cluster/internal/kube"
 	"github.com/sei-protocol/seictl/cluster/internal/render"
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
@@ -78,7 +78,7 @@ type benchUpInput struct {
 
 type benchDeps struct {
 	resolveDigest  func(context.Context, string) (string, *clioutput.Error)
-	identityPath   func() (string, error)
+	configPath     func() (string, error)
 	newKubeClient  func(kube.Options) (*kube.Client, *clioutput.Error)
 	apply          func(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
 	getJobSnapshot func(ctx context.Context, kc *kube.Client, namespace, name string) kube.JobSnapshot
@@ -87,7 +87,7 @@ type benchDeps struct {
 
 var defaultBenchDeps = benchDeps{
 	resolveDigest:  aws.ResolveDigest,
-	identityPath:   identity.DefaultPath,
+	configPath:     config.DefaultPath,
 	newKubeClient:  kube.New,
 	apply:          applyToCluster,
 	getJobSnapshot: getJobSnapshotFromCluster,
@@ -144,7 +144,7 @@ var BenchCmd = cli.Command{
 }
 
 func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchDeps) error {
-	eng, idErr := loadEngineer(deps.identityPath)
+	cfg, idErr := loadConfig(deps.configPath)
 	if idErr != nil {
 		return failBenchUp(out, idErr)
 	}
@@ -152,7 +152,7 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 	if e := validate.Image(in.Image); e != nil {
 		return failBenchUp(out, e.ExitWith(clioutput.ExitBench))
 	}
-	if e := validate.Name(eng.Alias, in.Name); e != nil {
+	if e := validate.Name(cfg.Alias, in.Name); e != nil {
 		return failBenchUp(out, e.ExitWith(clioutput.ExitBench))
 	}
 	if e := validate.Size(in.Size); e != nil {
@@ -162,10 +162,7 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 		return failBenchUp(out, e.ExitWith(clioutput.ExitBench))
 	}
 
-	namespace := "eng-" + eng.Alias
-	if e := validate.Namespace(namespace, eng.Alias); e != nil {
-		return failBenchUp(out, e.ExitWith(clioutput.ExitBench))
-	}
+	namespace := cfg.Namespace
 
 	if _, callerErr := deps.getCaller(ctx); callerErr != nil {
 		return failBenchUp(out, callerErr)
@@ -181,12 +178,12 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 			"%v", err))
 	}
 
-	chainID := fmt.Sprintf("bench-%s-%s", eng.Alias, in.Name)
+	chainID := fmt.Sprintf("bench-%s-%s", cfg.Alias, in.Name)
 	digestShort := shortDigest(digest)
 	s3URI := fmt.Sprintf("s3://%s/%s/%s/%s/report.log", benchS3Bucket, namespace, benchJob, in.Name)
 	sizeProfile := benchSizes[in.Size]
 
-	docs, manifests, err := renderManifests(eng.Alias, in.Name, namespace, chainID, seidImage,
+	docs, manifests, err := renderManifests(cfg.Alias, in.Name, namespace, chainID, seidImage,
 		digestShort, sizeProfile.Validators, sizeProfile.RPC, in.Duration)
 	if err != nil {
 		return failBenchUp(out, err)
@@ -259,13 +256,13 @@ func mergeApplyResults(rendered []render.ManifestRef, applied []kube.ApplyResult
 	return out
 }
 
-func loadEngineer(pathFn func() (string, error)) (*identity.Engineer, *clioutput.Error) {
+func loadConfig(pathFn func() (string, error)) (*config.Config, *clioutput.Error) {
 	path, err := pathFn()
 	if err != nil {
 		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatMissing,
-			"resolve identity path: %v", err)
+			"resolve config path: %v", err)
 	}
-	return identity.Read(path)
+	return config.Read(path)
 }
 
 // renderManifests produces the four-doc YAML bundle (validator SND,

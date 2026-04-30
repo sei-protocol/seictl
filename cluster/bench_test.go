@@ -11,18 +11,18 @@ import (
 
 	"github.com/sei-protocol/seictl/cluster/internal/aws"
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
-	"github.com/sei-protocol/seictl/cluster/internal/identity"
+	"github.com/sei-protocol/seictl/cluster/internal/config"
 	"github.com/sei-protocol/seictl/cluster/internal/kube"
 )
 
 const benchTestDigest = "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd"
 
-func writeEngineerFile(t *testing.T, alias string) string {
+func writeConfigFile(t *testing.T, alias string) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "seictl")
-	path := filepath.Join(root, "engineer.json")
-	if err := identity.Write(path, identity.Engineer{Alias: alias, Name: "Test"}); err != nil {
-		t.Fatalf("seed identity: %+v", err)
+	path := filepath.Join(root, "config.json")
+	if err := config.Write(path, config.Config{Alias: alias, Namespace: "eng-" + alias}); err != nil {
+		t.Fatalf("seed config: %+v", err)
 	}
 	return path
 }
@@ -37,12 +37,12 @@ func noJobSnapshot(context.Context, *kube.Client, string, string) kube.JobSnapsh
 
 func stubBenchDeps(t *testing.T, alias string) benchDeps {
 	t.Helper()
-	path := writeEngineerFile(t, alias)
+	path := writeConfigFile(t, alias)
 	return benchDeps{
 		resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
 			return benchTestDigest, nil
 		},
-		identityPath: func() (string, error) { return path, nil },
+		configPath: func() (string, error) { return path, nil },
 		apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 			t.Fatalf("apply should not be called on dry-run path")
 			return nil, nil
@@ -173,13 +173,13 @@ func TestRunBenchUp(t *testing.T) {
 	})
 
 	t.Run("propagates digest-resolution errors", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := benchDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
 				return "", clioutput.New(clioutput.ExitBench, clioutput.CatImageResolution, "ecr unavailable")
 			},
-			identityPath: func() (string, error) { return path, nil },
-			getCaller:    okCaller,
+			configPath: func() (string, error) { return path, nil },
+			getCaller:  okCaller,
 		}
 		var buf bytes.Buffer
 		err := runBenchUp(context.Background(), benchUpInput{
@@ -198,7 +198,7 @@ func TestRunBenchUp(t *testing.T) {
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
 				return benchTestDigest, nil
 			},
-			identityPath: func() (string, error) { return "", errors.New("home unset") },
+			configPath: func() (string, error) { return "", errors.New("home unset") },
 		}
 		var buf bytes.Buffer
 		err := runBenchUp(context.Background(), benchUpInput{
@@ -216,13 +216,13 @@ func TestRunBenchUp(t *testing.T) {
 	})
 
 	t.Run("apply merges ApplyResult actions and sets appliedAt", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		var capturedDocs [][]byte
 		deps := benchDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
 				return benchTestDigest, nil
 			},
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{ContextName: "harbor", Namespace: "eng-bdc"}, nil
 			},
@@ -285,12 +285,12 @@ func TestRunBenchUp(t *testing.T) {
 	})
 
 	t.Run("apply propagates kubeconfig errors with ExitIdentity", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := benchDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
 				return benchTestDigest, nil
 			},
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatKubeconfigParse, "no kubeconfig")
 			},
@@ -321,13 +321,13 @@ func TestRunBenchUp(t *testing.T) {
 	})
 
 	t.Run("apply refuses Job-immutable mutation before any apply runs", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		applyCalled := false
 		deps := benchDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
 				return benchTestDigest, nil
 			},
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{}, nil
 			},
@@ -363,13 +363,13 @@ func TestRunBenchUp(t *testing.T) {
 	})
 
 	t.Run("apply proceeds when existing Job matches rendered (idempotent re-run)", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		applyCalled := false
 		deps := benchDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
 				return benchTestDigest, nil
 			},
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{}, nil
 			},
@@ -406,12 +406,12 @@ func TestRunBenchUp(t *testing.T) {
 	})
 
 	t.Run("apply propagates SSA failures with CatApplyFailed", func(t *testing.T) {
-		path := writeEngineerFile(t, "bdc")
+		path := writeConfigFile(t, "bdc")
 		deps := benchDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
 				return benchTestDigest, nil
 			},
-			identityPath: func() (string, error) { return path, nil },
+			configPath: func() (string, error) { return path, nil },
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{}, nil
 			},

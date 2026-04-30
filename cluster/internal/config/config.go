@@ -1,11 +1,16 @@
-// Package identity manages ~/.seictl/engineer.json — the engineer's
-// alias and display name used to scope cluster-facing seictl commands.
+// Package config manages ~/.seictl/config.json — the per-engineer
+// alias and operating namespace seictl reads on every cluster-facing
+// invocation.
 //
-// Per docs/design/cluster-cli.md §Identity file:
 //   - File mode 0600, parent dir 0700.
 //   - Read refuses to proceed if perms are loose.
-//   - Two fields: alias, name.
-package identity
+//   - Two fields: alias, namespace.
+//
+// Convention enforcement (e.g. namespace = "eng-<alias>" for engineer
+// cells) lives in the writer side — `seictl onboard`. Verbs read
+// namespace verbatim so non-engineer flows (nightly, CI) can drop a
+// shim with whatever namespace they operate against.
+package config
 
 import (
 	"encoding/json"
@@ -22,35 +27,35 @@ const (
 	DirMode  os.FileMode = 0o700
 )
 
-type Engineer struct {
-	Alias string `json:"alias"`
-	Name  string `json:"name"`
+type Config struct {
+	Alias     string `json:"alias"`
+	Namespace string `json:"namespace"`
 }
 
-// DefaultPath returns ~/.seictl/engineer.json.
+// DefaultPath returns ~/.seictl/config.json.
 func DefaultPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolving home directory: %w", err)
 	}
-	return filepath.Join(home, ".seictl", "engineer.json"), nil
+	return filepath.Join(home, ".seictl", "config.json"), nil
 }
 
-// Read returns the engineer record at path. Refuses if the file has any
-// group or world permission bits set.
-func Read(path string) (*Engineer, *clioutput.Error) {
+// Read returns the config at path. Refuses if the file has any group or
+// world permission bits set.
+func Read(path string) (*Config, *clioutput.Error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatMissing,
-				"engineer identity not found at %s; run `seictl onboard --alias <alias>`", path)
+				"seictl config not found at %s; run `seictl onboard --alias <alias>`", path)
 		}
 		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatMalformed,
 			"stat %s: %v", path, err)
 	}
 	if mode := info.Mode().Perm(); mode&0o077 != 0 {
 		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatPermsLoose,
-			"engineer identity file %s has loose permissions %#o; expected 0600", path, mode)
+			"seictl config file %s has loose permissions %#o; expected 0600", path, mode)
 	}
 
 	raw, err := os.ReadFile(path)
@@ -58,29 +63,39 @@ func Read(path string) (*Engineer, *clioutput.Error) {
 		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatMalformed,
 			"read %s: %v", path, err)
 	}
-	var e Engineer
-	if err := json.Unmarshal(raw, &e); err != nil {
+	var c Config
+	if err := json.Unmarshal(raw, &c); err != nil {
 		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatMalformed,
 			"parse %s: %v", path, err)
 	}
-	if e.Alias == "" {
+	if c.Alias == "" {
 		return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatMalformed,
-			"engineer identity is missing required field: alias").WithDetail(path)
+			"seictl config is missing required field: alias").WithDetail(path)
 	}
-	if vErr := validate.Alias(e.Alias); vErr != nil {
+	if vErr := validate.Alias(c.Alias); vErr != nil {
 		return nil, vErr.ExitWith(clioutput.ExitIdentity).WithDetail(path)
 	}
-	return &e, nil
+	if c.Namespace == "" {
+		return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatMalformed,
+			"seictl config is missing required field: namespace").WithDetail(path)
+	}
+	if vErr := validate.Namespace(c.Namespace); vErr != nil {
+		return nil, vErr.ExitWith(clioutput.ExitIdentity).WithDetail(path)
+	}
+	return &c, nil
 }
 
-// Write atomically writes the engineer record to path with mode 0600 and
-// ensures the parent directory is 0700. Refuses if an existing parent
-// directory has loose perms — silently tightening would mask a security
-// concern.
-func Write(path string, e Engineer) *clioutput.Error {
-	if e.Alias == "" {
+// Write atomically writes the config to path with mode 0600 and ensures
+// the parent directory is 0700. Refuses if an existing parent directory
+// has loose perms — silently tightening would mask a security concern.
+func Write(path string, c Config) *clioutput.Error {
+	if c.Alias == "" {
 		return clioutput.New(clioutput.ExitIdentity, clioutput.CatMalformed,
 			"alias is required")
+	}
+	if c.Namespace == "" {
+		return clioutput.New(clioutput.ExitIdentity, clioutput.CatMalformed,
+			"namespace is required")
 	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, DirMode); err != nil {
@@ -97,10 +112,10 @@ func Write(path string, e Engineer) *clioutput.Error {
 			"directory %s has loose permissions %#o; tighten to 0700 and re-run", dir, mode)
 	}
 
-	raw, err := json.MarshalIndent(e, "", "  ")
+	raw, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return clioutput.Newf(clioutput.ExitIdentity, clioutput.CatMalformed,
-			"marshal engineer: %v", err)
+			"marshal config: %v", err)
 	}
 	raw = append(raw, '\n')
 
