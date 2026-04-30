@@ -231,6 +231,37 @@ func TestRunOnboard_PropagatesGHAuthFailure(t *testing.T) {
 	}
 }
 
+func TestRunOnboard_RefusesWrongAWSAccount(t *testing.T) {
+	deps, _, _ := onboardStubs(t)
+	deps.getCaller = func(context.Context) (*aws.Caller, *clioutput.Error) {
+		return &aws.Caller{Account: "999999999999", Region: "eu-central-1", PrincipalARN: "arn:aws:sts::999999999999:assumed-role/foo"}, nil
+	}
+	iamCalled := false
+	deps.provisionIAM = func(context.Context, aws.EngineerScope, bool) ([]aws.IAMArtifact, *clioutput.Error) {
+		iamCalled = true
+		return nil, nil
+	}
+
+	var buf bytes.Buffer
+	err := runOnboard(context.Background(), onboardInput{Alias: "bdc", Apply: true}, &buf, deps)
+	if err == nil {
+		t.Fatalf("expected error, got success: %s", buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, clioutput.CatWrongAccount) {
+		t.Errorf("expected category %q; got %s", clioutput.CatWrongAccount, out)
+	}
+	if !strings.Contains(out, "999999999999") {
+		t.Errorf("error should name actual account; got %s", out)
+	}
+	if !strings.Contains(out, onboardAccount) {
+		t.Errorf("error should name expected account; got %s", out)
+	}
+	if iamCalled {
+		t.Errorf("provisionIAM must not be called when caller account is wrong")
+	}
+}
+
 func TestRunOnboard_PropagatesIAMFailureWithAWSCreateFailed(t *testing.T) {
 	deps, _, _ := onboardStubs(t)
 	deps.provisionIAM = func(context.Context, aws.EngineerScope, bool) ([]aws.IAMArtifact, *clioutput.Error) {

@@ -123,8 +123,14 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 		return failOnboard(out, e)
 	}
 
-	if _, callerErr := deps.getCaller(ctx); callerErr != nil {
+	caller, callerErr := deps.getCaller(ctx)
+	if callerErr != nil {
 		return failOnboard(out, callerErr)
+	}
+	if caller.Account != onboardAccount {
+		return failOnboard(out, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatWrongAccount,
+			"AWS caller account %s does not match expected harbor account %s; switch profiles and retry",
+			caller.Account, onboardAccount))
 	}
 
 	repoPath := ""
