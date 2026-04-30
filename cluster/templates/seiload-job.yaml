@@ -1,6 +1,6 @@
 # Source: sei-protocol/platform autobake/templates/seiload-job.yaml
 # Embedded at: 2026-04-27
-# Vars: CHAIN_ID, NAMESPACE, ENGINEER_ALIAS, BENCH_NAME, SEILOAD_IMAGE,
+# Vars: CHAIN_ID, NAMESPACE, ENGINEER_ALIAS, NAME, SEILOAD_IMAGE,
 #       IMAGE_DIGEST_SHORT, JOB_DEADLINE_SECONDS
 ---
 apiVersion: batch/v1
@@ -13,7 +13,7 @@ metadata:
     app.kubernetes.io/part-of: seictl-bench
     sei.io/chain-id: ${CHAIN_ID}
     sei.io/engineer: ${ENGINEER_ALIAS}
-    sei.io/bench-name: ${BENCH_NAME}
+    sei.io/bench-name: ${NAME}
     sei.io/image-sha: ${IMAGE_DIGEST_SHORT}
     sei.io/component: seiload
 spec:
@@ -28,7 +28,7 @@ spec:
         app.kubernetes.io/part-of: seictl-bench
         sei.io/chain-id: ${CHAIN_ID}
         sei.io/engineer: ${ENGINEER_ALIAS}
-        sei.io/bench-name: ${BENCH_NAME}
+        sei.io/bench-name: ${NAME}
         sei.io/component: seiload
     spec:
       serviceAccountName: bench-seiload

@@ -22,6 +22,8 @@ const (
 	KindBenchUpResult   = "BenchUpResult"
 	KindBenchDownResult = "BenchDownResult"
 	KindBenchListResult = "BenchListResult"
+	KindChainUpResult   = "ChainUpResult"
+	KindChainDownResult = "ChainDownResult"
 	KindOnboardResult   = "OnboardResult"
 )
 

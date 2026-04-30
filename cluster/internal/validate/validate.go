@@ -105,6 +105,14 @@ func DurationMinutes(n int) *Error {
 	return nil
 }
 
+func Validators(n int) *Error {
+	if n < 1 || n > 21 {
+		return newErr(clioutput.CatValidation,
+			"validator count %d is out of range [1, 21]", n)
+	}
+	return nil
+}
+
 // Namespace enforces RFC-1123 label shape. If alias is non-empty, also
 // enforces the side-effecting-verb policy that the namespace equals
 // `eng-<alias>`. Pass empty alias for read-only verbs.
