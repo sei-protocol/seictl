@@ -30,14 +30,9 @@ type benchDownResult struct {
 	ChainID   string               `json:"chainId"`
 	Namespace string               `json:"namespace"`
 	Resources []render.ManifestRef `json:"resources"`
-	// DeletedAt is set only when every resource reached "deleted" or
-	// "not-found"; while any resource is still-terminating, the
-	// deletion has been requested but not completed.
-	DeletedAt *time.Time `json:"deletedAt,omitempty"`
-	// Hint is a human-readable next-step prompt populated when at
-	// least one resource is still-terminating, so an agent caller
-	// re-running `bench up` immediately knows to wait.
-	Hint string `json:"hint,omitempty"`
+	DryRun    bool                 `json:"dryRun"`
+	DeletedAt *time.Time           `json:"deletedAt,omitempty"`
+	Hint      string               `json:"hint,omitempty"`
 }
 
 type benchDownInput struct {
@@ -45,18 +40,21 @@ type benchDownInput struct {
 	Namespace  string
 	Kubeconfig string
 	Context    string
+	DryRun     bool
 }
 
 type benchDownDeps struct {
 	identityPath  func() (string, error)
 	newKubeClient func(kube.Options) (*kube.Client, *clioutput.Error)
 	deleteFn      func(ctx context.Context, kc *kube.Client, opts kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error)
+	dryRunListFn  func(ctx context.Context, kc *kube.Client, opts kube.ListOptions) ([]kube.DeleteResult, *clioutput.Error)
 }
 
 var defaultBenchDownDeps = benchDownDeps{
 	identityPath:  identity.DefaultPath,
 	newKubeClient: kube.New,
 	deleteFn:      deleteFromCluster,
+	dryRunListFn:  dryRunListFromCluster,
 }
 
 func deleteFromCluster(ctx context.Context, kc *kube.Client, opts kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
@@ -67,12 +65,30 @@ func deleteFromCluster(ctx context.Context, kc *kube.Client, opts kube.DeleteOpt
 	return results, nil
 }
 
+func dryRunListFromCluster(ctx context.Context, kc *kube.Client, opts kube.ListOptions) ([]kube.DeleteResult, *clioutput.Error) {
+	objs, err := kc.List(ctx, opts)
+	if err != nil {
+		return nil, clioutput.Newf(clioutput.ExitBench, clioutput.CatApplyFailed, "%v", err)
+	}
+	out := make([]kube.DeleteResult, len(objs))
+	for i, o := range objs {
+		out[i] = kube.DeleteResult{
+			Kind:      o.GetKind(),
+			Name:      o.GetName(),
+			Namespace: o.GetNamespace(),
+			Action:    "would-delete",
+		}
+	}
+	return out, nil
+}
+
 var benchDownCmd = &cli.Command{
 	Name:  "down",
 	Usage: "Tear down a benchmark by name",
 	Flags: append(kubeconfigFlags(),
 		&cli.StringFlag{Name: "name", Required: true, Usage: "Bench name to tear down"},
 		&cli.StringFlag{Name: "namespace", Aliases: []string{"n"}, Usage: "Namespace (defaults to eng-<alias>)"},
+		&cli.BoolFlag{Name: "dry-run", Usage: "List the resources that would be deleted without deleting them"},
 	),
 	Action: func(ctx context.Context, command *cli.Command) error {
 		return runBenchDown(ctx, benchDownInput{
@@ -80,6 +96,7 @@ var benchDownCmd = &cli.Command{
 			Namespace:  command.String("namespace"),
 			Kubeconfig: command.String("kubeconfig"),
 			Context:    command.String("context"),
+			DryRun:     command.Bool("dry-run"),
 		}, os.Stdout, defaultBenchDownDeps)
 	},
 }
@@ -109,11 +126,23 @@ func runBenchDown(ctx context.Context, in benchDownInput, out io.Writer, deps be
 		return failBenchDown(out, kerr)
 	}
 
-	results, dErr := deps.deleteFn(ctx, kc, kube.DeleteOptions{
-		Namespace:     namespace,
-		Resources:     benchDownTargets,
-		LabelSelector: selector,
-	})
+	var (
+		results []kube.DeleteResult
+		dErr    *clioutput.Error
+	)
+	if in.DryRun {
+		results, dErr = deps.dryRunListFn(ctx, kc, kube.ListOptions{
+			Namespace:     namespace,
+			Resources:     benchDownTargets,
+			LabelSelector: selector,
+		})
+	} else {
+		results, dErr = deps.deleteFn(ctx, kc, kube.DeleteOptions{
+			Namespace:     namespace,
+			Resources:     benchDownTargets,
+			LabelSelector: selector,
+		})
+	}
 	if dErr != nil {
 		return failBenchDown(out, dErr)
 	}
@@ -133,18 +162,21 @@ func runBenchDown(ctx context.Context, in benchDownInput, out io.Writer, deps be
 		ChainID:   chainID,
 		Namespace: namespace,
 		Resources: resources,
+		DryRun:    in.DryRun,
 	}
-	terminating := 0
-	for _, r := range results {
-		if r.Action == "still-terminating" {
-			terminating++
+	if !in.DryRun {
+		terminating := 0
+		for _, r := range results {
+			if r.Action == "still-terminating" {
+				terminating++
+			}
 		}
-	}
-	if terminating == 0 {
-		now := time.Now().UTC()
-		res.DeletedAt = &now
-	} else {
-		res.Hint = fmt.Sprintf("%d resource(s) still terminating; wait before re-running `bench up` with the same name", terminating)
+		if terminating == 0 {
+			now := time.Now().UTC()
+			res.DeletedAt = &now
+		} else {
+			res.Hint = fmt.Sprintf("%d resource(s) still terminating; wait before re-running `bench up` with the same name", terminating)
+		}
 	}
 	if err := clioutput.Emit(out, clioutput.KindBenchDownResult, res); err != nil {
 		fmt.Fprintln(os.Stderr, err)
