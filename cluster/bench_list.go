@@ -72,7 +72,7 @@ var benchListCmd = &cli.Command{
 	Name:  "list",
 	Usage: "Owner-scoped list of running benchmarks",
 	Flags: append(kubeconfigFlags(),
-		&cli.BoolFlag{Name: "all-namespaces", Aliases: []string{"A"}, Usage: "List across all namespaces (defaults to eng-<alias>)"},
+		&cli.BoolFlag{Name: "all-namespaces", Aliases: []string{"A"}, Usage: "List across all namespaces"},
 		&cli.StringFlag{Name: "namespace", Aliases: []string{"n"}, Usage: "Namespace override"},
 	),
 	Action: func(ctx context.Context, command *cli.Command) error {
@@ -194,7 +194,7 @@ func summarize(chainID string, validator, rpc, job *unstructured.Unstructured) b
 		summary.Name = labels["sei.io/bench-name"]
 		summary.Namespace = primary.GetNamespace()
 		summary.Owner = labels["sei.io/engineer"]
-		summary.ImageDigest = labels["sei.io/image-sha"]
+		summary.ImageDigest = primary.GetAnnotations()["sei.io/image-sha"]
 		ts := primary.GetCreationTimestamp().Time
 		if !ts.IsZero() {
 			summary.AgeSeconds = int64(time.Since(ts).Seconds())

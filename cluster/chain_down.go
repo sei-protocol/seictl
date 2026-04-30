@@ -50,11 +50,11 @@ var defaultChainDownDeps = chainDownDeps{
 
 var chainDownCmd = &cli.Command{
 	Name:  "down",
-	Usage: "Tear down a chain by name (cascades to any rpc/load attached to the same chain-id)",
+	Usage: "Tear down a chain by name",
 	Flags: append(kubeconfigFlags(),
-		&cli.StringFlag{Name: "name", Required: true, Usage: "Chain name to tear down"},
-		&cli.StringFlag{Name: "namespace", Aliases: []string{"n"}, Usage: "Namespace (defaults to eng-<alias>)"},
-		&cli.BoolFlag{Name: "dry-run", Usage: "List the resources that would be deleted without deleting them"},
+		&cli.StringFlag{Name: "name", Required: true, Usage: "Chain name"},
+		&cli.StringFlag{Name: "namespace", Aliases: []string{"n"}, Usage: "Namespace override"},
+		&cli.BoolFlag{Name: "dry-run", Usage: "List resources that would be deleted without deleting them"},
 	),
 	Action: func(ctx context.Context, command *cli.Command) error {
 		return runChainDown(ctx, chainDownInput{

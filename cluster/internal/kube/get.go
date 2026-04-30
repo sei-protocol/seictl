@@ -12,7 +12,7 @@ import (
 // reason about Job immutability without importing batchv1.
 type JobSnapshot struct {
 	Found           bool
-	ImageSHA        string // labels["sei.io/image-sha"]
+	ImageSHA        string // annotations["sei.io/image-sha"]
 	DeadlineSeconds int64  // spec.activeDeadlineSeconds
 }
 
@@ -36,7 +36,7 @@ func (c *Client) GetJobSnapshot(ctx context.Context, namespace, name string) (Jo
 	}
 	snap := JobSnapshot{
 		Found:    true,
-		ImageSHA: j.Labels["sei.io/image-sha"],
+		ImageSHA: j.Annotations["sei.io/image-sha"],
 	}
 	if j.Spec.ActiveDeadlineSeconds != nil {
 		snap.DeadlineSeconds = *j.Spec.ActiveDeadlineSeconds

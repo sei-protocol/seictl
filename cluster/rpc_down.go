@@ -55,10 +55,10 @@ var rpcDownCmd = &cli.Command{
 	Name:  "down",
 	Usage: "Tear down an RPC fleet by chain + name",
 	Flags: append(kubeconfigFlags(),
-		&cli.StringFlag{Name: "chain", Required: true, Usage: "Chain ID the RPC fleet peers with"},
-		&cli.StringFlag{Name: "name", Value: defaultRPCName, Usage: "RPC fleet name"},
-		&cli.StringFlag{Name: "namespace", Aliases: []string{"n"}, Usage: "Namespace (defaults to eng-<alias>)"},
-		&cli.BoolFlag{Name: "dry-run", Usage: "List the resources that would be deleted without deleting them"},
+		&cli.StringFlag{Name: "chain", Required: true, Usage: "Chain ID"},
+		&cli.StringFlag{Name: "name", Required: true, Usage: "RPC fleet name"},
+		&cli.StringFlag{Name: "namespace", Aliases: []string{"n"}, Usage: "Namespace override"},
+		&cli.BoolFlag{Name: "dry-run", Usage: "List resources that would be deleted without deleting them"},
 	),
 	Action: func(ctx context.Context, command *cli.Command) error {
 		return runRPCDown(ctx, rpcDownInput{

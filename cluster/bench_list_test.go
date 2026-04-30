@@ -27,9 +27,11 @@ func newSND(t *testing.T, name, role, chainID, ns string, replicas, ready int, p
 		"sei.io/role":                  role,
 		"sei.io/engineer":              "bdc",
 		"sei.io/bench-name":            strings.TrimPrefix(strings.TrimSuffix(chainID, "-rpc"), "bench-bdc-"),
-		"sei.io/image-sha":             imageSHA,
 		"app.kubernetes.io/part-of":    "seictl-bench",
 		"app.kubernetes.io/managed-by": "seictl",
+	})
+	u.SetAnnotations(map[string]string{
+		"sei.io/image-sha": imageSHA,
 	})
 	u.SetCreationTimestamp(metav1.NewTime(time.Now().Add(-3 * time.Minute)))
 	_ = unstructured.SetNestedField(u.Object, int64(replicas), "spec", "replicas")
