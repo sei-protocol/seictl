@@ -20,7 +20,7 @@ var rpcDownTargets = []string{"seinodedeployments.sei.io"}
 
 type rpcDownResult struct {
 	ChainID   string               `json:"chainId"`
-	Name      string               `json:"name"`
+	RPCName   string               `json:"rpcName"`
 	Namespace string               `json:"namespace"`
 	Resources []render.ManifestRef `json:"resources"`
 	DryRun    bool                 `json:"dryRun"`
@@ -133,7 +133,7 @@ func runRPCDown(ctx context.Context, in rpcDownInput, out io.Writer, deps rpcDow
 
 	res := rpcDownResult{
 		ChainID:   in.ChainID,
-		Name:      in.Name,
+		RPCName:   in.Name,
 		Namespace: namespace,
 		Resources: resources,
 		DryRun:    in.DryRun,

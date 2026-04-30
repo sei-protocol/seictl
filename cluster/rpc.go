@@ -22,12 +22,12 @@ import (
 
 const (
 	defaultRPCReplicas = 2
-	defaultRPCName     = "default"
+	defaultRPCName     = "primary"
 )
 
 type rpcUpResult struct {
 	ChainID     string               `json:"chainId"`
-	Name        string               `json:"name"`
+	RPCName     string               `json:"rpcName"`
 	Namespace   string               `json:"namespace"`
 	ImageRef    string               `json:"imageRef"`
 	ImageDigest string               `json:"imageDigest"`
@@ -148,7 +148,7 @@ func runRPCUp(ctx context.Context, in rpcUpInput, deps rpcDeps) (rpcUpResult, *c
 
 	res := rpcUpResult{
 		ChainID:     in.ChainID,
-		Name:        in.Name,
+		RPCName:     in.Name,
 		Namespace:   namespace,
 		ImageRef:    in.Image,
 		ImageDigest: digest,
