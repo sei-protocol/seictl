@@ -20,7 +20,6 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
 )
 
-
 type rpcUpResult struct {
 	ChainID     string               `json:"chainId"`
 	RPCName     string               `json:"rpcName"`
