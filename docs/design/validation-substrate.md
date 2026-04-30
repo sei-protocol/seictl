@@ -131,26 +131,57 @@ Composites (`bench up`) compose primitive waits: `chain wait → rpc wait → lo
 
 ### Endpoint emission
 
-`chain up`, `rpc up`, and `bench up` emit RPC/REST endpoints in their JSON envelopes (already shipped in `bench up` via `ResultsS3URI` + manifest references; extend to include endpoint URLs when the primitives ship). Downstream tooling — engineer shell scripts, GHA workflows, MCP agents, external test binaries — reads them and acts. Two consumption shapes:
+`chain up`, `rpc up`, and `bench up` emit per-pod endpoint URLs in their JSON envelopes (already shipped in `bench up` via `ResultsS3URI` + manifest references; extend to include `endpoints` when the primitives ship). Downstream tooling — engineer shell scripts, GHA workflows, MCP agents, external test binaries — reads them and acts.
+
+**Endpoint contract (locked):** split by RPC type, list per type, per-pod URLs.
+
+```json
+{
+  "endpoints": {
+    "tendermintRpc": [
+      "http://bench-bdc-foo-rpc-0.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:26657",
+      "http://bench-bdc-foo-rpc-1.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:26657"
+    ],
+    "evmJsonRpc": [
+      "http://bench-bdc-foo-rpc-0.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:8545",
+      "http://bench-bdc-foo-rpc-1.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:8545"
+    ],
+    "cosmosGrpc": [
+      "bench-bdc-foo-rpc-0.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:9090",
+      "bench-bdc-foo-rpc-1.bench-bdc-foo-rpc-headless.eng-bdc.svc.cluster.local:9090"
+    ]
+  }
+}
+```
+
+Three rules behind the shape:
+
+- **Split by RPC type, not flat-with-discriminator.** Most consumers know which port they want (seiload by profile, qa-testing's mocha by suite). A flat list with a `{type, url}` object would force every consumer to filter; the split eliminates that.
+- **Per-pod, not aggregate.** Consumers shard, round-robin, or pick a single replica. Per-pod URLs give them the option; an aggregate Service URL only allows kube-proxy round-robin.
+- **Full URLs (with scheme + port) for HTTP types; `host:port` for gRPC** because gRPC clients don't take `http://` prefixes — Sei's gRPC is h2c.
+
+Adding new endpoint types (e.g. `evmWebSocket`, `cosmosLcd`) is backwards-compatible. Renaming or restructuring `endpoints.<type>` is not — these field names are the contract.
+
+Two consumption shapes:
 
 ```sh
 # Shell — pipeline
-ENDPOINTS=$(seictl bench up --image X --apply -o json | jq -r '.endpoints.rpc[0]')
-qa-testing-binary --rpc-url="$ENDPOINTS" --suite=evm
+EVM_RPC=$(seictl bench up --image X --apply -o json | jq -r '.endpoints.evmJsonRpc[0]')
+qa-testing-binary --rpc-url="$EVM_RPC" --suite=evm
 exit_code=$?
 seictl bench down --name X
 exit $exit_code
 ```
 
-```sh
+```yaml
 # GHA — env vars
-- run: seictl bench up --image ${{ env.IMAGE }} --apply
-- run: SEI_RPC_URL=$(seictl bench list -o json | jq -r '...') qa-testing-binary
+- run: seictl bench up --image ${{ env.IMAGE }} --apply --output endpoints.json
+- run: |
+    EVM_RPC=$(jq -r '.endpoints.evmJsonRpc[0]' endpoints.json) \
+    qa-testing-binary
 - if: always()
   run: seictl bench down --name ${{ env.NAME }}
 ```
-
-The endpoint shape is part of the `BenchUpResult` / `ChainUpResult` / `RPCUpResult` JSON envelope's contract — adding fields is backwards-compatible; renaming is not. Lock the field names early.
 
 ### `rules watch` — a Job, not a controller
 
@@ -293,10 +324,9 @@ What we gain:
 ## Open questions
 
 1. **`seictl-rules-watcher` image distribution.** Built from this repo, published to which ECR? Reuse `189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/`? Owned image policy parity with seiload.
-2. **Endpoint field shape.** `chain up` / `rpc up` / `bench up` should emit RPC URLs in the JSON envelope. Field name (`endpoints.rpc[]`? `rpcUrls[]`?), per-pod vs aggregate, with-or-without-port — these need to be locked once and not renamed. What's the contract?
-3. **Composite refactor priority.** When does `bench up` get refactored into shared `runChainUp` / `runRPCUp` / `runLoadUp` Go functions? Punt until a second composite (`shadow up`) actually wants them.
-4. **JSON envelope embedding shape.** When composites embed primitive results, do we keep the existing flat `BenchUpResult` (current shape) for backwards-compat *and* add nested fields, or break compat at v2? Lean: keep both during a transition.
-5. **kubectl plugin discovery on engineer laptops.** Krew distribution, brew formula, just `go install` instructions? Pick one for v1 docs.
+2. **Composite refactor priority.** When does `bench up` get refactored into shared `runChainUp` / `runRPCUp` / `runLoadUp` Go functions? Punt until a second composite (`shadow up`) actually wants them.
+3. **JSON envelope embedding shape.** When composites embed primitive results, do we keep the existing flat `BenchUpResult` (current shape) for backwards-compat *and* add nested fields, or break compat at v2? Lean: keep both during a transition.
+4. **kubectl plugin discovery on engineer laptops.** Krew distribution, brew formula, just `go install` instructions? Pick one for v1 docs.
 
 ## References
 
