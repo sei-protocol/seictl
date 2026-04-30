@@ -45,6 +45,7 @@ const (
 	CatNameCollision   = "name-collision"
 	CatFinalizerStuck  = "finalizer-stuck"
 	CatTemplateRender  = "template-render"
+	CatJobImmutable    = "job-immutable"
 
 	CatAliasInvalid        = "alias-invalid"
 	CatPlatformRepoMissing = "platform-repo-missing"

@@ -74,19 +74,21 @@ type benchUpInput struct {
 }
 
 type benchDeps struct {
-	resolveDigest func(context.Context, string) (string, *clioutput.Error)
-	identityPath  func() (string, error)
-	newKubeClient func(kube.Options) (*kube.Client, *clioutput.Error)
-	apply         func(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
-	getCaller     func(context.Context) (*aws.Caller, *clioutput.Error)
+	resolveDigest  func(context.Context, string) (string, *clioutput.Error)
+	identityPath   func() (string, error)
+	newKubeClient  func(kube.Options) (*kube.Client, *clioutput.Error)
+	apply          func(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
+	getJobSnapshot func(ctx context.Context, kc *kube.Client, namespace, name string) kube.JobSnapshot
+	getCaller      func(context.Context) (*aws.Caller, *clioutput.Error)
 }
 
 var defaultBenchDeps = benchDeps{
-	resolveDigest: aws.ResolveDigest,
-	identityPath:  identity.DefaultPath,
-	newKubeClient: kube.New,
-	apply:         applyToCluster,
-	getCaller:     aws.GetCaller,
+	resolveDigest:  aws.ResolveDigest,
+	identityPath:   identity.DefaultPath,
+	newKubeClient:  kube.New,
+	apply:          applyToCluster,
+	getJobSnapshot: getJobSnapshotFromCluster,
+	getCaller:      aws.GetCaller,
 }
 
 func applyToCluster(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
@@ -95,6 +97,16 @@ func applyToCluster(ctx context.Context, kc *kube.Client, fieldOwner, namespace 
 		return nil, clioutput.Newf(clioutput.ExitBench, clioutput.CatApplyFailed, "%v", err)
 	}
 	return results, nil
+}
+
+// Read-side errors collapse to {Found: false} so the apply path
+// remains the source of truth for failure categorization.
+func getJobSnapshotFromCluster(ctx context.Context, kc *kube.Client, namespace, name string) kube.JobSnapshot {
+	snap, err := kc.GetJobSnapshot(ctx, namespace, name)
+	if err != nil {
+		return kube.JobSnapshot{}
+	}
+	return snap
 }
 
 var BenchCmd = cli.Command{
@@ -199,6 +211,18 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 		})
 		if kerr != nil {
 			return failBenchUp(out, kerr)
+		}
+		// Apply walks cmYAML → sndYAML → jobYAML; a Job-immutability
+		// 422 mid-stream would leave the SNDs already mutated, so
+		// catch the would-be Job mutation before any apply runs.
+		jobName := "seiload-" + chainID
+		deadlineSeconds := int64(in.Duration) * 60
+		if snap := deps.getJobSnapshot(ctx, kc, namespace, jobName); snap.Found {
+			if snap.ImageSHA != digestShort || snap.DeadlineSeconds != deadlineSeconds {
+				return failBenchUp(out, clioutput.Newf(clioutput.ExitBench, clioutput.CatJobImmutable,
+					"Job %s/%s already exists with image-sha=%q and activeDeadlineSeconds=%d; rendered would be %q and %d. Kubernetes Jobs are immutable in these fields — run `seictl bench down --name %s` first.",
+					namespace, jobName, snap.ImageSHA, snap.DeadlineSeconds, digestShort, deadlineSeconds, in.Name))
+			}
 		}
 		applyResults, applyErr := deps.apply(ctx, kc, benchFieldOwner, namespace, docs)
 		if applyErr != nil {

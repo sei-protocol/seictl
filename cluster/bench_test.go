@@ -31,6 +31,10 @@ func okCaller(context.Context) (*aws.Caller, *clioutput.Error) {
 	return &aws.Caller{Account: "189176372795", Region: "eu-central-1", PrincipalARN: "arn:aws:sts::189176372795:assumed-role/Eng/bdc"}, nil
 }
 
+func noJobSnapshot(context.Context, *kube.Client, string, string) kube.JobSnapshot {
+	return kube.JobSnapshot{}
+}
+
 func stubBenchDeps(t *testing.T, alias string) benchDeps {
 	t.Helper()
 	path := writeEngineerFile(t, alias)
@@ -222,7 +226,8 @@ func TestRunBenchUp(t *testing.T) {
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{ContextName: "harbor", Namespace: "eng-bdc"}, nil
 			},
-			getCaller: okCaller,
+			getJobSnapshot: noJobSnapshot,
+			getCaller:      okCaller,
 			apply: func(_ context.Context, _ *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 				if fieldOwner != benchFieldOwner {
 					t.Errorf("field owner: got %q, want %q", fieldOwner, benchFieldOwner)
@@ -315,6 +320,91 @@ func TestRunBenchUp(t *testing.T) {
 		}
 	})
 
+	t.Run("apply refuses Job-immutable mutation before any apply runs", func(t *testing.T) {
+		path := writeEngineerFile(t, "bdc")
+		applyCalled := false
+		deps := benchDeps{
+			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
+				return benchTestDigest, nil
+			},
+			identityPath: func() (string, error) { return path, nil },
+			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
+				return &kube.Client{}, nil
+			},
+			getCaller: okCaller,
+			getJobSnapshot: func(context.Context, *kube.Client, string, string) kube.JobSnapshot {
+				return kube.JobSnapshot{Found: true, ImageSHA: "stale-sha", DeadlineSeconds: 300}
+			},
+			apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+				applyCalled = true
+				return nil, nil
+			},
+		}
+		var buf bytes.Buffer
+		err := runBenchUp(context.Background(), benchUpInput{
+			Image:    "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:v2",
+			Name:     "demo",
+			Size:     "s",
+			Duration: 10,
+			Apply:    true,
+		}, &buf, deps)
+		if err == nil {
+			t.Fatalf("expected error, got success: %s", buf.String())
+		}
+		if !strings.Contains(buf.String(), clioutput.CatJobImmutable) {
+			t.Errorf("expected category %q; got %s", clioutput.CatJobImmutable, buf.String())
+		}
+		if !strings.Contains(buf.String(), "bench down") {
+			t.Errorf("expected error to mention `bench down` recovery; got %s", buf.String())
+		}
+		if applyCalled {
+			t.Errorf("apply must not be called when Job spec would be mutated")
+		}
+	})
+
+	t.Run("apply proceeds when existing Job matches rendered (idempotent re-run)", func(t *testing.T) {
+		path := writeEngineerFile(t, "bdc")
+		applyCalled := false
+		deps := benchDeps{
+			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
+				return benchTestDigest, nil
+			},
+			identityPath: func() (string, error) { return path, nil },
+			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
+				return &kube.Client{}, nil
+			},
+			getCaller: okCaller,
+			getJobSnapshot: func(context.Context, *kube.Client, string, string) kube.JobSnapshot {
+				// Match the rendered values: digest from benchTestDigest's
+				// short form, deadline from --duration=5 → 300s.
+				return kube.JobSnapshot{Found: true, ImageSHA: shortDigest(benchTestDigest), DeadlineSeconds: 300}
+			},
+			apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+				applyCalled = true
+				return []kube.ApplyResult{
+					{Kind: "ConfigMap", Action: "unchanged"},
+					{Kind: "SeiNodeDeployment", Action: "unchanged"},
+					{Kind: "SeiNodeDeployment", Action: "unchanged"},
+					{Kind: "Job", Action: "unchanged"},
+				}, nil
+			},
+		}
+		var buf bytes.Buffer
+		err := runBenchUp(context.Background(), benchUpInput{
+			Image:    "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:v1",
+			Name:     "demo",
+			Size:     "s",
+			Duration: 5,
+			Apply:    true,
+		}, &buf, deps)
+		if err != nil {
+			t.Fatalf("runBenchUp: %v\nbody=%s", err, buf.String())
+		}
+		if !applyCalled {
+			t.Errorf("apply should be called when the existing Job matches the rendered Job")
+		}
+	})
+
 	t.Run("apply propagates SSA failures with CatApplyFailed", func(t *testing.T) {
 		path := writeEngineerFile(t, "bdc")
 		deps := benchDeps{
@@ -325,7 +415,8 @@ func TestRunBenchUp(t *testing.T) {
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) {
 				return &kube.Client{}, nil
 			},
-			getCaller: okCaller,
+			getJobSnapshot: noJobSnapshot,
+			getCaller:      okCaller,
 			apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
 				return nil, clioutput.New(clioutput.ExitBench, clioutput.CatApplyFailed, "API server says no")
 			},
