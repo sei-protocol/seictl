@@ -4,9 +4,6 @@ on:
   release:
     types: [ published ]
   workflow_dispatch:
-  workflow_run:
-    workflows: [Releaser]
-    types: [completed]
 
 permissions:
   contents: write
