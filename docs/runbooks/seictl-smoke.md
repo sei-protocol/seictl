@@ -44,12 +44,12 @@ seictl onboard --alias bdchatham --no-pr --apply | jq .
     "configPath": "/Users/brandon/.seictl/config.json",
     "generatedFiles": [
       "clusters/harbor/engineers/bdchatham/namespace.yaml",
-      "clusters/harbor/engineers/bdchatham/seictl-sa.yaml",
+      "clusters/harbor/engineers/bdchatham/workload-service-account.yaml",
       "clusters/harbor/engineers/bdchatham/kustomization.yaml"
     ],
     "awsResources": [
-      {"kind": "Policy", "arn": "arn:aws:iam::189176372795:policy/seictl/harbor-seictl-eng-bdchatham", "action": "create"},
-      {"kind": "Role", "arn": "arn:aws:iam::189176372795:role/seictl/harbor-seictl-eng-bdchatham", "action": "create"},
+      {"kind": "Policy", "arn": "arn:aws:iam::189176372795:policy/seictl/harbor-workload-eng-bdchatham", "action": "create"},
+      {"kind": "Role", "arn": "arn:aws:iam::189176372795:role/seictl/harbor-workload-eng-bdchatham", "action": "create"},
       {"kind": "Attachment", "arn": "...", "action": "create"},
       {"kind": "PodIdentityAssociation", "arn": "...", "action": "create"}
     ],
@@ -67,20 +67,20 @@ cat ~/.seictl/config.json
 # expect: {"alias": "bdchatham", "namespace": "eng-bdchatham"}
 
 # IAM role exists.
-aws iam get-role --role-name harbor-seictl-eng-bdchatham --query 'Role.Arn'
+aws iam get-role --role-name harbor-workload-eng-bdchatham --query 'Role.Arn'
 
 # Pod Identity association exists.
 aws eks list-pod-identity-associations \
   --cluster-name harbor \
   --namespace eng-bdchatham \
-  --query 'associations[?serviceAccount==`seictl`]'
+  --query 'associations[?serviceAccount==`workload-service-account`]'
 ```
 
 **Note:** the namespace + SA themselves don't exist in the cluster yet — those get created by Flux *after* the onboard PR merges into platform. For the smoke run, create them manually:
 
 ```sh
 kubectl create namespace eng-bdchatham
-kubectl create serviceaccount seictl -n eng-bdchatham
+kubectl create serviceaccount workload-service-account -n eng-bdchatham
 ```
 
 (In the real engineer flow, you'd run `seictl onboard` *without* `--no-pr`, the platform PR merges, Flux applies the manifests, and these resources appear without manual intervention.)
@@ -191,7 +191,7 @@ seictl bench down --name smoke --apply | jq .
 
 ```sh
 kubectl get snd,job,cm -n eng-bdchatham
-# expect: no resources from the bench (only the seictl SA + namespace remain)
+# expect: no resources from the bench (only the workload-service-account + namespace remain)
 ```
 
 ## Step 6 — verify S3 results landed

@@ -14,9 +14,9 @@ func TestGenerate_ReturnsThreeFilesAtExpectedPaths(t *testing.T) {
 		t.Fatalf("files: got %d, want 3", len(files))
 	}
 	want := map[string]bool{
-		"clusters/harbor/engineers/bdc/namespace.yaml":     false,
-		"clusters/harbor/engineers/bdc/seictl-sa.yaml":     false,
-		"clusters/harbor/engineers/bdc/kustomization.yaml": false,
+		"clusters/harbor/engineers/bdc/namespace.yaml":                false,
+		"clusters/harbor/engineers/bdc/workload-service-account.yaml": false,
+		"clusters/harbor/engineers/bdc/kustomization.yaml":            false,
 	}
 	for _, f := range files {
 		if _, ok := want[f.Path]; !ok {
@@ -47,8 +47,8 @@ func TestGenerate_NamespaceContent(t *testing.T) {
 
 func TestGenerate_ServiceAccountHasNoIRSAAnnotation(t *testing.T) {
 	files, _ := Generate(Cell{Alias: "bdc", Namespace: "eng-bdc"})
-	sa := contentFor(t, files, "seictl-sa.yaml")
-	if !strings.Contains(sa, "name: seictl") {
+	sa := contentFor(t, files, "workload-service-account.yaml")
+	if !strings.Contains(sa, "name: workload-service-account") {
 		t.Errorf("SA name: %s", sa)
 	}
 	// The IRSA/Pod-Identity confusion: ensure we never accidentally
@@ -62,7 +62,7 @@ func TestGenerate_ServiceAccountHasNoIRSAAnnotation(t *testing.T) {
 func TestGenerate_KustomizationReferencesBoth(t *testing.T) {
 	files, _ := Generate(Cell{Alias: "bdc", Namespace: "eng-bdc"})
 	k := contentFor(t, files, "kustomization.yaml")
-	if !strings.Contains(k, "namespace.yaml") || !strings.Contains(k, "seictl-sa.yaml") {
+	if !strings.Contains(k, "namespace.yaml") || !strings.Contains(k, "workload-service-account.yaml") {
 		t.Errorf("kustomization missing resource refs: %s", k)
 	}
 }

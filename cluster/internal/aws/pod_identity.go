@@ -28,7 +28,7 @@ type PodIdentityBinding struct {
 	Region         string
 }
 
-// EnsurePodIdentity creates the seictl SA association if it doesn't
+// EnsurePodIdentity creates the workload SA association if it doesn't
 // exist. EKS exposes no Get-by-tuple API, so we list-then-match.
 // A pre-existing association bound to a different role is a hard
 // failure — silently rebinding could grant the engineer access to

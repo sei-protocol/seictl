@@ -33,7 +33,7 @@ spec:
         sei.io/engineer: ${ENGINEER_ALIAS}
         sei.io/bench-name: ${NAME}
     spec:
-      serviceAccountName: seictl
+      serviceAccountName: workload-service-account
       restartPolicy: Never
       # Window for the metrics scrape after seiload exits but before the
       # pod is torn down (PodMonitor scrape interval is 15s).
