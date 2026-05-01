@@ -14,9 +14,9 @@ func TestGenerate_ReturnsThreeFilesAtExpectedPaths(t *testing.T) {
 		t.Fatalf("files: got %d, want 3", len(files))
 	}
 	want := map[string]bool{
-		"clusters/harbor/engineers/bdc/namespace.yaml":     false,
-		"clusters/harbor/engineers/bdc/workload-service-account.yaml":     false,
-		"clusters/harbor/engineers/bdc/kustomization.yaml": false,
+		"clusters/harbor/engineers/bdc/namespace.yaml":                false,
+		"clusters/harbor/engineers/bdc/workload-service-account.yaml": false,
+		"clusters/harbor/engineers/bdc/kustomization.yaml":            false,
 	}
 	for _, f := range files {
 		if _, ok := want[f.Path]; !ok {
