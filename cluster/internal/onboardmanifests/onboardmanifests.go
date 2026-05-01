@@ -38,7 +38,7 @@ type File struct {
 func Generate(cell Cell) ([]File, error) {
 	dir := fmt.Sprintf("clusters/harbor/engineers/%s/", cell.Alias)
 	out := make([]File, 0, 3)
-	for _, name := range []string{"namespace.yaml", "seictl-sa.yaml", "kustomization.yaml"} {
+	for _, name := range []string{"namespace.yaml", "workload-service-account.yaml", "kustomization.yaml"} {
 		body, err := render(name, cell)
 		if err != nil {
 			return nil, fmt.Errorf("render %s: %w", name, err)

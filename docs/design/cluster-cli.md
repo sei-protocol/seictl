@@ -83,7 +83,7 @@ seictl/
     seiload-job.yaml.tmpl
     autobake_evm_transfer.json.tmpl
     namespace.yaml.tmpl
-    seictl-sa.yaml.tmpl
+    workload-service-account.yaml.tmpl
     kustomization.yaml.tmpl
   Makefile                   [edit: lint-strict]
   docs/design/cluster-cli.md [this file]
@@ -153,7 +153,7 @@ seictl onboard --alias <alias>
 
 With `--apply`, performs both side effects:
 
-1. Generates `clusters/harbor/engineers/<alias>/{kustomization,namespace,seictl-sa}.yaml` in the platform repo, branches `<alias>/onboard-<alias>`, opens a PR via `gh`.
+1. Generates `clusters/harbor/engineers/<alias>/{kustomization,namespace,workload-service-account}.yaml` in the platform repo, branches `<alias>/onboard-<alias>`, opens a PR via `gh`.
 2. Creates the IAM policy + Pod Identity association directly via AWS SDK in the engineer's SSO session — `iam:CreatePolicy`, `iam:CreateRole`, `iam:AttachRolePolicy`, `eks:CreatePodIdentityAssociation`. No Terraform.
 
 Without `--apply`: dry-run; prints what would be created.
@@ -367,8 +367,8 @@ Single source of truth in `internal/validate/`. Commands call `validate.Alias(s)
 
 `seictl onboard --apply` creates resources directly via AWS SDK:
 
-1. **IAM policy** `harbor-seictl-eng-<alias>` — per-engineer scoped to the shared validation-results bucket under the engineer's namespace prefix: `s3:ListBucket` with `s3:prefix=["eng-<alias>/*"]` and `s3:PutObject` on `arn:aws:s3:::harbor-validation-results/eng-<alias>/*`. Mirrors the platform's nightly policy (`harbor-nightly-seiload`); shared policies are explicitly rejected as a security risk that doesn't scale.
-2. **Pod Identity association** via `eks:CreatePodIdentityAssociation` for `(cluster=harbor, namespace=eng-<alias>, service_account=seictl, role_arn=<policy-attached-role>)`
+1. **IAM policy** `harbor-workload-eng-<alias>` — per-engineer scoped to the shared validation-results bucket under the engineer's namespace prefix: `s3:ListBucket` with `s3:prefix=["eng-<alias>/*"]` and `s3:PutObject` on `arn:aws:s3:::harbor-validation-results/eng-<alias>/*`. Mirrors the platform's nightly policy (`harbor-nightly-workload`); shared policies are explicitly rejected as a security risk that doesn't scale.
+2. **Pod Identity association** via `eks:CreatePodIdentityAssociation` for `(cluster=harbor, namespace=eng-<alias>, service_account=workload-service-account, role_arn=<policy-attached-role>)`
 
 Engineer's SSO role currently has admin permissions (sufficient to create the above). When SSO permissions get scoped down, the LLD revisits.
 
@@ -465,7 +465,7 @@ Standard set already in seictl: `errcheck`, `govet`, `staticcheck`, `revive`, `g
 2. `seictl bench up --image <ref> --name demo --size s --duration 5m` (no `--apply`) renders SND-validator (4 replicas), SND-RPC (1 replica), profile ConfigMap, seiload Job — golden-file equality against `testdata/bench-up-s.golden.yaml`. Exits `0`. Output includes `dryRun: true`.
 3. `seictl bench up ... --apply` against a dev/harbor cluster creates all four resources, populates `appliedAt`, returns `0`. Subsequent `seictl bench list` shows the run.
 4. `seictl bench up --name X` re-run while the previous bench is still alive: idempotent (no error, returns same result), or rejects with exit `10` (category `name-collision`) — confirmed behavior either way.
-5. `seictl onboard --alias bdc --no-pr --apply` against a clean platform-repo checkout creates `clusters/harbor/engineers/bdc/{kustomization,namespace,seictl-sa}.yaml` and writes `~/.seictl/config.json`. With `--apply` and `gh` authenticated: opens a PR, captures URL in result. With AWS SDK calls: creates IAM policy and Pod Identity association.
+5. `seictl onboard --alias bdc --no-pr --apply` against a clean platform-repo checkout creates `clusters/harbor/engineers/bdc/{kustomization,namespace,workload-service-account}.yaml` and writes `~/.seictl/config.json`. With `--apply` and `gh` authenticated: opens a PR, captures URL in result. With AWS SDK calls: creates IAM policy and Pod Identity association.
 6. `~/.seictl/config.json` written with mode `0600`; loose-perms file rejected with exit `40` (category `perms-loose`).
 7. `seictl bench up --image <bad-registry-ref>` exits `10` (category `image-policy`) without contacting ECR.
 

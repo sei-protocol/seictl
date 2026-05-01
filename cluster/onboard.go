@@ -168,7 +168,7 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 	piArt, piErr := deps.podIdentity(ctx, aws.PodIdentityBinding{
 		Cluster:        scope.Cluster,
 		Namespace:      namespace,
-		ServiceAccount: "seictl",
+		ServiceAccount: "workload-service-account",
 		RoleARN:        scope.RoleARN(),
 		Region:         scope.Region,
 	}, dryRun)
