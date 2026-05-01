@@ -1,10 +1,20 @@
 package cluster
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"reflect"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func sndWithPerPodServices(entries []map[string]any) *unstructured.Unstructured {
@@ -17,6 +27,28 @@ func sndWithPerPodServices(entries []map[string]any) *unstructured.Unstructured 
 			"perPodServices": raw,
 		},
 	}}
+}
+
+func sndReady(generation int64, replicas int) *unstructured.Unstructured {
+	entries := make([]any, replicas)
+	for i := 0; i < replicas; i++ {
+		entries[i] = entry("chain-rpc-"+strconv.Itoa(i), "ns", 8545, 8546)
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"generation": generation,
+		},
+		"status": map[string]any{
+			"observedGeneration": generation,
+			"perPodServices":     entries,
+		},
+	}}
+}
+
+func sndStaleGeneration(metaGen, observedGen int64, replicas int) *unstructured.Unstructured {
+	u := sndReady(metaGen, replicas)
+	_ = unstructured.SetNestedField(u.Object, observedGen, "status", "observedGeneration")
+	return u
 }
 
 func entry(name, ns string, evmHTTP, evmWS int64) map[string]any {
@@ -53,7 +85,7 @@ func TestParsePerPodServices(t *testing.T) {
 		}
 	})
 
-	t.Run("preserves controller order", func(t *testing.T) {
+	t.Run("preserves controller order with .svc.cluster.local URLs", func(t *testing.T) {
 		u := sndWithPerPodServices([]map[string]any{
 			entry("pacific-1-rpc-primary-0", "nightly", 8545, 8546),
 			entry("pacific-1-rpc-primary-1", "nightly", 8545, 8546),
@@ -61,9 +93,9 @@ func TestParsePerPodServices(t *testing.T) {
 		})
 		got := parsePerPodServices(u)
 		want := []PerPodEndpoint{
-			{Name: "pacific-1-rpc-primary-0", EvmJsonRpc: "http://pacific-1-rpc-primary-0.nightly.svc:8545", EvmWs: "ws://pacific-1-rpc-primary-0.nightly.svc:8546"},
-			{Name: "pacific-1-rpc-primary-1", EvmJsonRpc: "http://pacific-1-rpc-primary-1.nightly.svc:8545", EvmWs: "ws://pacific-1-rpc-primary-1.nightly.svc:8546"},
-			{Name: "pacific-1-rpc-primary-2", EvmJsonRpc: "http://pacific-1-rpc-primary-2.nightly.svc:8545", EvmWs: "ws://pacific-1-rpc-primary-2.nightly.svc:8546"},
+			{Name: "pacific-1-rpc-primary-0", EvmJsonRpc: "http://pacific-1-rpc-primary-0.nightly.svc.cluster.local:8545", EvmWs: "ws://pacific-1-rpc-primary-0.nightly.svc.cluster.local:8546"},
+			{Name: "pacific-1-rpc-primary-1", EvmJsonRpc: "http://pacific-1-rpc-primary-1.nightly.svc.cluster.local:8545", EvmWs: "ws://pacific-1-rpc-primary-1.nightly.svc.cluster.local:8546"},
+			{Name: "pacific-1-rpc-primary-2", EvmJsonRpc: "http://pacific-1-rpc-primary-2.nightly.svc.cluster.local:8545", EvmWs: "ws://pacific-1-rpc-primary-2.nightly.svc.cluster.local:8546"},
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("parsed entries:\ngot  %+v\nwant %+v", got, want)
@@ -85,17 +117,202 @@ func TestParsePerPodServices(t *testing.T) {
 			t.Errorf("unexpected entries: %+v", got)
 		}
 	})
+}
 
-	t.Run("partial — caller treats len mismatch as 'keep polling'", func(t *testing.T) {
-		// Controller may publish only some children mid-rollout. Parser
-		// returns what's there; the poller decides whether to continue.
-		u := sndWithPerPodServices([]map[string]any{
-			entry("a-0", "ns", 8545, 8546),
-		})
-		got := parsePerPodServices(u)
-		if len(got) != 1 {
-			t.Errorf("partial: got %d entries, want 1", len(got))
+func TestIsPerPodReady(t *testing.T) {
+	t.Run("ready when len==replicas and observedGen==metaGen", func(t *testing.T) {
+		if !isPerPodReady(sndReady(7, 3), 3) {
+			t.Errorf("ready SND should be ready")
+		}
+	})
+
+	t.Run("stale generation: observedGen < metaGen → not ready", func(t *testing.T) {
+		// Scale-down race: the controller has not yet pruned per-pod
+		// entries from the prior generation. Without the observedGen
+		// guard, this would falsely match.
+		if isPerPodReady(sndStaleGeneration(8, 7, 3), 3) {
+			t.Errorf("stale generation SND must not be ready")
+		}
+	})
+
+	t.Run("len mismatch: too few entries", func(t *testing.T) {
+		if isPerPodReady(sndReady(1, 2), 3) {
+			t.Errorf("len(perPodServices)=2 vs replicas=3 must not be ready")
+		}
+	})
+
+	t.Run("len mismatch: too many entries", func(t *testing.T) {
+		// Even if observedGen matches, an over-count means the controller
+		// has not yet pruned. Strict equality avoids a stale match.
+		if isPerPodReady(sndReady(1, 5), 3) {
+			t.Errorf("len(perPodServices)=5 vs replicas=3 must not be ready")
+		}
+	})
+
+	t.Run("no observedGeneration field → not ready", func(t *testing.T) {
+		u := sndWithPerPodServices([]map[string]any{entry("a-0", "ns", 8545, 8546)})
+		if isPerPodReady(u, 1) {
+			t.Errorf("missing observedGeneration must not be ready")
 		}
 	})
 }
 
+func TestIsTerminalError(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		terminal bool
+	}{
+		{"nil", nil, false},
+		{"plain error", errors.New("connection reset"), false},
+		{"forbidden", apierrors.NewForbidden(schema.GroupResource{Group: "sei.io", Resource: "seinodedeployments"}, "x", errors.New("rbac")), true},
+		{"unauthorized", apierrors.NewUnauthorized("token expired"), true},
+		{"not-found (transient)", apierrors.NewNotFound(schema.GroupResource{Group: "sei.io", Resource: "seinodedeployments"}, "x"), false},
+		{"no-match (CRD missing)", &apimeta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "sei.io", Kind: "SeiNodeDeployment"}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isTerminalError(tc.err); got != tc.terminal {
+				t.Errorf("isTerminalError(%v) = %v, want %v", tc.err, got, tc.terminal)
+			}
+		})
+	}
+}
+
+// withFastPolling shrinks timeouts for sub-second test runs. Returns a
+// cleanup that restores the prior values.
+func withFastPolling(t *testing.T, timeout, interval time.Duration) {
+	t.Helper()
+	oldTimeout := perPodPollTimeout
+	oldInterval := perPodPollInterval
+	perPodPollTimeout = timeout
+	perPodPollInterval = interval
+	t.Cleanup(func() {
+		perPodPollTimeout = oldTimeout
+		perPodPollInterval = oldInterval
+	})
+}
+
+func TestPollPerPod_TerminalErrorShortCircuits(t *testing.T) {
+	// A terminal error must NOT wait for the deadline. Set a 30s timeout
+	// but the test must complete in ms — proves the short-circuit fires.
+	withFastPolling(t, 30*time.Second, 10*time.Millisecond)
+	gr := schema.GroupResource{Group: "sei.io", Resource: "seinodedeployments"}
+	getSND := func(context.Context, string, string) (*unstructured.Unstructured, error) {
+		return nil, apierrors.NewForbidden(gr, "x", errors.New("rbac"))
+	}
+	var warn bytes.Buffer
+	start := time.Now()
+	got := pollPerPod(context.Background(), getSND, "ns", "snd", 3, &warn)
+	elapsed := time.Since(start)
+	if got != nil {
+		t.Errorf("terminal error should return nil, got %+v", got)
+	}
+	if elapsed > time.Second {
+		t.Errorf("terminal error should short-circuit; took %s", elapsed)
+	}
+	if !strings.Contains(warn.String(), "forbidden") && !strings.Contains(warn.String(), "Forbidden") {
+		t.Errorf("warn should mention forbidden: %q", warn.String())
+	}
+}
+
+func TestPollPerPod_RetriesUntilReady(t *testing.T) {
+	// Simulate three reconcile ticks: nothing → partial → ready.
+	withFastPolling(t, 5*time.Second, 5*time.Millisecond)
+	var calls atomic.Int32
+	getSND := func(context.Context, string, string) (*unstructured.Unstructured, error) {
+		switch calls.Add(1) {
+		case 1:
+			return &unstructured.Unstructured{Object: map[string]any{
+				"metadata": map[string]any{"generation": int64(1)},
+				"status":   map[string]any{},
+			}}, nil
+		case 2:
+			// Partial: 1 of 3 entries published.
+			u := sndReady(1, 1)
+			return u, nil
+		default:
+			return sndReady(1, 3), nil
+		}
+	}
+	var warn bytes.Buffer
+	got := pollPerPod(context.Background(), getSND, "ns", "snd", 3, &warn)
+	if len(got) != 3 {
+		t.Errorf("expected 3 entries after retry, got %d (%+v); warn=%q", len(got), got, warn.String())
+	}
+	if calls.Load() < 3 {
+		t.Errorf("expected at least 3 GetSND calls, got %d", calls.Load())
+	}
+}
+
+func TestPollPerPod_StaleGenerationKeepsPolling(t *testing.T) {
+	// Stale observedGeneration with the right entry count must NOT match.
+	// We cap the timeout short and assert the call count keeps climbing
+	// (i.e., the poller didn't return early).
+	withFastPolling(t, 100*time.Millisecond, 5*time.Millisecond)
+	var calls atomic.Int32
+	getSND := func(context.Context, string, string) (*unstructured.Unstructured, error) {
+		calls.Add(1)
+		return sndStaleGeneration(8, 7, 3), nil
+	}
+	var warn bytes.Buffer
+	got := pollPerPod(context.Background(), getSND, "ns", "snd", 3, &warn)
+	if got != nil {
+		t.Errorf("stale-gen SND must time out, got %+v", got)
+	}
+	if calls.Load() < 5 {
+		t.Errorf("poller should have retried; calls=%d", calls.Load())
+	}
+	if !strings.Contains(warn.String(), "timed out") {
+		t.Errorf("warn should mention timeout: %q", warn.String())
+	}
+}
+
+func TestPollPerPod_NotFoundIsTransient(t *testing.T) {
+	// NotFound on the SND itself (apply just landed; client cache trails)
+	// must keep polling, not short-circuit.
+	withFastPolling(t, 5*time.Second, 5*time.Millisecond)
+	gr := schema.GroupResource{Group: "sei.io", Resource: "seinodedeployments"}
+	var calls atomic.Int32
+	getSND := func(context.Context, string, string) (*unstructured.Unstructured, error) {
+		switch calls.Add(1) {
+		case 1, 2:
+			return nil, apierrors.NewNotFound(gr, "snd")
+		default:
+			return sndReady(1, 2), nil
+		}
+	}
+	var warn bytes.Buffer
+	got := pollPerPod(context.Background(), getSND, "ns", "snd", 2, &warn)
+	if len(got) != 2 {
+		t.Errorf("expected 2 entries after NotFound retry, got %d; warn=%q", len(got), warn.String())
+	}
+}
+
+func TestPollPerPod_ContextCancelExitsCleanly(t *testing.T) {
+	withFastPolling(t, 30*time.Second, 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	getSND := func(context.Context, string, string) (*unstructured.Unstructured, error) {
+		// Never resolve.
+		return &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{"generation": int64(1)},
+		}}, nil
+	}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	var warn bytes.Buffer
+	start := time.Now()
+	got := pollPerPod(ctx, getSND, "ns", "snd", 3, &warn)
+	elapsed := time.Since(start)
+	if got != nil {
+		t.Errorf("cancelled ctx should return nil, got %+v", got)
+	}
+	if elapsed > time.Second {
+		t.Errorf("cancellation should exit promptly; took %s", elapsed)
+	}
+}
+
+// Compile-time guard: pollPerPodFromCluster must satisfy perPodPoller.
+var _ perPodPoller = pollPerPodFromCluster

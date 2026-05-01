@@ -20,8 +20,12 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
 )
 
-// Field names mirror downstream env-var contracts (SEI_TENDERMINT_RPC,
-// SEI_EVM_JSON_RPC) — rename = break two contracts.
+// TendermintRpc and EvmJsonRpc field names mirror downstream env-var
+// contracts (SEI_TENDERMINT_RPC, SEI_EVM_JSON_RPC) — rename = break
+// two contracts. PerPod is shape-stable but not env-var-bound; it
+// carries per-replica handles for consumers that need to dial
+// individual pods (e.g., WebSocket subscriptions, which kube-proxy
+// can't load-balance).
 type Endpoints struct {
 	TendermintRpc []string         `json:"tendermintRpc"`
 	EvmJsonRpc    []string         `json:"evmJsonRpc,omitempty"`
