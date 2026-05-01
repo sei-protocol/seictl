@@ -171,8 +171,7 @@ func runRPCUp(ctx context.Context, in rpcUpInput, warn io.Writer, deps rpcDeps) 
 	return res, nil
 }
 
-// rpcSNDName mirrors templates/rpc.yaml's metadata.name. Read-side and
-// render-side must stay in sync.
+// Must match metadata.name in templates/rpc.yaml.
 func rpcSNDName(chainID, name string) string {
 	return fmt.Sprintf("%s-rpc-%s", chainID, name)
 }

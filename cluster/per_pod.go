@@ -13,56 +13,35 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/kube"
 )
 
-// PerPodEndpoint is one child SeiNode's headless Service handle, ready
-// to dial. URLs use cluster-internal DNS (pod IPs are ephemeral and
-// excluded from the controller's status).
-//
-// TendermintRpc is intentionally omitted: the controller's
-// PerPodServicePorts exposes only evmHttp/evmWs (sei-k8s-controller#156).
-// Add when a consumer asks.
-//
-// Order in the parent slice is by pod ordinal ascending — preserved
-// from the controller's status.perPodServices.
+// PerPodEndpoint addresses one child SeiNode via its headless Service.
+// TendermintRpc is intentionally absent — the controller's
+// PerPodServicePorts exposes only EVM HTTP/WS today
+// (sei-k8s-controller#156). Slice order is by pod ordinal ascending.
 type PerPodEndpoint struct {
 	Name       string `json:"name"`
 	EvmJsonRpc string `json:"evmJsonRpc"`
 	EvmWs      string `json:"evmWs"`
 }
 
-// Vars rather than consts so tests can shrink the deadline for fast
-// poll-loop coverage without a real clock.
+// var (not const) so tests can shrink the deadline.
 var (
 	perPodPollTimeout  = 30 * time.Second
 	perPodPollInterval = 1 * time.Second
 )
 
-// perPodPoller is the dependency-injection seam used by rpc/bench up.
-// Returns nil on timeout or terminal apiserver error; per-pod URLs are
-// best-effort and never block the apply path.
 type perPodPoller func(ctx context.Context, kc *kube.Client, namespace, sndName string, replicas int, warn io.Writer) []PerPodEndpoint
 
-// sndGetter is the unit-testable seam: the pure poll loop calls this
-// instead of touching kube.Client directly.
 type sndGetter func(ctx context.Context, namespace, name string) (*unstructured.Unstructured, error)
 
-// pollPerPodFromCluster wires kc.GetSND into the pure pollPerPod loop.
 func pollPerPodFromCluster(ctx context.Context, kc *kube.Client, namespace, sndName string, replicas int, warn io.Writer) []PerPodEndpoint {
 	return pollPerPod(ctx, func(ctx context.Context, ns, name string) (*unstructured.Unstructured, error) {
 		return kc.GetSND(ctx, ns, name)
 	}, namespace, sndName, replicas, warn)
 }
 
-// pollPerPod waits for the SND's status.perPodServices to publish
-// exactly `replicas` entries at status.observedGeneration ==
-// metadata.generation. The observed-gen check guards against stale
-// entries during scale-down where the controller has not yet pruned
-// the prior generation's entries.
-//
-// Terminal errors (Forbidden, Unauthorized, no CRD match) short-circuit
-// with a warning. NotFound on the SND itself is treated as transient —
-// the apply just landed and the engineer's client cache may not have
-// caught up. Timeout returns nil + warning; the apply itself is never
-// failed because per-pod URLs lagged.
+// pollPerPod is best-effort: timeout returns nil + warning, never fails
+// the apply. Terminal errors (Forbidden, Unauthorized, no CRD match)
+// short-circuit; NotFound is transient since apply just landed.
 func pollPerPod(ctx context.Context, getSND sndGetter, namespace, sndName string, replicas int, warn io.Writer) []PerPodEndpoint {
 	deadline := time.Now().Add(perPodPollTimeout)
 	var lastErr error
@@ -96,11 +75,9 @@ func pollPerPod(ctx context.Context, getSND sndGetter, namespace, sndName string
 	}
 }
 
-// isPerPodReady checks both shape and freshness: status.perPodServices
-// has exactly `replicas` entries AND status.observedGeneration matches
-// metadata.generation. Either condition alone is insufficient — a
-// scale-down race can leave a stale longer slice published against an
-// older observedGeneration.
+// isPerPodReady requires both len==replicas AND observedGeneration==
+// metadata.generation. The observedGen guard closes a scale-down race
+// where stale entries from the prior generation are still published.
 func isPerPodReady(u *unstructured.Unstructured, replicas int) bool {
 	observed, found, err := unstructured.NestedInt64(u.Object, "status", "observedGeneration")
 	if err != nil || !found {
@@ -116,9 +93,8 @@ func isPerPodReady(u *unstructured.Unstructured, replicas int) bool {
 	return len(raw) == replicas
 }
 
-// isTerminalError marks apiserver errors that retrying will not fix:
-// missing/wrong CRD version, RBAC denial. NotFound on the SND object
-// is *not* terminal — apply just landed, client cache may trail.
+// NotFound on the SND is *not* terminal — apply just landed, client
+// cache may trail.
 func isTerminalError(err error) bool {
 	if err == nil {
 		return false
@@ -132,9 +108,6 @@ func isTerminalError(err error) bool {
 	return false
 }
 
-// parsePerPodServices converts the controller's status.perPodServices
-// slice into dial-ready URLs. Order is preserved from the controller
-// (sorted by ordinal). Malformed entries are dropped.
 func parsePerPodServices(u *unstructured.Unstructured) []PerPodEndpoint {
 	if u == nil {
 		return nil

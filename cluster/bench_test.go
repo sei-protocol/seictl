@@ -292,7 +292,7 @@ func TestRunBenchUp(t *testing.T) {
 				t.Errorf("manifest action: got %q, want update (from stub)", m.Action)
 			}
 		}
-		// Size "s" → RPC SND replicas=1; SND name `${chainID}-rpc`.
+		// Size "s" → RPC SND replicas=1, name `${chainID}-rpc`.
 		if pollerSND != "bench-bdc-demo-rpc" {
 			t.Errorf("poller SND name: got %q, want bench-bdc-demo-rpc", pollerSND)
 		}

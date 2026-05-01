@@ -47,19 +47,13 @@ func (c *Client) GetJobSnapshot(ctx context.Context, namespace, name string) (Jo
 	return snap, nil
 }
 
-// sndGVR identifies the SeiNodeDeployment CRD. We resolve via dynamic
-// client + unstructured so seictl never imports the typed API surface
-// from sei-k8s-controller (would create a dep cycle with sidecar/client).
-//
-// One-way door: must stay in sync with the apiVersion in
-// cluster/templates/{rpc,rpc-snd}.yaml. A controller bump to v1beta1
-// surfaces here as meta.NoKindMatchError, which the poller treats as
-// a terminal error.
+// One-way door: must stay in sync with apiVersion in
+// cluster/templates/{rpc,rpc-snd}.yaml. Dynamic client (vs typed import)
+// avoids a dep cycle with sei-k8s-controller's sidecar/client.
 var sndGVR = schema.GroupVersionResource{Group: "sei.io", Version: "v1alpha1", Resource: "seinodedeployments"}
 
-// GetSND fetches a SeiNodeDeployment as Unstructured. Returns (nil, nil)
-// on NotFound so callers can distinguish "no SND yet" from a hard
-// apiserver error.
+// GetSND returns (nil, nil) on NotFound so callers distinguish "not
+// yet" from a hard error.
 func (c *Client) GetSND(ctx context.Context, namespace, name string) (*unstructured.Unstructured, error) {
 	cfg, err := c.flags.ToRESTConfig()
 	if err != nil {

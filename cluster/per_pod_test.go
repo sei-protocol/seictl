@@ -127,9 +127,7 @@ func TestIsPerPodReady(t *testing.T) {
 	})
 
 	t.Run("stale generation: observedGen < metaGen → not ready", func(t *testing.T) {
-		// Scale-down race: the controller has not yet pruned per-pod
-		// entries from the prior generation. Without the observedGen
-		// guard, this would falsely match.
+		// Scale-down race: stale entries from the prior generation would falsely match without the observedGen guard.
 		if isPerPodReady(sndStaleGeneration(8, 7, 3), 3) {
 			t.Errorf("stale generation SND must not be ready")
 		}
@@ -142,8 +140,6 @@ func TestIsPerPodReady(t *testing.T) {
 	})
 
 	t.Run("len mismatch: too many entries", func(t *testing.T) {
-		// Even if observedGen matches, an over-count means the controller
-		// has not yet pruned. Strict equality avoids a stale match.
 		if isPerPodReady(sndReady(1, 5), 3) {
 			t.Errorf("len(perPodServices)=5 vs replicas=3 must not be ready")
 		}
@@ -179,8 +175,6 @@ func TestIsTerminalError(t *testing.T) {
 	}
 }
 
-// withFastPolling shrinks timeouts for sub-second test runs. Returns a
-// cleanup that restores the prior values.
 func withFastPolling(t *testing.T, timeout, interval time.Duration) {
 	t.Helper()
 	oldTimeout := perPodPollTimeout
@@ -194,8 +188,7 @@ func withFastPolling(t *testing.T, timeout, interval time.Duration) {
 }
 
 func TestPollPerPod_TerminalErrorShortCircuits(t *testing.T) {
-	// A terminal error must NOT wait for the deadline. Set a 30s timeout
-	// but the test must complete in ms — proves the short-circuit fires.
+	// 30s timeout but test must complete in ms; proves short-circuit fires.
 	withFastPolling(t, 30*time.Second, 10*time.Millisecond)
 	gr := schema.GroupResource{Group: "sei.io", Resource: "seinodedeployments"}
 	getSND := func(context.Context, string, string) (*unstructured.Unstructured, error) {
@@ -217,7 +210,7 @@ func TestPollPerPod_TerminalErrorShortCircuits(t *testing.T) {
 }
 
 func TestPollPerPod_RetriesUntilReady(t *testing.T) {
-	// Simulate three reconcile ticks: nothing → partial → ready.
+	// Three reconcile ticks: nothing → partial → ready.
 	withFastPolling(t, 5*time.Second, 5*time.Millisecond)
 	var calls atomic.Int32
 	getSND := func(context.Context, string, string) (*unstructured.Unstructured, error) {
@@ -228,9 +221,7 @@ func TestPollPerPod_RetriesUntilReady(t *testing.T) {
 				"status":   map[string]any{},
 			}}, nil
 		case 2:
-			// Partial: 1 of 3 entries published.
-			u := sndReady(1, 1)
-			return u, nil
+			return sndReady(1, 1), nil
 		default:
 			return sndReady(1, 3), nil
 		}
@@ -246,9 +237,6 @@ func TestPollPerPod_RetriesUntilReady(t *testing.T) {
 }
 
 func TestPollPerPod_StaleGenerationKeepsPolling(t *testing.T) {
-	// Stale observedGeneration with the right entry count must NOT match.
-	// We cap the timeout short and assert the call count keeps climbing
-	// (i.e., the poller didn't return early).
 	withFastPolling(t, 100*time.Millisecond, 5*time.Millisecond)
 	var calls atomic.Int32
 	getSND := func(context.Context, string, string) (*unstructured.Unstructured, error) {
@@ -269,8 +257,6 @@ func TestPollPerPod_StaleGenerationKeepsPolling(t *testing.T) {
 }
 
 func TestPollPerPod_NotFoundIsTransient(t *testing.T) {
-	// NotFound on the SND itself (apply just landed; client cache trails)
-	// must keep polling, not short-circuit.
 	withFastPolling(t, 5*time.Second, 5*time.Millisecond)
 	gr := schema.GroupResource{Group: "sei.io", Resource: "seinodedeployments"}
 	var calls atomic.Int32
@@ -293,7 +279,6 @@ func TestPollPerPod_ContextCancelExitsCleanly(t *testing.T) {
 	withFastPolling(t, 30*time.Second, 50*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	getSND := func(context.Context, string, string) (*unstructured.Unstructured, error) {
-		// Never resolve.
 		return &unstructured.Unstructured{Object: map[string]any{
 			"metadata": map[string]any{"generation": int64(1)},
 		}}, nil
@@ -314,5 +299,4 @@ func TestPollPerPod_ContextCancelExitsCleanly(t *testing.T) {
 	}
 }
 
-// Compile-time guard: pollPerPodFromCluster must satisfy perPodPoller.
 var _ perPodPoller = pollPerPodFromCluster

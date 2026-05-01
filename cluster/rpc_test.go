@@ -240,7 +240,6 @@ func TestRunRPCUp(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runRPCUpCmd: %v\n%s", err, buf.String())
 		}
-		// Envelope must not include the perPod key when nil + omitempty.
 		if strings.Contains(buf.String(), `"perPod"`) {
 			t.Errorf("dry-run envelope unexpectedly contains perPod field: %s", buf.String())
 		}

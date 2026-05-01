@@ -385,8 +385,7 @@ func deriveBenchEndpoints(chainID, namespace string) Endpoints {
 	}
 }
 
-// benchRPCSNDName mirrors templates/rpc-snd.yaml's metadata.name.
-// Read-side and render-side must stay in sync.
+// Must match metadata.name in templates/rpc-snd.yaml.
 func benchRPCSNDName(chainID string) string {
 	return chainID + "-rpc"
 }
