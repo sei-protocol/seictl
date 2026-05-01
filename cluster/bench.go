@@ -83,6 +83,7 @@ type benchDeps struct {
 	apply          func(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
 	getJobSnapshot func(ctx context.Context, kc *kube.Client, namespace, name string) kube.JobSnapshot
 	getCaller      func(context.Context) (*aws.Caller, *clioutput.Error)
+	pollPerPod     perPodPoller
 }
 
 var defaultBenchDeps = benchDeps{
@@ -92,6 +93,7 @@ var defaultBenchDeps = benchDeps{
 	apply:          applyToCluster,
 	getJobSnapshot: getJobSnapshotFromCluster,
 	getCaller:      aws.GetCaller,
+	pollPerPod:     pollPerPodFromCluster,
 }
 
 func applyToCluster(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
@@ -232,6 +234,9 @@ func runBenchUp(ctx context.Context, in benchUpInput, out io.Writer, deps benchD
 		res.Manifests = mergeApplyResults(manifests, applyResults)
 		now := time.Now().UTC()
 		res.AppliedAt = &now
+		if deps.pollPerPod != nil {
+			res.Endpoints.PerPod = deps.pollPerPod(ctx, kc, namespace, benchRPCSNDName(chainID), sizeProfile.RPC, os.Stderr)
+		}
 	}
 
 	if err := clioutput.Emit(out, clioutput.KindBenchUpResult, res); err != nil {
@@ -378,6 +383,12 @@ func deriveBenchEndpoints(chainID, namespace string) Endpoints {
 		TendermintRpc: []string{fmt.Sprintf("http://%s:%d", host, seiconfig.PortRPC)},
 		EvmJsonRpc:    []string{fmt.Sprintf("http://%s:%d", host, seiconfig.PortEVMHTTP)},
 	}
+}
+
+// benchRPCSNDName mirrors templates/rpc-snd.yaml's metadata.name.
+// Read-side and render-side must stay in sync.
+func benchRPCSNDName(chainID string) string {
+	return chainID + "-rpc"
 }
 
 // rpcEndpointsJSON formats the seiload profile's `endpoints` array

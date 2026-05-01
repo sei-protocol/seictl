@@ -49,6 +49,7 @@ type rpcDeps struct {
 	newKubeClient func(kube.Options) (*kube.Client, *clioutput.Error)
 	apply         func(ctx context.Context, kc *kube.Client, fieldOwner, namespace string, docs [][]byte) ([]kube.ApplyResult, *clioutput.Error)
 	getCaller     func(context.Context) (*aws.Caller, *clioutput.Error)
+	pollPerPod    perPodPoller
 }
 
 var defaultRPCDeps = rpcDeps{
@@ -57,6 +58,7 @@ var defaultRPCDeps = rpcDeps{
 	newKubeClient: kube.New,
 	apply:         applyToCluster,
 	getCaller:     aws.GetCaller,
+	pollPerPod:    pollPerPodFromCluster,
 }
 
 var RPCCmd = cli.Command{
@@ -90,7 +92,7 @@ var RPCCmd = cli.Command{
 }
 
 func runRPCUpCmd(ctx context.Context, in rpcUpInput, out io.Writer, deps rpcDeps) error {
-	res, err := runRPCUp(ctx, in, deps)
+	res, err := runRPCUp(ctx, in, os.Stderr, deps)
 	if err != nil {
 		return failRPCUp(out, err)
 	}
@@ -101,7 +103,7 @@ func runRPCUpCmd(ctx context.Context, in rpcUpInput, out io.Writer, deps rpcDeps
 	return nil
 }
 
-func runRPCUp(ctx context.Context, in rpcUpInput, deps rpcDeps) (rpcUpResult, *clioutput.Error) {
+func runRPCUp(ctx context.Context, in rpcUpInput, warn io.Writer, deps rpcDeps) (rpcUpResult, *clioutput.Error) {
 	cfg, idErr := loadConfig(deps.configPath)
 	if idErr != nil {
 		return rpcUpResult{}, idErr
@@ -162,8 +164,17 @@ func runRPCUp(ctx context.Context, in rpcUpInput, deps rpcDeps) (rpcUpResult, *c
 		res.Manifests = mergeApplyResults(manifests, applyResults)
 		now := time.Now().UTC()
 		res.AppliedAt = &now
+		if deps.pollPerPod != nil {
+			res.Endpoints.PerPod = deps.pollPerPod(ctx, kc, namespace, rpcSNDName(in.ChainID, in.Name), in.Replicas, warn)
+		}
 	}
 	return res, nil
+}
+
+// rpcSNDName mirrors templates/rpc.yaml's metadata.name. Read-side and
+// render-side must stay in sync.
+func rpcSNDName(chainID, name string) string {
+	return fmt.Sprintf("%s-rpc-%s", chainID, name)
 }
 
 func renderRPCManifests(alias, chainID, name, namespace, seidImage, digestShort string, replicas int) ([][]byte, []render.ManifestRef, *clioutput.Error) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -145,8 +146,11 @@ func TestRunRPCUp(t *testing.T) {
 		}
 	})
 
-	t.Run("apply happy path sets appliedAt", func(t *testing.T) {
+	t.Run("apply happy path sets appliedAt and populates perPod from poller", func(t *testing.T) {
 		path := writeConfigFile(t, "bdc")
+		var pollerCalled bool
+		var gotSND string
+		var gotReplicas int
 		deps := rpcDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) { return rpcTestDigest, nil },
 			configPath:    func() (string, error) { return path, nil },
@@ -163,6 +167,18 @@ func TestRunRPCUp(t *testing.T) {
 				return []kube.ApplyResult{{Kind: "SeiNodeDeployment", Name: "stub", Namespace: "eng-bdc", Action: "create"}}, nil
 			},
 			getCaller: okCaller,
+			pollPerPod: func(_ context.Context, _ *kube.Client, ns, sndName string, replicas int, _ io.Writer) []PerPodEndpoint {
+				pollerCalled = true
+				gotSND = sndName
+				gotReplicas = replicas
+				if ns != "eng-bdc" {
+					t.Errorf("poller namespace: got %q, want eng-bdc", ns)
+				}
+				return []PerPodEndpoint{
+					{Name: "bench-bdc-qa-rpc-primary-0", EvmJsonRpc: "http://bench-bdc-qa-rpc-primary-0.eng-bdc.svc:8545", EvmWs: "ws://bench-bdc-qa-rpc-primary-0.eng-bdc.svc:8546"},
+					{Name: "bench-bdc-qa-rpc-primary-1", EvmJsonRpc: "http://bench-bdc-qa-rpc-primary-1.eng-bdc.svc:8545", EvmWs: "ws://bench-bdc-qa-rpc-primary-1.eng-bdc.svc:8546"},
+				}
+			},
 		}
 		var buf bytes.Buffer
 		err := runRPCUpCmd(context.Background(), rpcUpInput{
@@ -181,6 +197,52 @@ func TestRunRPCUp(t *testing.T) {
 		_ = json.Unmarshal(env.Data, &data)
 		if data.AppliedAt == nil {
 			t.Errorf("appliedAt should be set on --apply")
+		}
+		if !pollerCalled {
+			t.Errorf("perPod poller should be called on --apply")
+		}
+		if gotSND != "bench-bdc-qa-rpc-primary" {
+			t.Errorf("poller SND name: got %q, want bench-bdc-qa-rpc-primary", gotSND)
+		}
+		if gotReplicas != 2 {
+			t.Errorf("poller replicas: got %d, want 2", gotReplicas)
+		}
+		if len(data.Endpoints.PerPod) != 2 {
+			t.Fatalf("perPod entries: got %d, want 2", len(data.Endpoints.PerPod))
+		}
+		if data.Endpoints.PerPod[0].EvmWs != "ws://bench-bdc-qa-rpc-primary-0.eng-bdc.svc:8546" {
+			t.Errorf("perPod[0].evmWs: got %q", data.Endpoints.PerPod[0].EvmWs)
+		}
+	})
+
+	t.Run("dry-run skips perPod poller and omits perPod field", func(t *testing.T) {
+		path := writeConfigFile(t, "bdc")
+		deps := rpcDeps{
+			resolveDigest: func(context.Context, string) (string, *clioutput.Error) { return rpcTestDigest, nil },
+			configPath:    func() (string, error) { return path, nil },
+			apply: func(context.Context, *kube.Client, string, string, [][]byte) ([]kube.ApplyResult, *clioutput.Error) {
+				t.Fatalf("apply should not run on dry-run")
+				return nil, nil
+			},
+			getCaller: okCaller,
+			pollPerPod: func(context.Context, *kube.Client, string, string, int, io.Writer) []PerPodEndpoint {
+				t.Fatalf("poller should not run on dry-run")
+				return nil
+			},
+		}
+		var buf bytes.Buffer
+		err := runRPCUpCmd(context.Background(), rpcUpInput{
+			ChainID:  "bench-bdc-qa",
+			Name:     "primary",
+			Image:    "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:v1",
+			Replicas: 2,
+		}, &buf, deps)
+		if err != nil {
+			t.Fatalf("runRPCUpCmd: %v\n%s", err, buf.String())
+		}
+		// Envelope must not include the perPod key when nil + omitempty.
+		if strings.Contains(buf.String(), `"perPod"`) {
+			t.Errorf("dry-run envelope unexpectedly contains perPod field: %s", buf.String())
 		}
 	})
 

@@ -23,8 +23,9 @@ import (
 // Field names mirror downstream env-var contracts (SEI_TENDERMINT_RPC,
 // SEI_EVM_JSON_RPC) — rename = break two contracts.
 type Endpoints struct {
-	TendermintRpc []string `json:"tendermintRpc"`
-	EvmJsonRpc    []string `json:"evmJsonRpc,omitempty"`
+	TendermintRpc []string         `json:"tendermintRpc"`
+	EvmJsonRpc    []string         `json:"evmJsonRpc,omitempty"`
+	PerPod        []PerPodEndpoint `json:"perPod,omitempty"`
 }
 
 type chainUpResult struct {
