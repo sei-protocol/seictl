@@ -5,6 +5,9 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -42,4 +45,30 @@ func (c *Client) GetJobSnapshot(ctx context.Context, namespace, name string) (Jo
 		snap.DeadlineSeconds = *j.Spec.ActiveDeadlineSeconds
 	}
 	return snap, nil
+}
+
+// One-way door: must stay in sync with apiVersion in
+// cluster/templates/{rpc,rpc-snd}.yaml. Dynamic client (vs typed import)
+// avoids a dep cycle with sei-k8s-controller's sidecar/client.
+var sndGVR = schema.GroupVersionResource{Group: "sei.io", Version: "v1alpha1", Resource: "seinodedeployments"}
+
+// GetSND returns (nil, nil) on NotFound so callers distinguish "not
+// yet" from a hard error.
+func (c *Client) GetSND(ctx context.Context, namespace, name string) (*unstructured.Unstructured, error) {
+	cfg, err := c.flags.ToRESTConfig()
+	if err != nil {
+		return nil, err
+	}
+	dyn, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	u, err := dyn.Resource(sndGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return u, nil
 }

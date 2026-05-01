@@ -20,11 +20,14 @@ import (
 	"github.com/sei-protocol/seictl/cluster/internal/validate"
 )
 
-// Field names mirror downstream env-var contracts (SEI_TENDERMINT_RPC,
-// SEI_EVM_JSON_RPC) — rename = break two contracts.
+// TendermintRpc/EvmJsonRpc field names mirror downstream env-var
+// contracts (SEI_TENDERMINT_RPC, SEI_EVM_JSON_RPC) — renaming breaks
+// them. PerPod has no env-var contract; consumers needing per-replica
+// dial (e.g., WebSocket, which kube-proxy can't load-balance) read it.
 type Endpoints struct {
-	TendermintRpc []string `json:"tendermintRpc"`
-	EvmJsonRpc    []string `json:"evmJsonRpc,omitempty"`
+	TendermintRpc []string         `json:"tendermintRpc"`
+	EvmJsonRpc    []string         `json:"evmJsonRpc,omitempty"`
+	PerPod        []PerPodEndpoint `json:"perPod,omitempty"`
 }
 
 type chainUpResult struct {

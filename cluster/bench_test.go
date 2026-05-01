@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -215,9 +216,11 @@ func TestRunBenchUp(t *testing.T) {
 		}
 	})
 
-	t.Run("apply merges ApplyResult actions and sets appliedAt", func(t *testing.T) {
+	t.Run("apply merges ApplyResult actions, sets appliedAt, and queries the rpc SND for per-pod URLs", func(t *testing.T) {
 		path := writeConfigFile(t, "bdc")
 		var capturedDocs [][]byte
+		var pollerSND string
+		var pollerReplicas int
 		deps := benchDeps{
 			resolveDigest: func(context.Context, string) (string, *clioutput.Error) {
 				return benchTestDigest, nil
@@ -246,6 +249,13 @@ func TestRunBenchUp(t *testing.T) {
 					}
 				}
 				return out, nil
+			},
+			pollPerPod: func(_ context.Context, _ *kube.Client, _, sndName string, replicas int, _ io.Writer) []PerPodEndpoint {
+				pollerSND = sndName
+				pollerReplicas = replicas
+				return []PerPodEndpoint{
+					{Name: "bench-bdc-demo-rpc-0", EvmJsonRpc: "http://bench-bdc-demo-rpc-0.eng-bdc.svc:8545", EvmWs: "ws://bench-bdc-demo-rpc-0.eng-bdc.svc:8546"},
+				}
 			},
 		}
 
@@ -281,6 +291,16 @@ func TestRunBenchUp(t *testing.T) {
 			if m.Action != "update" {
 				t.Errorf("manifest action: got %q, want update (from stub)", m.Action)
 			}
+		}
+		// Size "s" → RPC SND replicas=1, name `${chainID}-rpc`.
+		if pollerSND != "bench-bdc-demo-rpc" {
+			t.Errorf("poller SND name: got %q, want bench-bdc-demo-rpc", pollerSND)
+		}
+		if pollerReplicas != 1 {
+			t.Errorf("poller replicas: got %d, want 1", pollerReplicas)
+		}
+		if len(data.Endpoints.PerPod) != 1 {
+			t.Errorf("perPod entries: got %d, want 1", len(data.Endpoints.PerPod))
 		}
 	})
 
