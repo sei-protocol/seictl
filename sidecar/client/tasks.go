@@ -9,18 +9,13 @@ import (
 	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
-// seiBech32HRP is the human-readable prefix on the Sei chain. The
-// validate path uses bech32.Decode to also confirm the checksum,
-// catching off-by-one typos that a prefix check alone would miss.
 const seiBech32HRP = "sei"
 
-// validateSeiAccountAddress performs a strict bech32 decode + HRP check.
-// Cheaper than sei-cosmos's sdk.AccAddressFromBech32 (~one tiny dep vs
-// the full cosmos-sdk pull). The sidecar still calls sdk.AccAddressFromBech32
-// server-side for SDK-shape conformance.
+// btcutil's bech32 decode validates checksum + alphabet; cheaper than
+// pulling sei-cosmos's sdk.AccAddressFromBech32 just for client-side
+// validation. Sidecar still does the SDK-shape check server-side.
 func validateSeiAccountAddress(addr string) error {
-	// 1023 is bech32's spec max length; well above any realistic sei addr.
-	hrp, _, err := bech32.Decode(addr, 1023)
+	hrp, _, err := bech32.Decode(addr, 1023) // bech32 spec max length
 	if err != nil {
 		return fmt.Errorf("address %q: %w", addr, err)
 	}
@@ -649,15 +644,14 @@ type GenesisNodeParam struct {
 	Name string `json:"name"`
 }
 
-// GenesisAccountEntry funds a non-validator account at genesis. Mirrors
-// SeiNodeDeployment.spec.genesis.accounts[] on the controller-CRD side.
+// GenesisAccountEntry mirrors SeiNodeDeployment.spec.genesis.accounts[]
+// on the controller-CRD side.
 type GenesisAccountEntry struct {
 	Address string `json:"address"`
 	Balance string `json:"balance"`
 }
 
-// genesisAccountsToWire returns nil (omits the field) when accounts is
-// empty so old sidecars without the Accounts field decode unchanged.
+// nil omits the wire field so old sidecars decode the request unchanged.
 func genesisAccountsToWire(accounts []GenesisAccountEntry) []interface{} {
 	if len(accounts) == 0 {
 		return nil
@@ -669,8 +663,7 @@ func genesisAccountsToWire(accounts []GenesisAccountEntry) []interface{} {
 	return out
 }
 
-// validateGenesisAccounts strict-checks each address; balance shape is
-// validated server-side via sdk.ParseCoinsNormalized.
+// Balance shape is validated server-side via sdk.ParseCoinsNormalized.
 func validateGenesisAccounts(prefix string, accounts []GenesisAccountEntry) error {
 	for i, a := range accounts {
 		if a.Address == "" {
@@ -729,10 +722,9 @@ func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
 	return req
 }
 
-// AssembleGenesisForkTask assembles a fork-mode chain genesis: the
-// sidecar downloads exported state for SourceChainID, strips old
-// validators, rewrites identity to ChainID, and runs collect-gentxs
-// over the new validator set.
+// AssembleGenesisForkTask is the fork-mode counterpart of
+// AssembleAndUploadGenesisTask. The sidecar forks SourceChainID's
+// exported state into ChainID.
 type AssembleGenesisForkTask struct {
 	TaskMeta
 	SourceChainID  string
