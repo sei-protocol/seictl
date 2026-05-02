@@ -127,6 +127,16 @@ func TestAssembleGenesisForkTask_Validate(t *testing.T) {
 	}
 }
 
+func TestAssembleGenesisForkTask_ToTaskRequest_OmitsEmpty(t *testing.T) {
+	req := validForkTask(nil).ToTaskRequest()
+	if req.Params == nil {
+		t.Fatal("Params nil")
+	}
+	if _, present := (*req.Params)["accounts"]; present {
+		t.Errorf("nil accounts should omit field; got: %+v", *req.Params)
+	}
+}
+
 func TestAssembleGenesisForkTask_ToTaskRequest(t *testing.T) {
 	accs := []GenesisAccountEntry{{Address: validSeiAddr1, Balance: "5usei"}}
 	req := validForkTask(accs).ToTaskRequest()

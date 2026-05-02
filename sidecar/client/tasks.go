@@ -651,7 +651,6 @@ type GenesisAccountEntry struct {
 	Balance string `json:"balance"`
 }
 
-// nil omits the wire field so old sidecars decode the request unchanged.
 func genesisAccountsToWire(accounts []GenesisAccountEntry) []interface{} {
 	if len(accounts) == 0 {
 		return nil
