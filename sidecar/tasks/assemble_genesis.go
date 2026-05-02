@@ -284,21 +284,17 @@ func (a *GenesisAssembler) addMissingGenesisAccounts(accountBalance string) erro
 		return nil
 	}
 
-	if err := writeBackAuthAndBank("assemble-genesis", cdc, genFile, genDoc, appState, authGenState, accs, bankGenState); err != nil {
-		return err
+	if err := writeBackAuthAndBank(cdc, genFile, genDoc, appState, authGenState, accs, bankGenState); err != nil {
+		return fmt.Errorf("assemble-genesis: %w", err)
 	}
 
 	assembleLog.Info("genesis accounts reconciled", "added", added, "total", len(accs))
 	return nil
 }
 
-// addExternalGenesisAccounts must run AFTER addMissingGenesisAccounts so
-// validator-derived accounts are visible for collision detection.
-// Collisions hard-fail: an address already in auth.accounts is almost
-// certainly an operator config error.
-//
-// Supply is not updated here — non-fork starts with empty Supply and
-// bank.InitGenesis recomputes from balances. The fork mirror updates it.
+// Run after addMissingGenesisAccounts so collisions catch validator-
+// derived addresses. Non-fork's empty Supply lets bank.InitGenesis
+// recompute from balances; the fork mirror updates Supply explicitly.
 func (a *GenesisAssembler) addExternalGenesisAccounts(accounts []GenesisAccountEntry) error {
 	if len(accounts) == 0 {
 		return nil
@@ -342,8 +338,8 @@ func (a *GenesisAssembler) addExternalGenesisAccounts(accounts []GenesisAccountE
 		assembleLog.Info("added external genesis account", "address", addr.String(), "balance", entry.Balance)
 	}
 
-	if err := writeBackAuthAndBank("assemble-genesis", cdc, genFile, genDoc, appState, authGenState, accs, bankGenState); err != nil {
-		return err
+	if err := writeBackAuthAndBank(cdc, genFile, genDoc, appState, authGenState, accs, bankGenState); err != nil {
+		return fmt.Errorf("assemble-genesis: %w", err)
 	}
 	return nil
 }

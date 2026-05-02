@@ -205,7 +205,7 @@ func seedAuthAccount(t *testing.T, genFile, bech32 string) {
 	}
 	accs = append(accs, authtypes.NewBaseAccount(addr, nil, 0, 0))
 	bank := banktypes.GetGenesisStateFromAppState(cdc, appState)
-	if err := writeBackAuthAndBank("test-seed", cdc, genFile, genDoc, appState, authGenState, accs, bank); err != nil {
+	if err := writeBackAuthAndBank(cdc, genFile, genDoc, appState, authGenState, accs, bank); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 }

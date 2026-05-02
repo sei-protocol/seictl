@@ -407,8 +407,8 @@ func (a *GenesisForkAssembler) addMissingGenesisAccounts(accountBalance string) 
 	}
 
 	if added > 0 {
-		if err := writeBackAuthAndBank("assemble-genesis-fork", cdc, genFile, genDoc, appState, authGenState, accs, bankGenState); err != nil {
-			return err
+		if err := writeBackAuthAndBank(cdc, genFile, genDoc, appState, authGenState, accs, bankGenState); err != nil {
+			return fmt.Errorf("assemble-genesis-fork: %w", err)
 		}
 	}
 	forkLog.Info("genesis accounts reconciled", "added", added)
@@ -463,8 +463,8 @@ func (a *GenesisForkAssembler) addExternalGenesisAccounts(accounts []GenesisAcco
 		forkLog.Info("added external genesis account", "address", addr.String(), "balance", entry.Balance)
 	}
 
-	if err := writeBackAuthAndBank("assemble-genesis-fork", cdc, genFile, genDoc, appState, authGenState, accs, bankGenState); err != nil {
-		return err
+	if err := writeBackAuthAndBank(cdc, genFile, genDoc, appState, authGenState, accs, bankGenState); err != nil {
+		return fmt.Errorf("assemble-genesis-fork: %w", err)
 	}
 	return nil
 }

@@ -13,9 +13,8 @@ import (
 )
 
 // writeBackAuthAndBank serializes mutated auth + bank state and exports
-// the genesis file. `prefix` flavors error messages with the calling task.
+// the genesis file. Callers wrap the returned error with task context.
 func writeBackAuthAndBank(
-	prefix string,
 	cdc codec.Codec,
 	genFile string,
 	genDoc *tmtypes.GenesisDoc,
@@ -27,30 +26,30 @@ func writeBackAuthAndBank(
 	accs = authtypes.SanitizeGenesisAccounts(accs)
 	genAccs, err := authtypes.PackAccounts(accs)
 	if err != nil {
-		return fmt.Errorf("%s: packing accounts: %w", prefix, err)
+		return fmt.Errorf("packing accounts: %w", err)
 	}
 	authGenState.Accounts = genAccs
 	authStateBz, err := cdc.MarshalAsJSON(&authGenState)
 	if err != nil {
-		return fmt.Errorf("%s: marshaling auth state: %w", prefix, err)
+		return fmt.Errorf("marshaling auth state: %w", err)
 	}
 	appState[authtypes.ModuleName] = authStateBz
 
 	bankGenState.Balances = banktypes.SanitizeGenesisBalances(bankGenState.Balances)
 	bankStateBz, err := cdc.MarshalAsJSON(bankGenState)
 	if err != nil {
-		return fmt.Errorf("%s: marshaling bank state: %w", prefix, err)
+		return fmt.Errorf("marshaling bank state: %w", err)
 	}
 	appState[banktypes.ModuleName] = bankStateBz
 
 	appStateJSON, err := json.Marshal(appState)
 	if err != nil {
-		return fmt.Errorf("%s: marshaling app state: %w", prefix, err)
+		return fmt.Errorf("marshaling app state: %w", err)
 	}
 	genDoc.AppState = appStateJSON
 
 	if err := genutil.ExportGenesisFile(genDoc, genFile); err != nil {
-		return fmt.Errorf("%s: writing genesis: %w", prefix, err)
+		return fmt.Errorf("writing genesis: %w", err)
 	}
 	return nil
 }
