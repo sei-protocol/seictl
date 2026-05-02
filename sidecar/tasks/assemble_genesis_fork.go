@@ -35,11 +35,12 @@ const forkAssembleMarkerFile = ".sei-sidecar-fork-assemble-done"
 // The bucket and region come from the assembler's constructor (platform env vars).
 // sourceChainId tells the assembler where to find the exported state.
 type AssembleGenesisForkRequest struct {
-	SourceChainID  string              `json:"sourceChainId"`
-	ChainID        string              `json:"chainId"`
-	AccountBalance string              `json:"accountBalance"`
-	Namespace      string              `json:"namespace"`
-	Nodes          []AssembleNodeEntry `json:"nodes"`
+	SourceChainID  string                `json:"sourceChainId"`
+	ChainID        string                `json:"chainId"`
+	AccountBalance string                `json:"accountBalance"`
+	Namespace      string                `json:"namespace"`
+	Nodes          []AssembleNodeEntry   `json:"nodes"`
+	Accounts       []GenesisAccountEntry `json:"accounts,omitempty"`
 }
 
 func (r AssembleGenesisForkRequest) nodeNames() []string {
@@ -141,6 +142,9 @@ func (a *GenesisForkAssembler) assemble(ctx context.Context, req AssembleGenesis
 		return err
 	}
 	if err := a.addMissingGenesisAccounts(req.AccountBalance); err != nil {
+		return err
+	}
+	if err := a.addExternalGenesisAccounts(req.Accounts); err != nil {
 		return err
 	}
 	if err := a.collectGentxs(); err != nil {
@@ -403,35 +407,65 @@ func (a *GenesisForkAssembler) addMissingGenesisAccounts(accountBalance string) 
 	}
 
 	if added > 0 {
-		accs = authtypes.SanitizeGenesisAccounts(accs)
-		genAccs, err := authtypes.PackAccounts(accs)
-		if err != nil {
-			return fmt.Errorf("assemble-genesis-fork: packing accounts: %w", err)
-		}
-		authGenState.Accounts = genAccs
-		authStateBz, err := cdc.MarshalAsJSON(&authGenState)
-		if err != nil {
-			return fmt.Errorf("assemble-genesis-fork: marshaling auth state: %w", err)
-		}
-		appState[authtypes.ModuleName] = authStateBz
-
-		bankGenState.Balances = banktypes.SanitizeGenesisBalances(bankGenState.Balances)
-		bankStateBz, err := cdc.MarshalAsJSON(bankGenState)
-		if err != nil {
-			return fmt.Errorf("assemble-genesis-fork: marshaling bank state: %w", err)
-		}
-		appState[banktypes.ModuleName] = bankStateBz
-
-		appStateJSON, err := json.Marshal(appState)
-		if err != nil {
-			return fmt.Errorf("assemble-genesis-fork: marshaling app state: %w", err)
-		}
-		genDoc.AppState = appStateJSON
-		if err := genutil.ExportGenesisFile(genDoc, genFile); err != nil {
-			return fmt.Errorf("assemble-genesis-fork: writing genesis: %w", err)
+		if err := writeBackAuthAndBank("assemble-genesis-fork", cdc, genFile, genDoc, appState, authGenState, accs, bankGenState); err != nil {
+			return err
 		}
 	}
 	forkLog.Info("genesis accounts reconciled", "added", added)
+	return nil
+}
+
+// Fork mirror of GenesisAssembler.addExternalGenesisAccounts. Updates
+// bankGenState.Supply explicitly — fork inherits a non-empty Supply,
+// and bank.InitGenesis panics on Supply != totalSupply
+// (sei-cosmos/x/bank/keeper/genesis.go:48).
+func (a *GenesisForkAssembler) addExternalGenesisAccounts(accounts []GenesisAccountEntry) error {
+	if len(accounts) == 0 {
+		return nil
+	}
+
+	cdc, _ := makeCodec()
+	ensureBech32()
+
+	genFile := filepath.Join(a.homeDir, "config", "genesis.json")
+	appState, genDoc, err := genutiltypes.GenesisStateFromGenFile(genFile)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis-fork: reading genesis: %w", err)
+	}
+
+	authGenState := authtypes.GetGenesisStateFromAppState(cdc, appState)
+	accs, err := authtypes.UnpackAccounts(authGenState.Accounts)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis-fork: unpacking accounts: %w", err)
+	}
+
+	bankGenState := banktypes.GetGenesisStateFromAppState(cdc, appState)
+
+	for _, entry := range accounts {
+		addr, err := sdk.AccAddressFromBech32(entry.Address)
+		if err != nil {
+			return fmt.Errorf("assemble-genesis-fork: external account %q: %w", entry.Address, err)
+		}
+		if accs.Contains(addr) {
+			return fmt.Errorf("assemble-genesis-fork: external account %s collides with an existing genesis account", addr.String())
+		}
+		coins, err := sdk.ParseCoinsNormalized(entry.Balance)
+		if err != nil {
+			return fmt.Errorf("assemble-genesis-fork: external account %s balance %q: %w", addr.String(), entry.Balance, err)
+		}
+
+		accs = append(accs, authtypes.NewBaseAccount(addr, nil, 0, 0))
+		bankGenState.Balances = append(bankGenState.Balances, banktypes.Balance{
+			Address: addr.String(),
+			Coins:   coins.Sort(),
+		})
+		bankGenState.Supply = bankGenState.Supply.Add(coins...)
+		forkLog.Info("added external genesis account", "address", addr.String(), "balance", entry.Balance)
+	}
+
+	if err := writeBackAuthAndBank("assemble-genesis-fork", cdc, genFile, genDoc, appState, authGenState, accs, bankGenState); err != nil {
+		return err
+	}
 	return nil
 }
 
