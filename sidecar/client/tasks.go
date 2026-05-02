@@ -3,10 +3,27 @@ package client
 import (
 	"fmt"
 
+	"github.com/cosmos/btcutil/bech32"
 	"github.com/google/uuid"
 	seiconfig "github.com/sei-protocol/sei-config"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 )
+
+const seiBech32HRP = "sei"
+
+// btcutil's bech32 decode validates checksum + alphabet; cheaper than
+// pulling sei-cosmos's sdk.AccAddressFromBech32 just for client-side
+// validation. Sidecar still does the SDK-shape check server-side.
+func validateSeiAccountAddress(addr string) error {
+	hrp, _, err := bech32.Decode(addr, 1023) // bech32 spec max length
+	if err != nil {
+		return fmt.Errorf("address %q: %w", addr, err)
+	}
+	if hrp != seiBech32HRP {
+		return fmt.Errorf("address %q: hrp %q, expected %q", addr, hrp, seiBech32HRP)
+	}
+	return nil
+}
 
 // TaskBuilder is implemented by every typed task struct. It converts a
 // strongly-typed task description into the generic TaskRequest wire format
@@ -627,6 +644,40 @@ type GenesisNodeParam struct {
 	Name string `json:"name"`
 }
 
+// GenesisAccountEntry mirrors SeiNodeDeployment.spec.genesis.accounts[]
+// on the controller-CRD side.
+type GenesisAccountEntry struct {
+	Address string `json:"address"`
+	Balance string `json:"balance"`
+}
+
+func genesisAccountsToWire(accounts []GenesisAccountEntry) []interface{} {
+	if len(accounts) == 0 {
+		return nil
+	}
+	out := make([]interface{}, len(accounts))
+	for i, a := range accounts {
+		out[i] = map[string]interface{}{"address": a.Address, "balance": a.Balance}
+	}
+	return out
+}
+
+// Balance shape is validated server-side via sdk.ParseCoinsNormalized.
+func validateGenesisAccounts(prefix string, accounts []GenesisAccountEntry) error {
+	for i, a := range accounts {
+		if a.Address == "" {
+			return fmt.Errorf("%s: accounts[%d] missing required field Address", prefix, i)
+		}
+		if a.Balance == "" {
+			return fmt.Errorf("%s: accounts[%d] missing required field Balance", prefix, i)
+		}
+		if err := validateSeiAccountAddress(a.Address); err != nil {
+			return fmt.Errorf("%s: accounts[%d]: %w", prefix, i, err)
+		}
+	}
+	return nil
+}
+
 // AssembleAndUploadGenesisTask collects per-node artifacts and produces final genesis.json.
 // S3 coordinates are derived by the sidecar from its environment.
 type AssembleAndUploadGenesisTask struct {
@@ -634,6 +685,7 @@ type AssembleAndUploadGenesisTask struct {
 	AccountBalance string
 	Namespace      string
 	Nodes          []GenesisNodeParam
+	Accounts       []GenesisAccountEntry
 }
 
 func (t AssembleAndUploadGenesisTask) TaskType() string { return TaskTypeAssembleGenesis }
@@ -648,7 +700,7 @@ func (t AssembleAndUploadGenesisTask) Validate() error {
 	if len(t.Nodes) == 0 {
 		return fmt.Errorf("assemble-and-upload-genesis: at least one node is required")
 	}
-	return nil
+	return validateGenesisAccounts("assemble-and-upload-genesis", t.Accounts)
 }
 
 func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
@@ -660,6 +712,63 @@ func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
 		"accountBalance": t.AccountBalance,
 		"namespace":      t.Namespace,
 		"nodes":          nodes,
+	}
+	if accounts := genesisAccountsToWire(t.Accounts); accounts != nil {
+		p["accounts"] = accounts
+	}
+	req := TaskRequest{Type: t.TaskType(), Params: &p}
+	t.applyMeta(&req)
+	return req
+}
+
+// AssembleGenesisForkTask is the fork-mode counterpart of
+// AssembleAndUploadGenesisTask. The sidecar forks SourceChainID's
+// exported state into ChainID.
+type AssembleGenesisForkTask struct {
+	TaskMeta
+	SourceChainID  string
+	ChainID        string
+	AccountBalance string
+	Namespace      string
+	Nodes          []GenesisNodeParam
+	Accounts       []GenesisAccountEntry
+}
+
+func (t AssembleGenesisForkTask) TaskType() string { return TaskTypeAssembleGenesisFork }
+
+func (t AssembleGenesisForkTask) Validate() error {
+	if t.SourceChainID == "" {
+		return fmt.Errorf("assemble-genesis-fork: missing required field SourceChainID")
+	}
+	if t.ChainID == "" {
+		return fmt.Errorf("assemble-genesis-fork: missing required field ChainID")
+	}
+	if t.AccountBalance == "" {
+		return fmt.Errorf("assemble-genesis-fork: missing required field AccountBalance")
+	}
+	if t.Namespace == "" {
+		return fmt.Errorf("assemble-genesis-fork: missing required field Namespace")
+	}
+	if len(t.Nodes) == 0 {
+		return fmt.Errorf("assemble-genesis-fork: at least one node is required")
+	}
+	return validateGenesisAccounts("assemble-genesis-fork", t.Accounts)
+}
+
+func (t AssembleGenesisForkTask) ToTaskRequest() TaskRequest {
+	nodes := make([]interface{}, len(t.Nodes))
+	for i, n := range t.Nodes {
+		nodes[i] = map[string]interface{}{"name": n.Name}
+	}
+	p := map[string]interface{}{
+		"sourceChainId":  t.SourceChainID,
+		"chainId":        t.ChainID,
+		"accountBalance": t.AccountBalance,
+		"namespace":      t.Namespace,
+		"nodes":          nodes,
+	}
+	if accounts := genesisAccountsToWire(t.Accounts); accounts != nil {
+		p["accounts"] = accounts
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	t.applyMeta(&req)
