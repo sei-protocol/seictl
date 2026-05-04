@@ -1,7 +1,9 @@
 package tasks
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -193,6 +195,112 @@ func TestUpload_WritesUploadState(t *testing.T) {
 	state := uploader.readUploadState()
 	if state.LastUploadedHeight != 1000 {
 		t.Errorf("LastUploadedHeight = %d, want 1000", state.LastUploadedHeight)
+	}
+}
+
+// readTarGzNames decompresses + reads a tar.gz produced by writeArchive
+// and returns the entry names + their typeflags.
+func readTarGzNames(t *testing.T, body []byte) map[string]byte {
+	t.Helper()
+	gzr, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	defer func() { _ = gzr.Close() }()
+	tr := tar.NewReader(gzr)
+	out := map[string]byte{}
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar next: %v", err)
+		}
+		out[h.Name] = h.Typeflag
+	}
+	return out
+}
+
+// runWriteArchive captures writeArchive output via an io.Pipe.
+func runWriteArchive(t *testing.T, snapshotsDir string, height int64) []byte {
+	t.Helper()
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- writeArchive(context.Background(), pw, snapshotsDir, height)
+	}()
+	body, err := io.ReadAll(pr)
+	if err != nil {
+		t.Fatalf("read pipe: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("writeArchive error: %v", err)
+	}
+	return body
+}
+
+func TestWriteArchive_MetadataAsDirectory(t *testing.T) {
+	homeDir := t.TempDir()
+	snapshotsDir := filepath.Join(homeDir, "data", "snapshots")
+	if err := os.MkdirAll(filepath.Join(snapshotsDir, "1000", "1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotsDir, "1000", "1", "0"), []byte("chunk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// metadata.db as a directory containing typical LevelDB files
+	mdDir := filepath.Join(snapshotsDir, "metadata.db")
+	if err := os.MkdirAll(mdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mdDir, "CURRENT"), []byte("MANIFEST-000001\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mdDir, "MANIFEST-000001"), []byte("manifest-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	body := runWriteArchive(t, snapshotsDir, 1000)
+	names := readTarGzNames(t, body)
+
+	// Height directory entries present and recursive
+	if _, ok := names["1000/1/0"]; !ok {
+		t.Errorf("missing height-dir file 1000/1/0 in archive; entries: %v", names)
+	}
+	// metadata.db directory header + recursive contents
+	if tf, ok := names["metadata.db"]; !ok || tf != tar.TypeDir {
+		t.Errorf("metadata.db missing or not a directory entry (typeflag=%d)", tf)
+	}
+	if _, ok := names["metadata.db/CURRENT"]; !ok {
+		t.Errorf("missing metadata.db/CURRENT in archive; entries: %v", names)
+	}
+	if _, ok := names["metadata.db/MANIFEST-000001"]; !ok {
+		t.Errorf("missing metadata.db/MANIFEST-000001 in archive; entries: %v", names)
+	}
+}
+
+func TestWriteArchive_MetadataAsFile(t *testing.T) {
+	homeDir := t.TempDir()
+	snapshotsDir := filepath.Join(homeDir, "data", "snapshots")
+	if err := os.MkdirAll(filepath.Join(snapshotsDir, "1000", "1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotsDir, "1000", "1", "0"), []byte("chunk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotsDir, "metadata.db"), []byte("metadata-content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	body := runWriteArchive(t, snapshotsDir, 1000)
+	names := readTarGzNames(t, body)
+
+	if tf, ok := names["metadata.db"]; !ok || tf != tar.TypeReg {
+		t.Errorf("metadata.db missing or not a regular file (typeflag=%d)", tf)
+	}
+	if _, ok := names["1000/1/0"]; !ok {
+		t.Errorf("missing height-dir file 1000/1/0 in archive; entries: %v", names)
 	}
 }
 

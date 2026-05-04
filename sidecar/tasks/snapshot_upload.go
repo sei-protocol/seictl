@@ -230,10 +230,19 @@ func writeArchive(ctx context.Context, wc io.WriteCloser, snapshotsDir string, h
 		return err
 	}
 
+	// metadata.db has been a LevelDB directory in cosmos-sdk for several
+	// versions, but the API allows it to be a single file too. Dispatch
+	// on whichever we observe so a future revert doesn't break us either way.
 	metadataPath := filepath.Join(snapshotsDir, "metadata.db")
 	if info, err := os.Stat(metadataPath); err == nil {
-		if err := addFileToTar(tw, metadataPath, "metadata.db", info); err != nil {
-			return err
+		var addErr error
+		if info.IsDir() {
+			addErr = addDirToTar(ctx, tw, metadataPath, "metadata.db")
+		} else {
+			addErr = addFileToTar(ctx, tw, metadataPath, "metadata.db", info)
+		}
+		if addErr != nil {
+			return fmt.Errorf("archiving metadata.db: %w", addErr)
 		}
 	}
 
@@ -283,7 +292,10 @@ func addDirToTar(ctx context.Context, tw *tar.Writer, dir, base string) error {
 	})
 }
 
-func addFileToTar(tw *tar.Writer, path, name string, info os.FileInfo) error {
+func addFileToTar(ctx context.Context, tw *tar.Writer, path, name string, info os.FileInfo) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	header, err := tar.FileInfoHeader(info, "")
 	if err != nil {
 		return err
