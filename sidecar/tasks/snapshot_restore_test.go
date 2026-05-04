@@ -142,12 +142,12 @@ func TestSnapshotRestoreExtractsArchive(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"testchain/state-sync/snapshot_100000000_testchain_us-east-1.tar.gz": archive,
+			"testchain/state-sync/100000000.tar.gz": archive,
 		},
 	}
 	lister := &mockObjectLister{
 		keys: []string{
-			"testchain/state-sync/snapshot_100000000_testchain_us-east-1.tar.gz",
+			"testchain/state-sync/100000000.tar.gz",
 		},
 	}
 	restorer := mustNewRestorer(t, homeDir, "test-bucket", "us-east-1", "testchain", mockClientFactory(client), mockListerFactory(lister))
@@ -204,7 +204,7 @@ func TestSnapshotRestoreNoMarkerOnDownloadError(t *testing.T) {
 	}
 	lister := &mockObjectLister{
 		keys: []string{
-			"c/state-sync/snapshot_100000000_c_r.tar.gz",
+			"c/state-sync/100000000.tar.gz",
 		},
 	}
 	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), mockListerFactory(lister))
@@ -226,11 +226,11 @@ func TestSnapshotRestoreRejectsPathTraversal(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/state-sync/snapshot_100000000_c_r.tar.gz": archive,
+			"c/state-sync/100000000.tar.gz": archive,
 		},
 	}
 	lister := &mockObjectLister{
-		keys: []string{"c/state-sync/snapshot_100000000_c_r.tar.gz"},
+		keys: []string{"c/state-sync/100000000.tar.gz"},
 	}
 	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), mockListerFactory(lister))
 	if err := restorer.Restore(context.Background(), 0); err == nil {
@@ -246,11 +246,11 @@ func TestSnapshotRestoreCleansUpTempFile(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/state-sync/snapshot_100000000_c_r.tar.gz": archive,
+			"c/state-sync/100000000.tar.gz": archive,
 		},
 	}
 	lister := &mockObjectLister{
-		keys: []string{"c/state-sync/snapshot_100000000_c_r.tar.gz"},
+		keys: []string{"c/state-sync/100000000.tar.gz"},
 	}
 	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), mockListerFactory(lister))
 	if err := restorer.Restore(context.Background(), 0); err != nil {
@@ -277,11 +277,11 @@ func TestSnapshotRestoreWritesHeightFile(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/state-sync/snapshot_100000000_c_r.tar.gz": archive,
+			"c/state-sync/100000000.tar.gz": archive,
 		},
 	}
 	lister := &mockObjectLister{
-		keys: []string{"c/state-sync/snapshot_100000000_c_r.tar.gz"},
+		keys: []string{"c/state-sync/100000000.tar.gz"},
 	}
 	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), mockListerFactory(lister))
 	if err := restorer.Restore(context.Background(), 0); err != nil {
@@ -305,14 +305,14 @@ func TestSnapshotRestoreWithTargetHeight(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/state-sync/snapshot_99000000_c_r.tar.gz": archive,
+			"c/state-sync/99000000.tar.gz": archive,
 		},
 	}
 	lister := &mockObjectLister{
 		keys: []string{
-			"c/state-sync/snapshot_98000000_c_r.tar.gz",
-			"c/state-sync/snapshot_99000000_c_r.tar.gz",
-			"c/state-sync/snapshot_100000000_c_r.tar.gz",
+			"c/state-sync/98000000.tar.gz",
+			"c/state-sync/99000000.tar.gz",
+			"c/state-sync/100000000.tar.gz",
 			"c/state-sync/latest.txt",
 		},
 	}
@@ -335,8 +335,8 @@ func TestSnapshotRestoreTargetHeightNoMatch(t *testing.T) {
 	homeDir := t.TempDir()
 	lister := &mockObjectLister{
 		keys: []string{
-			"c/state-sync/snapshot_100000000_c_r.tar.gz",
-			"c/state-sync/snapshot_200000000_c_r.tar.gz",
+			"c/state-sync/100000000.tar.gz",
+			"c/state-sync/200000000.tar.gz",
 		},
 	}
 	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", nil, mockListerFactory(lister))
@@ -358,17 +358,17 @@ func TestSnapshotRestoreTargetHeightPagination(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/state-sync/snapshot_99000000_c_r.tar.gz": archive,
+			"c/state-sync/99000000.tar.gz": archive,
 		},
 	}
 	// Page size of 2 forces pagination across 3 pages
 	lister := &mockObjectLister{
 		pageSize: 2,
 		keys: []string{
-			"c/state-sync/snapshot_97000000_c_r.tar.gz",
-			"c/state-sync/snapshot_98000000_c_r.tar.gz",
-			"c/state-sync/snapshot_99000000_c_r.tar.gz",
-			"c/state-sync/snapshot_100000000_c_r.tar.gz",
+			"c/state-sync/97000000.tar.gz",
+			"c/state-sync/98000000.tar.gz",
+			"c/state-sync/99000000.tar.gz",
+			"c/state-sync/100000000.tar.gz",
 			"c/state-sync/latest.txt",
 		},
 	}
@@ -402,28 +402,23 @@ func TestParseHeightFromKey(t *testing.T) {
 		want int64
 	}{
 		{
-			name: "snapshot key with chain and region suffix",
-			key:  "pacific-1/state-sync/snapshot_205082000_pacific-1_eu-central-1.tar.gz",
+			name: "canonical key parses to height",
+			key:  "pacific-1/state-sync/205082000.tar.gz",
 			want: 205082000,
 		},
 		{
-			name: "trailing region digit must not be picked up as height",
-			key:  "pacific-1/state-sync/snapshot_201525000_pacific-1_eu-central-1.tar.gz",
-			want: 201525000,
+			name: "key without slash before digits returns zero",
+			key:  "pacific-1/eu-central-1.tar.gz",
+			want: 0,
 		},
 		{
-			name: "snapshot key with single-token suffix",
-			key:  "c/state-sync/snapshot_99000000_c_r.tar.gz",
-			want: 99000000,
+			name: "long-form publisher key from before the cutover returns zero",
+			key:  "pacific-1/state-sync/snapshot_201525000_pacific-1_eu-central-1.tar.gz",
+			want: 0,
 		},
 		{
 			name: "non-snapshot tar.gz returns zero",
 			key:  "pacific-1/state-sync/some-other-file.tar.gz",
-			want: 0,
-		},
-		{
-			name: "bare height filename without snapshot prefix returns zero",
-			key:  "pacific-1/state-sync/205082000.tar.gz",
 			want: 0,
 		},
 		{

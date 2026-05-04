@@ -128,7 +128,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context) error {
 
 	prefix := u.chainID + "/state-sync/"
 
-	archiveKey := fmt.Sprintf("%ssnapshot_%d_%s_%s.tar.gz", prefix, height, u.chainID, u.region)
+	archiveKey := fmt.Sprintf("%s%d.tar.gz", prefix, height)
 	uploadLog.Info("streaming archive to S3", "key", archiveKey)
 	if err := u.streamUpload(ctx, uploader, u.bucket, archiveKey, snapshotsDir, height); err != nil {
 		return fmt.Errorf("uploading %s: %w", archiveKey, err)

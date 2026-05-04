@@ -28,11 +28,9 @@ const restoreMarkerFile = ".sei-sidecar-snapshot-done"
 const SnapshotHeightFile = ".sei-sidecar-snapshot-height"
 
 // snapshotHeightRe extracts the block height from S3 snapshot keys of the form
-// <prefix>/snapshot_<height>_<chain>_<region>.tar.gz. The capture is anchored
-// between the "snapshot_" marker and the trailing "_<chain>_<region>", so
-// trailing digits in the suffix (the "1" in "eu-central-1.tar.gz") cannot be
-// misread as the height.
-var snapshotHeightRe = regexp.MustCompile(`/snapshot_(\d+)_[^/]+\.tar\.gz$`)
+// <chainID>/state-sync/<height>.tar.gz. The leading "/" anchor prevents the
+// regex from picking up trailing digits embedded in other path segments.
+var snapshotHeightRe = regexp.MustCompile(`/(\d+)\.tar\.gz$`)
 
 // SnapshotRestoreRequest holds the typed parameters for the snapshot-restore task.
 // S3 bucket, region, and chain prefix are derived from the sidecar's environment.

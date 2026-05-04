@@ -106,8 +106,8 @@ func TestUpload_UploadsArchiveAndLatestTxt(t *testing.T) {
 		t.Fatalf("Upload() error = %v", err)
 	}
 
-	if _, ok := mock.uploads["my-bucket/testchain/state-sync/snapshot_1000_testchain_eu-central-1.tar.gz"]; !ok {
-		t.Errorf("expected archive upload at testchain/state-sync/snapshot_1000_testchain_eu-central-1.tar.gz")
+	if _, ok := mock.uploads["my-bucket/testchain/state-sync/1000.tar.gz"]; !ok {
+		t.Error("expected archive upload at testchain/state-sync/1000.tar.gz")
 	}
 
 	latest, ok := mock.uploads["my-bucket/testchain/state-sync/latest.txt"]
@@ -156,8 +156,8 @@ func TestUpload_UploadsNewerSnapshot(t *testing.T) {
 		t.Fatalf("Upload() error = %v", err)
 	}
 
-	if _, ok := mock.uploads["my-bucket/testchain/state-sync/snapshot_2000_testchain_eu-central-1.tar.gz"]; !ok {
-		t.Errorf("expected archive upload at testchain/state-sync/snapshot_2000_testchain_eu-central-1.tar.gz")
+	if _, ok := mock.uploads["my-bucket/testchain/state-sync/2000.tar.gz"]; !ok {
+		t.Error("expected archive upload at testchain/state-sync/2000.tar.gz")
 	}
 }
 
