@@ -77,7 +77,6 @@ func TestRenderGenesisAccountsBlock(t *testing.T) {
 			{Address: "sei1abc", Balance: "1usei"},
 			{Address: "sei1def", Balance: "2usei"},
 		})
-		// Two entries should produce two indented list items.
 		if !strings.Contains(got, "      - address: sei1abc") || !strings.Contains(got, "      - address: sei1def") {
 			t.Errorf("multiple: got %q", got)
 		}

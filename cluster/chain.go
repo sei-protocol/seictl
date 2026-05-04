@@ -45,9 +45,8 @@ type chainUpResult struct {
 	AppliedAt         *time.Time           `json:"appliedAt,omitempty"`
 }
 
-// PrefundedAccount echoes a --prefund entry back in the envelope so
-// downstream consumers (release-test, fuzzers, etc.) can read funded
-// addresses from the same source of truth that rendered the manifest.
+// Echoed in the chain up envelope so consumers don't track funded
+// addresses out-of-band from the rendered manifest.
 type PrefundedAccount struct {
 	Address string `json:"address"`
 	Balance string `json:"balance"`
@@ -226,9 +225,8 @@ func deriveChainEndpoints(chainID, namespace string) Endpoints {
 	}
 }
 
-// parsePrefundFlags parses repeated --prefund addr=balance entries.
-// Strict bech32 validation is deferred to the controller's planner;
-// here we just enforce the addr=balance shape and non-empty values.
+// Strict bech32 validation lives in the controller's planner — this
+// only enforces the addr=balance shape.
 func parsePrefundFlags(raw []string) ([]PrefundedAccount, *clioutput.Error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -248,9 +246,7 @@ func parsePrefundFlags(raw []string) ([]PrefundedAccount, *clioutput.Error) {
 	return out, nil
 }
 
-// renderGenesisAccountsBlock returns either an empty string (no
-// prefund) or a YAML `accounts:` list ready to substitute into
-// chain.yaml under `genesis:` (4-space outer indent).
+// Indentation is hand-tuned to chain.yaml's `genesis:` 4-space context.
 func renderGenesisAccountsBlock(accounts []PrefundedAccount) string {
 	if len(accounts) == 0 {
 		return ""
