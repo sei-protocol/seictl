@@ -142,8 +142,8 @@ func TestSnapshotRestoreExtractsArchive(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"testchain/latest.txt":       []byte("100000000"),
-			"testchain/100000000.tar.gz": archive,
+			"testchain/state-sync/latest.txt": []byte("100000000"),
+			"testchain/state-sync/snapshot_100000000_testchain_us-east-1.tar.gz": archive,
 		},
 	}
 	restorer := mustNewRestorer(t, homeDir, "test-bucket", "us-east-1", "testchain", mockClientFactory(client), nil)
@@ -198,7 +198,7 @@ func TestSnapshotRestoreNoMarkerOnDownloadError(t *testing.T) {
 	homeDir := t.TempDir()
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/latest.txt": []byte("100000000"),
+			"c/state-sync/latest.txt": []byte("100000000"),
 		},
 		errDefault: fmt.Errorf("access denied"),
 	}
@@ -221,8 +221,8 @@ func TestSnapshotRestoreRejectsPathTraversal(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/latest.txt":       []byte("100000000"),
-			"c/100000000.tar.gz": archive,
+			"c/state-sync/latest.txt": []byte("100000000"),
+			"c/state-sync/snapshot_100000000_c_r.tar.gz": archive,
 		},
 	}
 	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), nil)
@@ -239,8 +239,8 @@ func TestSnapshotRestoreCleansUpTempFile(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/latest.txt":       []byte("100000000"),
-			"c/100000000.tar.gz": archive,
+			"c/state-sync/latest.txt": []byte("100000000"),
+			"c/state-sync/snapshot_100000000_c_r.tar.gz": archive,
 		},
 	}
 	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), nil)
@@ -268,8 +268,8 @@ func TestSnapshotRestoreWritesHeightFile(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/latest.txt":       []byte("100000000"),
-			"c/100000000.tar.gz": archive,
+			"c/state-sync/latest.txt": []byte("100000000"),
+			"c/state-sync/snapshot_100000000_c_r.tar.gz": archive,
 		},
 	}
 	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), nil)
@@ -294,15 +294,15 @@ func TestSnapshotRestoreWithTargetHeight(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/99000000.tar.gz": archive,
+			"c/state-sync/snapshot_99000000_c_r.tar.gz": archive,
 		},
 	}
 	lister := &mockObjectLister{
 		keys: []string{
-			"c/98000000.tar.gz",
-			"c/99000000.tar.gz",
-			"c/100000000.tar.gz",
-			"c/latest.txt",
+			"c/state-sync/snapshot_98000000_c_r.tar.gz",
+			"c/state-sync/snapshot_99000000_c_r.tar.gz",
+			"c/state-sync/snapshot_100000000_c_r.tar.gz",
+			"c/state-sync/latest.txt",
 		},
 	}
 	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), mockListerFactory(lister))
@@ -324,8 +324,8 @@ func TestSnapshotRestoreTargetHeightNoMatch(t *testing.T) {
 	homeDir := t.TempDir()
 	lister := &mockObjectLister{
 		keys: []string{
-			"c/100000000.tar.gz",
-			"c/200000000.tar.gz",
+			"c/state-sync/snapshot_100000000_c_r.tar.gz",
+			"c/state-sync/snapshot_200000000_c_r.tar.gz",
 		},
 	}
 	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", nil, mockListerFactory(lister))
@@ -347,18 +347,18 @@ func TestSnapshotRestoreTargetHeightPagination(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/99000000.tar.gz": archive,
+			"c/state-sync/snapshot_99000000_c_r.tar.gz": archive,
 		},
 	}
 	// Page size of 2 forces pagination across 3 pages
 	lister := &mockObjectLister{
 		pageSize: 2,
 		keys: []string{
-			"c/97000000.tar.gz",
-			"c/98000000.tar.gz",
-			"c/99000000.tar.gz",
-			"c/100000000.tar.gz",
-			"c/latest.txt",
+			"c/state-sync/snapshot_97000000_c_r.tar.gz",
+			"c/state-sync/snapshot_98000000_c_r.tar.gz",
+			"c/state-sync/snapshot_99000000_c_r.tar.gz",
+			"c/state-sync/snapshot_100000000_c_r.tar.gz",
+			"c/state-sync/latest.txt",
 		},
 	}
 	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), mockListerFactory(lister))
@@ -381,5 +381,51 @@ func TestSnapshotRestoreNegativeTargetHeight(t *testing.T) {
 	err := restorer.Restore(context.Background(), -1)
 	if err == nil {
 		t.Fatal("expected error for negative targetHeight")
+	}
+}
+
+func TestParseHeightFromKey(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		want int64
+	}{
+		{
+			name: "snapshot key with chain and region suffix",
+			key:  "pacific-1/state-sync/snapshot_205082000_pacific-1_eu-central-1.tar.gz",
+			want: 205082000,
+		},
+		{
+			name: "trailing region digit must not be picked up as height",
+			key:  "pacific-1/state-sync/snapshot_201525000_pacific-1_eu-central-1.tar.gz",
+			want: 201525000,
+		},
+		{
+			name: "snapshot key with single-token suffix",
+			key:  "c/state-sync/snapshot_99000000_c_r.tar.gz",
+			want: 99000000,
+		},
+		{
+			name: "non-snapshot tar.gz returns zero",
+			key:  "pacific-1/state-sync/some-other-file.tar.gz",
+			want: 0,
+		},
+		{
+			name: "bare height filename without snapshot prefix returns zero",
+			key:  "pacific-1/state-sync/205082000.tar.gz",
+			want: 0,
+		},
+		{
+			name: "latest.txt returns zero",
+			key:  "pacific-1/state-sync/latest.txt",
+			want: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseHeightFromKey(tc.key); got != tc.want {
+				t.Errorf("parseHeightFromKey(%q) = %d, want %d", tc.key, got, tc.want)
+			}
+		})
 	}
 }

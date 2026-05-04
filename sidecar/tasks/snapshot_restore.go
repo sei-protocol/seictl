@@ -28,8 +28,12 @@ const restoreMarkerFile = ".sei-sidecar-snapshot-done"
 // The result-export task uses this to know where to start exporting.
 const SnapshotHeightFile = ".sei-sidecar-snapshot-height"
 
-// snapshotHeightRe extracts heights from S3 keys like pacific-1/200440000.tar.gz.
-var snapshotHeightRe = regexp.MustCompile(`(\d+)\.tar\.gz$`)
+// snapshotHeightRe extracts the block height from S3 snapshot keys of the form
+// <prefix>/snapshot_<height>_<chain>_<region>.tar.gz. The capture is anchored
+// between the "snapshot_" marker and the trailing "_<chain>_<region>", so
+// trailing digits in the suffix (the "1" in "eu-central-1.tar.gz") cannot be
+// misread as the height.
+var snapshotHeightRe = regexp.MustCompile(`/snapshot_(\d+)_[^/]+\.tar\.gz$`)
 
 // SnapshotRestoreRequest holds the typed parameters for the snapshot-restore task.
 // S3 bucket, region, and chain prefix are derived from the sidecar's environment.
@@ -91,7 +95,7 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 		return fmt.Errorf("snapshot-restore: targetHeight must be >= 0, got %d", targetHeight)
 	}
 
-	prefix := r.chainID + "/"
+	prefix := r.chainID + "/state-sync/"
 
 	client, err := r.clientFactory(ctx, r.region)
 	if err != nil {
@@ -111,7 +115,7 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 		}
 	} else {
 		var resolveErr error
-		snapshotKey, resolveErr = resolveLatestKey(ctx, client, r.bucket, prefix, r.region)
+		snapshotKey, resolveErr = resolveLatestKey(ctx, client, r.bucket, prefix, r.chainID, r.region)
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -164,8 +168,10 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 	return writeMarker(r.homeDir, restoreMarkerFile)
 }
 
-// resolveLatestKey reads <prefix>latest.txt and constructs the snapshot key.
-func resolveLatestKey(ctx context.Context, client seis3.TransferClient, bucket, prefix, region string) (string, error) {
+// resolveLatestKey reads <prefix>latest.txt (which contains a block height)
+// and constructs the matching snapshot key in the form
+// <prefix>snapshot_<height>_<chain>_<region>.tar.gz.
+func resolveLatestKey(ctx context.Context, client seis3.TransferClient, bucket, prefix, chainID, region string) (string, error) {
 	latestKey := prefix + "latest.txt"
 	var buf seis3.WriteAtBuffer
 	_, err := client.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
@@ -182,7 +188,7 @@ func resolveLatestKey(ctx context.Context, client seis3.TransferClient, bucket, 
 		return "", fmt.Errorf("latest.txt is empty")
 	}
 
-	return prefix + height + ".tar.gz", nil
+	return prefix + fmt.Sprintf("snapshot_%s_%s_%s.tar.gz", height, chainID, region), nil
 }
 
 // resolveKeyForHeight lists snapshot objects and returns the key with the
