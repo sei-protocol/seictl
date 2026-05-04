@@ -276,17 +276,18 @@ func loadConfig(pathFn func() (string, error)) (*config.Config, *clioutput.Error
 func renderManifests(alias, name, namespace, chainID, seidImage, digestShort string,
 	validators, rpcCount, durationMin int) ([][]byte, []render.ManifestRef, *clioutput.Error) {
 	vars := map[string]string{
-		"CHAIN_ID":             chainID,
-		"NAMESPACE":            namespace,
-		"ENGINEER_ALIAS":       alias,
-		"NAME":                 name,
-		"SEID_IMAGE":           seidImage,
-		"SEILOAD_IMAGE":        defaultSeiloadImage,
-		"IMAGE_DIGEST_SHORT":   digestShort,
-		"VALIDATOR_COUNT":      strconv.Itoa(validators),
-		"RPC_COUNT":            strconv.Itoa(rpcCount),
-		"JOB_DEADLINE_SECONDS": strconv.Itoa(durationMin * 60),
-		"PART_OF":              benchPartOf,
+		"CHAIN_ID":               chainID,
+		"NAMESPACE":              namespace,
+		"ENGINEER_ALIAS":         alias,
+		"NAME":                   name,
+		"SEID_IMAGE":             seidImage,
+		"SEILOAD_IMAGE":          defaultSeiloadImage,
+		"IMAGE_DIGEST_SHORT":     digestShort,
+		"VALIDATOR_COUNT":        strconv.Itoa(validators),
+		"RPC_COUNT":              strconv.Itoa(rpcCount),
+		"JOB_DEADLINE_SECONDS":   strconv.Itoa(durationMin * 60),
+		"PART_OF":                benchPartOf,
+		"GENESIS_ACCOUNTS_BLOCK": "",
 	}
 
 	chainYAML, e := renderEmbedded("chain.yaml", vars)

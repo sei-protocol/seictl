@@ -79,6 +79,9 @@ func TestRunChainUp(t *testing.T) {
 		if len(data.Endpoints.EvmJsonRpc) != 0 {
 			t.Errorf("evmJsonRpc should be empty for chain up (validators don't serve EVM RPC); got %v", data.Endpoints.EvmJsonRpc)
 		}
+		if bytes.Contains(buf.Bytes(), []byte("prefundedAccounts")) {
+			t.Errorf("envelope should omit prefundedAccounts when no --prefund passed: %s", buf.String())
+		}
 
 		if len(data.Manifests) != 1 {
 			t.Fatalf("expected 1 manifest (validator SND only); got %d", len(data.Manifests))
@@ -213,7 +216,7 @@ func TestRunChainUp(t *testing.T) {
 			Validators: 4,
 		}, &buf, stubChainDeps(t, "bdc"))
 
-		docs, _, err := renderChainManifests("bdc", "qa", "eng-bdc", "bench-bdc-qa", "img@sha256:0", "0123456789ab", 4)
+		docs, _, err := renderChainManifests("bdc", "qa", "eng-bdc", "bench-bdc-qa", "img@sha256:0", "0123456789ab", 4, nil)
 		if err != nil {
 			t.Fatalf("render: %v", err)
 		}

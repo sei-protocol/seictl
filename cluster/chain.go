@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/urfave/cli/v3"
@@ -31,22 +32,31 @@ type Endpoints struct {
 }
 
 type chainUpResult struct {
-	ChainID     string               `json:"chainId"`
-	Name        string               `json:"name"`
-	Namespace   string               `json:"namespace"`
-	ImageRef    string               `json:"imageRef"`
-	ImageDigest string               `json:"imageDigest"`
-	Validators  int                  `json:"validators"`
-	Endpoints   Endpoints            `json:"endpoints"`
-	DryRun      bool                 `json:"dryRun"`
-	Manifests   []render.ManifestRef `json:"manifests"`
-	AppliedAt   *time.Time           `json:"appliedAt,omitempty"`
+	ChainID           string               `json:"chainId"`
+	Name              string               `json:"name"`
+	Namespace         string               `json:"namespace"`
+	ImageRef          string               `json:"imageRef"`
+	ImageDigest       string               `json:"imageDigest"`
+	Validators        int                  `json:"validators"`
+	Endpoints         Endpoints            `json:"endpoints"`
+	PrefundedAccounts []PrefundedAccount   `json:"prefundedAccounts,omitempty"`
+	DryRun            bool                 `json:"dryRun"`
+	Manifests         []render.ManifestRef `json:"manifests"`
+	AppliedAt         *time.Time           `json:"appliedAt,omitempty"`
+}
+
+// Echoed in the chain up envelope so consumers don't track funded
+// addresses out-of-band from the rendered manifest.
+type PrefundedAccount struct {
+	Address string `json:"address"`
+	Balance string `json:"balance"`
 }
 
 type chainUpInput struct {
 	Image      string
 	Name       string
 	Validators int
+	Prefund    []string
 	Apply      bool
 	Kubeconfig string
 	Context    string
@@ -80,6 +90,7 @@ var ChainCmd = cli.Command{
 				&cli.StringFlag{Name: "image", Required: true, Usage: "ECR image ref"},
 				&cli.StringFlag{Name: "name", Required: true, Usage: "Chain name"},
 				&cli.IntFlag{Name: "validators", Required: true, Usage: "Validator count (1-21)"},
+				&cli.StringSliceFlag{Name: "prefund", Usage: "Fund a non-validator account at genesis (repeat for multiple): --prefund sei1...=1000000000usei"},
 				&cli.BoolFlag{Name: "apply", Usage: "Server-side apply the rendered manifest"},
 			),
 			Action: func(ctx context.Context, command *cli.Command) error {
@@ -87,6 +98,7 @@ var ChainCmd = cli.Command{
 					Image:      command.String("image"),
 					Name:       command.String("name"),
 					Validators: int(command.Int("validators")),
+					Prefund:    command.StringSlice("prefund"),
 					Apply:      command.Bool("apply"),
 					Kubeconfig: command.String("kubeconfig"),
 					Context:    command.String("context"),
@@ -122,6 +134,10 @@ func runChainUp(ctx context.Context, in chainUpInput, deps chainDeps) (chainUpRe
 	if e := validate.Validators(in.Validators); e != nil {
 		return chainUpResult{}, e.ExitWith(clioutput.ExitBench)
 	}
+	prefunded, perr := parsePrefundFlags(in.Prefund)
+	if perr != nil {
+		return chainUpResult{}, perr
+	}
 	namespace := cfg.Namespace
 	if _, callerErr := deps.getCaller(ctx); callerErr != nil {
 		return chainUpResult{}, callerErr
@@ -139,21 +155,22 @@ func runChainUp(ctx context.Context, in chainUpInput, deps chainDeps) (chainUpRe
 	chainID := fmt.Sprintf("bench-%s-%s", cfg.Alias, in.Name)
 	digestShort := shortDigest(digest)
 
-	docs, manifests, rerr := renderChainManifests(cfg.Alias, in.Name, namespace, chainID, seidImage, digestShort, in.Validators)
+	docs, manifests, rerr := renderChainManifests(cfg.Alias, in.Name, namespace, chainID, seidImage, digestShort, in.Validators, prefunded)
 	if rerr != nil {
 		return chainUpResult{}, rerr
 	}
 
 	res := chainUpResult{
-		ChainID:     chainID,
-		Name:        in.Name,
-		Namespace:   namespace,
-		ImageRef:    in.Image,
-		ImageDigest: digest,
-		Validators:  in.Validators,
-		Endpoints:   deriveChainEndpoints(chainID, namespace),
-		DryRun:      !in.Apply,
-		Manifests:   manifests,
+		ChainID:           chainID,
+		Name:              in.Name,
+		Namespace:         namespace,
+		ImageRef:          in.Image,
+		ImageDigest:       digest,
+		Validators:        in.Validators,
+		Endpoints:         deriveChainEndpoints(chainID, namespace),
+		PrefundedAccounts: prefunded,
+		DryRun:            !in.Apply,
+		Manifests:         manifests,
 	}
 
 	if in.Apply {
@@ -172,16 +189,17 @@ func runChainUp(ctx context.Context, in chainUpInput, deps chainDeps) (chainUpRe
 	return res, nil
 }
 
-func renderChainManifests(alias, name, namespace, chainID, seidImage, digestShort string, validators int) ([][]byte, []render.ManifestRef, *clioutput.Error) {
+func renderChainManifests(alias, name, namespace, chainID, seidImage, digestShort string, validators int, prefunded []PrefundedAccount) ([][]byte, []render.ManifestRef, *clioutput.Error) {
 	vars := map[string]string{
-		"CHAIN_ID":           chainID,
-		"NAMESPACE":          namespace,
-		"ENGINEER_ALIAS":     alias,
-		"NAME":               name,
-		"SEID_IMAGE":         seidImage,
-		"IMAGE_DIGEST_SHORT": digestShort,
-		"VALIDATOR_COUNT":    strconv.Itoa(validators),
-		"PART_OF":            "seictl",
+		"CHAIN_ID":               chainID,
+		"NAMESPACE":              namespace,
+		"ENGINEER_ALIAS":         alias,
+		"NAME":                   name,
+		"SEID_IMAGE":             seidImage,
+		"IMAGE_DIGEST_SHORT":     digestShort,
+		"VALIDATOR_COUNT":        strconv.Itoa(validators),
+		"PART_OF":                "seictl",
+		"GENESIS_ACCOUNTS_BLOCK": renderGenesisAccountsBlock(prefunded),
 	}
 	chainYAML, e := renderEmbedded("chain.yaml", vars)
 	if e != nil {
@@ -205,6 +223,43 @@ func deriveChainEndpoints(chainID, namespace string) Endpoints {
 	return Endpoints{
 		TendermintRpc: []string{fmt.Sprintf("http://%s:%d", host, seiconfig.PortRPC)},
 	}
+}
+
+// Strict bech32 validation lives in the controller's planner — this
+// only enforces the addr=balance shape.
+func parsePrefundFlags(raw []string) ([]PrefundedAccount, *clioutput.Error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]PrefundedAccount, 0, len(raw))
+	for _, entry := range raw {
+		eq := strings.IndexByte(entry, '=')
+		if eq <= 0 || eq == len(entry)-1 {
+			return nil, clioutput.Newf(clioutput.ExitBench, clioutput.CatValidation,
+				"--prefund %q: expected addr=balance", entry)
+		}
+		out = append(out, PrefundedAccount{
+			Address: entry[:eq],
+			Balance: entry[eq+1:],
+		})
+	}
+	return out, nil
+}
+
+// Indentation is hand-tuned to chain.yaml's `genesis:` 4-space context.
+func renderGenesisAccountsBlock(accounts []PrefundedAccount) string {
+	if len(accounts) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n    accounts:")
+	for _, a := range accounts {
+		sb.WriteString("\n      - address: ")
+		sb.WriteString(a.Address)
+		sb.WriteString("\n        balance: ")
+		sb.WriteString(a.Balance)
+	}
+	return sb.String()
 }
 
 func failChainUp(out io.Writer, e *clioutput.Error) error {
