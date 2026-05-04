@@ -80,8 +80,8 @@ func (r *SnapshotRestorer) Handler() engine.TaskHandler {
 }
 
 // Restore downloads and extracts the snapshot, skipping if the marker file exists.
-// When targetHeight > 0, it lists objects and picks the highest snapshot <= targetHeight.
-// When targetHeight == 0, it reads latest.txt for the newest snapshot.
+// It lists objects under the chain's state-sync prefix and picks the highest
+// snapshot height; when targetHeight > 0, the search is capped at that height.
 func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) error {
 	if markerExists(r.homeDir, restoreMarkerFile) {
 		restoreLog.Debug("already completed, skipping")
