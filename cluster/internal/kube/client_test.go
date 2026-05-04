@@ -1,10 +1,13 @@
 package kube
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"k8s.io/client-go/rest"
 
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
@@ -42,6 +45,24 @@ func writeFixture(t *testing.T, contents string) string {
 		t.Fatalf("seed kubeconfig: %v", err)
 	}
 	return path
+}
+
+func stubInCluster(t *testing.T, cfg *rest.Config, err error) {
+	t.Helper()
+	old := inClusterConfigFn
+	inClusterConfigFn = func() (*rest.Config, error) { return cfg, err }
+	t.Cleanup(func() { inClusterConfigFn = old })
+}
+
+func stubInClusterNamespace(t *testing.T, ns string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "namespace")
+	if err := os.WriteFile(path, []byte(ns+"\n"), 0o600); err != nil {
+		t.Fatalf("seed namespace file: %v", err)
+	}
+	old := inClusterNamespaceFile
+	inClusterNamespaceFile = path
+	t.Cleanup(func() { inClusterNamespaceFile = old })
 }
 
 func TestNew(t *testing.T) {
@@ -98,7 +119,7 @@ func TestNew(t *testing.T) {
 		}
 	})
 
-	t.Run("no current-context", func(t *testing.T) {
+	t.Run("no current-context, no in-cluster", func(t *testing.T) {
 		const minimal = `apiVersion: v1
 kind: Config
 contexts: []
@@ -106,12 +127,130 @@ clusters: []
 users: []
 `
 		path := writeFixture(t, minimal)
+		stubInCluster(t, nil, errors.New("not in a cluster"))
 		_, err := New(Options{Kubeconfig: path})
 		if err == nil {
 			t.Fatalf("expected error")
 		}
 		if err.Category != clioutput.CatKubeconfigParse || err.Code != clioutput.ExitIdentity {
 			t.Errorf("got %+v", err)
+		}
+		if !strings.Contains(err.Message, "ServiceAccount") {
+			t.Errorf("error should mention ServiceAccount fallback; got %q", err.Message)
+		}
+	})
+
+	t.Run("in-cluster fallback when no current-context", func(t *testing.T) {
+		const minimal = `apiVersion: v1
+kind: Config
+contexts: []
+clusters: []
+users: []
+`
+		path := writeFixture(t, minimal)
+		stubInCluster(t, &rest.Config{Host: "https://kubernetes.default.svc"}, nil)
+		stubInClusterNamespace(t, "release-test")
+
+		c, err := New(Options{Kubeconfig: path})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if c.ContextName != "in-cluster" || c.ClusterName != "in-cluster" {
+			t.Errorf("synthetic context fields: %+v", c)
+		}
+		if c.ClusterServer != "https://kubernetes.default.svc" {
+			t.Errorf("server: %q", c.ClusterServer)
+		}
+		if c.Namespace != "release-test" {
+			t.Errorf("namespace from SA file: %q", c.Namespace)
+		}
+	})
+
+	t.Run("in-cluster fallback honors namespace override", func(t *testing.T) {
+		const minimal = `apiVersion: v1
+kind: Config
+contexts: []
+clusters: []
+users: []
+`
+		path := writeFixture(t, minimal)
+		stubInCluster(t, &rest.Config{Host: "https://kubernetes.default.svc"}, nil)
+		stubInClusterNamespace(t, "release-test")
+
+		c, err := New(Options{Kubeconfig: path, Namespace: "override-ns"})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if c.Namespace != "override-ns" {
+			t.Errorf("namespace override: got %q want override-ns", c.Namespace)
+		}
+	})
+
+	t.Run("in-cluster fallback when SA namespace file missing falls back to default", func(t *testing.T) {
+		const minimal = `apiVersion: v1
+kind: Config
+contexts: []
+clusters: []
+users: []
+`
+		path := writeFixture(t, minimal)
+		stubInCluster(t, &rest.Config{Host: "https://kubernetes.default.svc"}, nil)
+		oldFile := inClusterNamespaceFile
+		inClusterNamespaceFile = filepath.Join(t.TempDir(), "missing")
+		t.Cleanup(func() { inClusterNamespaceFile = oldFile })
+
+		c, err := New(Options{Kubeconfig: path})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if c.Namespace != "default" {
+			t.Errorf("expected default namespace; got %q", c.Namespace)
+		}
+	})
+
+	t.Run("pristine pod with no kubeconfig file falls back to in-cluster", func(t *testing.T) {
+		// clientcmd captures HOME at init; KUBECONFIG override is the only working seam.
+		t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
+		stubInCluster(t, &rest.Config{Host: "https://kubernetes.default.svc"}, nil)
+		stubInClusterNamespace(t, "production-ns")
+
+		c, err := New(Options{})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if c.ContextName != "in-cluster" {
+			t.Errorf("expected in-cluster context; got %q", c.ContextName)
+		}
+		if c.Namespace != "production-ns" {
+			t.Errorf("namespace: %q", c.Namespace)
+		}
+	})
+
+	t.Run("explicit context override skips in-cluster fallback", func(t *testing.T) {
+		const minimal = `apiVersion: v1
+kind: Config
+contexts: []
+clusters: []
+users: []
+`
+		path := writeFixture(t, minimal)
+		called := false
+		old := inClusterConfigFn
+		inClusterConfigFn = func() (*rest.Config, error) {
+			called = true
+			return &rest.Config{Host: "https://wrong.example"}, nil
+		}
+		t.Cleanup(func() { inClusterConfigFn = old })
+
+		_, err := New(Options{Kubeconfig: path, Context: "ghost"})
+		if err == nil {
+			t.Fatalf("expected error")
+		}
+		if called {
+			t.Errorf("in-cluster fallback must not fire when --context is set")
+		}
+		if !strings.Contains(err.Message, "ghost") {
+			t.Errorf("expected error to mention requested context; got %q", err.Message)
 		}
 	})
 

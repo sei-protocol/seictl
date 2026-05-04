@@ -5,9 +5,12 @@
 package kube
 
 import (
+	"os"
 	"sort"
+	"strings"
 
 	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/client-go/rest"
 
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
@@ -36,9 +39,18 @@ type Client struct {
 	flags *genericclioptions.ConfigFlags
 }
 
+const inClusterContextName = "in-cluster"
+
+// Vars (not consts) so tests can stub.
+var (
+	inClusterConfigFn      = rest.InClusterConfig
+	inClusterNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+)
+
 // New resolves kubeconfig context + namespace into a Client. Errors
 // in this layer are kubeconfig-shape problems and map to ExitIdentity /
-// CatKubeconfigParse, not cluster reachability.
+// CatKubeconfigParse, not cluster reachability. With no current-context
+// and no --context override, falls back to rest.InClusterConfig().
 func New(opts Options) (*Client, *clioutput.Error) {
 	cf := genericclioptions.NewConfigFlags(true)
 	// Leave the pointers nil when the caller didn't override, so
@@ -72,8 +84,7 @@ func New(opts Options) (*Client, *clioutput.Error) {
 		contextName = opts.Context
 	}
 	if contextName == "" {
-		return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatKubeconfigParse,
-			"no current-context in kubeconfig and no --context provided")
+		return newInClusterClient(cf, opts)
 	}
 	kctx, ok := raw.Contexts[contextName]
 	if !ok {
@@ -103,6 +114,32 @@ func New(opts Options) (*Client, *clioutput.Error) {
 		ContextName:   contextName,
 		ClusterName:   kctx.Cluster,
 		ClusterServer: cluster.Server,
+		Namespace:     ns,
+		flags:         cf,
+	}, nil
+}
+
+func newInClusterClient(cf *genericclioptions.ConfigFlags, opts Options) (*Client, *clioutput.Error) {
+	cfg, err := inClusterConfigFn()
+	if err != nil {
+		return nil, clioutput.Newf(clioutput.ExitIdentity, clioutput.CatKubeconfigParse,
+			"no current-context in kubeconfig and not running in a pod with a ServiceAccount (in-cluster: %v)", err)
+	}
+
+	ns := opts.Namespace
+	if ns == "" {
+		if data, ferr := os.ReadFile(inClusterNamespaceFile); ferr == nil {
+			ns = strings.TrimSpace(string(data))
+		}
+	}
+	if ns == "" {
+		ns = "default"
+	}
+
+	return &Client{
+		ContextName:   inClusterContextName,
+		ClusterName:   inClusterContextName,
+		ClusterServer: cfg.Host,
 		Namespace:     ns,
 		flags:         cf,
 	}, nil
