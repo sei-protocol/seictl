@@ -59,7 +59,7 @@ func TestRunChainUp(t *testing.T) {
 		if err := json.Unmarshal(env.Data, &data); err != nil {
 			t.Fatalf("data unmarshal: %v", err)
 		}
-		if data.ChainID != "bench-bdc-qa" {
+		if data.ChainID != "bdc-qa" {
 			t.Errorf("chainId: %q", data.ChainID)
 		}
 		if data.Namespace != "eng-bdc" {
@@ -72,7 +72,7 @@ func TestRunChainUp(t *testing.T) {
 			t.Errorf("dryRun should be true")
 		}
 
-		wantTM := "http://bench-bdc-qa-internal.eng-bdc.svc.cluster.local:26657"
+		wantTM := "http://bdc-qa-internal.eng-bdc.svc.cluster.local:26657"
 		if len(data.Endpoints.TendermintRpc) != 1 || data.Endpoints.TendermintRpc[0] != wantTM {
 			t.Errorf("tendermintRpc: got %v, want [%s]", data.Endpoints.TendermintRpc, wantTM)
 		}
@@ -216,7 +216,7 @@ func TestRunChainUp(t *testing.T) {
 			Validators: 4,
 		}, &buf, stubChainDeps(t, "bdc"))
 
-		docs, _, err := renderChainManifests("bdc", "qa", "eng-bdc", "bench-bdc-qa", "img@sha256:0", "0123456789ab", 4, nil)
+		docs, _, err := renderChainManifests("bdc", "qa", "eng-bdc", "bdc-qa", "img@sha256:0", "0123456789ab", 4, nil)
 		if err != nil {
 			t.Fatalf("render: %v", err)
 		}
@@ -227,7 +227,7 @@ func TestRunChainUp(t *testing.T) {
 		for _, want := range []string{
 			"app.kubernetes.io/component: chain",
 			"sei.io/role: validator",
-			"sei.io/chain-id: bench-bdc-qa",
+			"sei.io/chain-id: bdc-qa",
 			"sei.io/engineer: bdc",
 			"sei.io/bench-name: qa",
 		} {

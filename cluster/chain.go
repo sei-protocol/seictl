@@ -152,7 +152,7 @@ func runChainUp(ctx context.Context, in chainUpInput, deps chainDeps) (chainUpRe
 		return chainUpResult{}, clioutput.Newf(clioutput.ExitBench, clioutput.CatImageResolution, "%v", err)
 	}
 
-	chainID := fmt.Sprintf("bench-%s-%s", cfg.Alias, in.Name)
+	chainID := fmt.Sprintf("%s-%s", cfg.Alias, in.Name)
 	digestShort := shortDigest(digest)
 
 	docs, manifests, rerr := renderChainManifests(cfg.Alias, in.Name, namespace, chainID, seidImage, digestShort, in.Validators, prefunded)
