@@ -195,7 +195,6 @@ users: []
 `
 		path := writeFixture(t, minimal)
 		stubInCluster(t, &rest.Config{Host: "https://kubernetes.default.svc"}, nil)
-		// Point the SA namespace file at a path that does not exist.
 		oldFile := inClusterNamespaceFile
 		inClusterNamespaceFile = filepath.Join(t.TempDir(), "missing")
 		t.Cleanup(func() { inClusterNamespaceFile = oldFile })
@@ -206,6 +205,52 @@ users: []
 		}
 		if c.Namespace != "default" {
 			t.Errorf("expected default namespace; got %q", c.Namespace)
+		}
+	})
+
+	t.Run("pristine pod with no kubeconfig file falls back to in-cluster", func(t *testing.T) {
+		// clientcmd captures HOME at init; KUBECONFIG override is the only working seam.
+		t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
+		stubInCluster(t, &rest.Config{Host: "https://kubernetes.default.svc"}, nil)
+		stubInClusterNamespace(t, "production-ns")
+
+		c, err := New(Options{})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if c.ContextName != "in-cluster" {
+			t.Errorf("expected in-cluster context; got %q", c.ContextName)
+		}
+		if c.Namespace != "production-ns" {
+			t.Errorf("namespace: %q", c.Namespace)
+		}
+	})
+
+	t.Run("explicit context override skips in-cluster fallback", func(t *testing.T) {
+		const minimal = `apiVersion: v1
+kind: Config
+contexts: []
+clusters: []
+users: []
+`
+		path := writeFixture(t, minimal)
+		called := false
+		old := inClusterConfigFn
+		inClusterConfigFn = func() (*rest.Config, error) {
+			called = true
+			return &rest.Config{Host: "https://wrong.example"}, nil
+		}
+		t.Cleanup(func() { inClusterConfigFn = old })
+
+		_, err := New(Options{Kubeconfig: path, Context: "ghost"})
+		if err == nil {
+			t.Fatalf("expected error")
+		}
+		if called {
+			t.Errorf("in-cluster fallback must not fire when --context is set")
+		}
+		if !strings.Contains(err.Message, "ghost") {
+			t.Errorf("expected error to mention requested context; got %q", err.Message)
 		}
 	})
 
