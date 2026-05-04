@@ -5,9 +5,12 @@
 package kube
 
 import (
+	"os"
 	"sort"
+	"strings"
 
 	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/client-go/rest"
 
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
@@ -36,9 +39,26 @@ type Client struct {
 	flags *genericclioptions.ConfigFlags
 }
 
+// inClusterContextName is the synthetic context label used when a
+// Client is constructed from rest.InClusterConfig() rather than a
+// kubeconfig file. Echoed in the JSON envelope alongside ClusterServer.
+const inClusterContextName = "in-cluster"
+
+// Vars (not consts) so tests can stub the in-cluster surface.
+var (
+	inClusterConfigFn      = rest.InClusterConfig
+	inClusterNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+)
+
 // New resolves kubeconfig context + namespace into a Client. Errors
 // in this layer are kubeconfig-shape problems and map to ExitIdentity /
 // CatKubeconfigParse, not cluster reachability.
+//
+// When no kubeconfig file is present and no --context override is given,
+// New falls back to rest.InClusterConfig() so seictl can run from
+// inside a pod with a projected ServiceAccount token. The synthetic
+// Client uses ContextName="in-cluster"; ClusterServer is the apiserver
+// URL from the in-cluster config.
 func New(opts Options) (*Client, *clioutput.Error) {
 	cf := genericclioptions.NewConfigFlags(true)
 	// Leave the pointers nil when the caller didn't override, so
@@ -72,8 +92,11 @@ func New(opts Options) (*Client, *clioutput.Error) {
 		contextName = opts.Context
 	}
 	if contextName == "" {
-		return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatKubeconfigParse,
-			"no current-context in kubeconfig and no --context provided")
+		// No kubeconfig context and no override — try in-cluster auth.
+		// ConfigFlags.ToRESTConfig() falls back to in-cluster on its own
+		// for resource.Builder, so all we need to synthesize here are
+		// the descriptive fields echoed into the JSON envelope.
+		return newInClusterClient(cf, opts)
 	}
 	kctx, ok := raw.Contexts[contextName]
 	if !ok {
@@ -103,6 +126,32 @@ func New(opts Options) (*Client, *clioutput.Error) {
 		ContextName:   contextName,
 		ClusterName:   kctx.Cluster,
 		ClusterServer: cluster.Server,
+		Namespace:     ns,
+		flags:         cf,
+	}, nil
+}
+
+func newInClusterClient(cf *genericclioptions.ConfigFlags, opts Options) (*Client, *clioutput.Error) {
+	cfg, err := inClusterConfigFn()
+	if err != nil {
+		return nil, clioutput.New(clioutput.ExitIdentity, clioutput.CatKubeconfigParse,
+			"no current-context in kubeconfig and not running in a pod with a ServiceAccount")
+	}
+
+	ns := opts.Namespace
+	if ns == "" {
+		if data, ferr := os.ReadFile(inClusterNamespaceFile); ferr == nil {
+			ns = strings.TrimSpace(string(data))
+		}
+	}
+	if ns == "" {
+		ns = "default"
+	}
+
+	return &Client{
+		ContextName:   inClusterContextName,
+		ClusterName:   inClusterContextName,
+		ClusterServer: cfg.Host,
 		Namespace:     ns,
 		flags:         cf,
 	}, nil
