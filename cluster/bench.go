@@ -287,7 +287,7 @@ func renderManifests(alias, name, namespace, chainID, seidImage, digestShort str
 		"RPC_COUNT":              strconv.Itoa(rpcCount),
 		"JOB_DEADLINE_SECONDS":   strconv.Itoa(durationMin * 60),
 		"PART_OF":                benchPartOf,
-		"GENESIS_ACCOUNTS_BLOCK": "", // bench doesn't expose --prefund yet
+		"GENESIS_ACCOUNTS_BLOCK": "",
 	}
 
 	chainYAML, e := renderEmbedded("chain.yaml", vars)

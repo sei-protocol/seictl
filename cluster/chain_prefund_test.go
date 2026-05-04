@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/sei-protocol/seictl/cluster/internal/clioutput"
 )
 
@@ -130,6 +132,11 @@ func TestRunChainUp_PrefundFlow(t *testing.T) {
 			if !strings.Contains(body, want) {
 				t.Errorf("rendered body missing %q\n%s", want, body)
 			}
+		}
+		// Catch indent drift if chain.yaml's `genesis:` is ever re-nested.
+		var parsed any
+		if err := yaml.Unmarshal(docs[0], &parsed); err != nil {
+			t.Errorf("rendered manifest is not valid YAML: %v", err)
 		}
 	})
 
