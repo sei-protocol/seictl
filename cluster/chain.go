@@ -192,7 +192,7 @@ func runChainUp(ctx context.Context, in chainUpInput, deps chainDeps) (chainUpRe
 
 func renderChainManifests(alias, name, namespace, chainID, seidImage, digestShort string, validators int, prefunded []PrefundedAccount) ([][]byte, []render.ManifestRef, *clioutput.Error) {
 	vars := map[string]string{
-		"CHAIN_ID":              chainID,
+		"CHAIN_ID":               chainID,
 		"NAMESPACE":              namespace,
 		"ENGINEER_ALIAS":         alias,
 		"NAME":                   name,
