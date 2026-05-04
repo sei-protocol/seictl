@@ -213,7 +213,7 @@ func TestRunChainUp(t *testing.T) {
 			Validators: 4,
 		}, &buf, stubChainDeps(t, "bdc"))
 
-		docs, _, err := renderChainManifests("bdc", "qa", "eng-bdc", "bench-bdc-qa", "img@sha256:0", "0123456789ab", 4)
+		docs, _, err := renderChainManifests("bdc", "qa", "eng-bdc", "bench-bdc-qa", "img@sha256:0", "0123456789ab", 4, nil)
 		if err != nil {
 			t.Fatalf("render: %v", err)
 		}
