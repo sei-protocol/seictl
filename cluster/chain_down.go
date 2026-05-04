@@ -84,7 +84,7 @@ func runChainDown(ctx context.Context, in chainDownInput, out io.Writer, deps ch
 		return failChainDown(out, e.ExitWith(clioutput.ExitBench))
 	}
 
-	chainID := fmt.Sprintf("bench-%s-%s", cfg.Alias, in.Name)
+	chainID := fmt.Sprintf("%s-%s", cfg.Alias, in.Name)
 	selector := fmt.Sprintf("sei.io/engineer=%s,sei.io/chain-id=%s", cfg.Alias, chainID)
 
 	kc, kerr := deps.newKubeClient(kube.Options{Kubeconfig: in.Kubeconfig, Context: in.Context})

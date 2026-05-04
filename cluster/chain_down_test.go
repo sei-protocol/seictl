@@ -42,7 +42,7 @@ func TestRunChainDown(t *testing.T) {
 		}
 		var data chainDownResult
 		_ = json.Unmarshal(env.Data, &data)
-		if data.ChainID != "bench-bdc-qa" {
+		if data.ChainID != "bdc-qa" {
 			t.Errorf("chainId: %q", data.ChainID)
 		}
 		if !data.DryRun {
@@ -62,13 +62,13 @@ func TestRunChainDown(t *testing.T) {
 			dryRunListFn: func(_ context.Context, _ *kube.Client, opts kube.ListOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				capturedSelector = opts.LabelSelector
 				return []kube.DeleteResult{
-					{Kind: "SeiNodeDeployment", Name: "bench-bdc-qa", Namespace: "eng-bdc", Action: "would-delete"},
+					{Kind: "SeiNodeDeployment", Name: "bdc-qa", Namespace: "eng-bdc", Action: "would-delete"},
 				}, nil
 			},
 		}
 		var buf bytes.Buffer
 		_ = runChainDown(context.Background(), chainDownInput{Name: "qa", DryRun: true}, &buf, deps)
-		want := "sei.io/engineer=bdc,sei.io/chain-id=bench-bdc-qa"
+		want := "sei.io/engineer=bdc,sei.io/chain-id=bdc-qa"
 		if capturedSelector != want {
 			t.Errorf("selector: got %q, want %q", capturedSelector, want)
 		}
@@ -81,7 +81,7 @@ func TestRunChainDown(t *testing.T) {
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 			deleteFn: func(context.Context, *kube.Client, kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				return []kube.DeleteResult{
-					{Kind: "SeiNodeDeployment", Name: "bench-bdc-qa", Namespace: "eng-bdc", Action: "deleted"},
+					{Kind: "SeiNodeDeployment", Name: "bdc-qa", Namespace: "eng-bdc", Action: "deleted"},
 				}, nil
 			},
 		}
@@ -109,7 +109,7 @@ func TestRunChainDown(t *testing.T) {
 			newKubeClient: func(kube.Options) (*kube.Client, *clioutput.Error) { return &kube.Client{}, nil },
 			deleteFn: func(context.Context, *kube.Client, kube.DeleteOptions) ([]kube.DeleteResult, *clioutput.Error) {
 				return []kube.DeleteResult{
-					{Kind: "SeiNodeDeployment", Name: "bench-bdc-qa", Namespace: "eng-bdc", Action: "still-terminating"},
+					{Kind: "SeiNodeDeployment", Name: "bdc-qa", Namespace: "eng-bdc", Action: "still-terminating"},
 				}, nil
 			},
 		}
