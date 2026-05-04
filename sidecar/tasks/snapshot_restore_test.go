@@ -142,11 +142,15 @@ func TestSnapshotRestoreExtractsArchive(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"testchain/state-sync/latest.txt": []byte("100000000"),
 			"testchain/state-sync/snapshot_100000000_testchain_us-east-1.tar.gz": archive,
 		},
 	}
-	restorer := mustNewRestorer(t, homeDir, "test-bucket", "us-east-1", "testchain", mockClientFactory(client), nil)
+	lister := &mockObjectLister{
+		keys: []string{
+			"testchain/state-sync/snapshot_100000000_testchain_us-east-1.tar.gz",
+		},
+	}
+	restorer := mustNewRestorer(t, homeDir, "test-bucket", "us-east-1", "testchain", mockClientFactory(client), mockListerFactory(lister))
 	if err := restorer.Restore(context.Background(), 0); err != nil {
 		t.Fatalf("Restore failed: %v", err)
 	}
@@ -179,14 +183,13 @@ func TestSnapshotRestoreSkipsWhenMarkerExists(t *testing.T) {
 	}
 }
 
-func TestSnapshotRestoreNoMarkerOnLatestTxtError(t *testing.T) {
+func TestSnapshotRestoreNoMarkerWhenBucketIsEmpty(t *testing.T) {
 	homeDir := t.TempDir()
-	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(&mockTransferClient{
-		errDefault: fmt.Errorf("access denied"),
-	}), nil)
+	lister := &mockObjectLister{keys: []string{}}
+	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", nil, mockListerFactory(lister))
 
 	if err := restorer.Restore(context.Background(), 0); err == nil {
-		t.Fatal("expected error on S3 failure")
+		t.Fatal("expected error when no snapshots are present")
 	}
 
 	if markerExists(homeDir, restoreMarkerFile) {
@@ -197,12 +200,14 @@ func TestSnapshotRestoreNoMarkerOnLatestTxtError(t *testing.T) {
 func TestSnapshotRestoreNoMarkerOnDownloadError(t *testing.T) {
 	homeDir := t.TempDir()
 	client := &mockTransferClient{
-		responses: map[string][]byte{
-			"c/state-sync/latest.txt": []byte("100000000"),
-		},
 		errDefault: fmt.Errorf("access denied"),
 	}
-	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), nil)
+	lister := &mockObjectLister{
+		keys: []string{
+			"c/state-sync/snapshot_100000000_c_r.tar.gz",
+		},
+	}
+	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), mockListerFactory(lister))
 
 	if err := restorer.Restore(context.Background(), 0); err == nil {
 		t.Fatal("expected error on snapshot download failure")
@@ -221,11 +226,13 @@ func TestSnapshotRestoreRejectsPathTraversal(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/state-sync/latest.txt": []byte("100000000"),
 			"c/state-sync/snapshot_100000000_c_r.tar.gz": archive,
 		},
 	}
-	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), nil)
+	lister := &mockObjectLister{
+		keys: []string{"c/state-sync/snapshot_100000000_c_r.tar.gz"},
+	}
+	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), mockListerFactory(lister))
 	if err := restorer.Restore(context.Background(), 0); err == nil {
 		t.Fatal("expected error for path traversal attempt")
 	}
@@ -239,11 +246,13 @@ func TestSnapshotRestoreCleansUpTempFile(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/state-sync/latest.txt": []byte("100000000"),
 			"c/state-sync/snapshot_100000000_c_r.tar.gz": archive,
 		},
 	}
-	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), nil)
+	lister := &mockObjectLister{
+		keys: []string{"c/state-sync/snapshot_100000000_c_r.tar.gz"},
+	}
+	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), mockListerFactory(lister))
 	if err := restorer.Restore(context.Background(), 0); err != nil {
 		t.Fatalf("Restore failed: %v", err)
 	}
@@ -268,11 +277,13 @@ func TestSnapshotRestoreWritesHeightFile(t *testing.T) {
 
 	client := &mockTransferClient{
 		responses: map[string][]byte{
-			"c/state-sync/latest.txt": []byte("100000000"),
 			"c/state-sync/snapshot_100000000_c_r.tar.gz": archive,
 		},
 	}
-	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), nil)
+	lister := &mockObjectLister{
+		keys: []string{"c/state-sync/snapshot_100000000_c_r.tar.gz"},
+	}
+	restorer := mustNewRestorer(t, homeDir, "b", "r", "c", mockClientFactory(client), mockListerFactory(lister))
 	if err := restorer.Restore(context.Background(), 0); err != nil {
 		t.Fatalf("Restore failed: %v", err)
 	}

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
@@ -102,23 +101,14 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 		return fmt.Errorf("building S3 transfer client: %w", err)
 	}
 
-	var snapshotKey string
-	if targetHeight > 0 {
-		lister, listerErr := r.listerFactory(ctx, r.region)
-		if listerErr != nil {
-			return fmt.Errorf("building S3 lister: %w", listerErr)
-		}
-		var resolveErr error
-		snapshotKey, resolveErr = resolveKeyForHeight(ctx, lister, r.bucket, prefix, r.region, targetHeight)
-		if resolveErr != nil {
-			return resolveErr
-		}
-	} else {
-		var resolveErr error
-		snapshotKey, resolveErr = resolveLatestKey(ctx, client, r.bucket, prefix, r.chainID, r.region)
-		if resolveErr != nil {
-			return resolveErr
-		}
+	lister, err := r.listerFactory(ctx, r.region)
+	if err != nil {
+		return fmt.Errorf("building S3 lister: %w", err)
+	}
+
+	snapshotKey, err := resolveKeyForHeight(ctx, lister, r.bucket, prefix, r.region, targetHeight)
+	if err != nil {
+		return err
 	}
 
 	if snapshotKey == "" {
@@ -168,31 +158,9 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 	return writeMarker(r.homeDir, restoreMarkerFile)
 }
 
-// resolveLatestKey reads <prefix>latest.txt (which contains a block height)
-// and constructs the matching snapshot key in the form
-// <prefix>snapshot_<height>_<chain>_<region>.tar.gz.
-func resolveLatestKey(ctx context.Context, client seis3.TransferClient, bucket, prefix, chainID, region string) (string, error) {
-	latestKey := prefix + "latest.txt"
-	var buf seis3.WriteAtBuffer
-	_, err := client.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
-		Bucket:   aws.String(bucket),
-		Key:      aws.String(latestKey),
-		WriterAt: &buf,
-	})
-	if err != nil {
-		return "", seis3.ClassifyS3Error("snapshot-restore", bucket, latestKey, region, err)
-	}
-
-	height := strings.TrimSpace(string(buf.Bytes()))
-	if height == "" {
-		return "", fmt.Errorf("latest.txt is empty")
-	}
-
-	return prefix + fmt.Sprintf("snapshot_%s_%s_%s.tar.gz", height, chainID, region), nil
-}
-
-// resolveKeyForHeight lists snapshot objects and returns the key with the
-// highest height that is <= targetHeight.
+// resolveKeyForHeight lists snapshot objects under prefix and returns the key
+// with the highest parsed height. When targetHeight > 0 it caps the search at
+// that height; targetHeight == 0 picks the highest available snapshot.
 func resolveKeyForHeight(ctx context.Context, lister seis3.ObjectLister, bucket, prefix, region string, targetHeight int64) (string, error) {
 	var bestHeight int64
 	var bestKey string
@@ -213,7 +181,10 @@ func resolveKeyForHeight(ctx context.Context, lister seis3.ObjectLister, bucket,
 				continue
 			}
 			h := parseHeightFromKey(*obj.Key)
-			if h <= 0 || h > targetHeight {
+			if h <= 0 {
+				continue
+			}
+			if targetHeight > 0 && h > targetHeight {
 				continue
 			}
 			if h > bestHeight {
@@ -229,10 +200,13 @@ func resolveKeyForHeight(ctx context.Context, lister seis3.ObjectLister, bucket,
 	}
 
 	if bestKey == "" {
-		return "", fmt.Errorf("no snapshot found at or below height %d in s3://%s/%s", targetHeight, bucket, prefix)
+		if targetHeight > 0 {
+			return "", fmt.Errorf("no snapshot found at or below height %d in s3://%s/%s", targetHeight, bucket, prefix)
+		}
+		return "", fmt.Errorf("no snapshots found in s3://%s/%s", bucket, prefix)
 	}
 
-	restoreLog.Info("resolved snapshot for target height",
+	restoreLog.Info("resolved snapshot",
 		"targetHeight", targetHeight, "snapshotHeight", bestHeight, "key", bestKey)
 	return bestKey, nil
 }
