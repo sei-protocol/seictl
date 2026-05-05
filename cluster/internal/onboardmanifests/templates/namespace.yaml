@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: {{.Namespace}}
-  labels:
-    app.kubernetes.io/name: {{.Namespace}}
-    app.kubernetes.io/managed-by: flux
-    tide.sei.io/cell-type: personal
-    tide.sei.io/owner: {{.Alias}}

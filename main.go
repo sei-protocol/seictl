@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/urfave/cli/v3"
-
-	"github.com/sei-protocol/seictl/cluster"
 )
 
 var (
@@ -51,11 +49,6 @@ var (
 			&awaitCmd,
 			&serveCmd,
 			&reportCmd,
-			&cluster.ContextCmd,
-			&cluster.BenchCmd,
-			&cluster.ChainCmd,
-			&cluster.RPCCmd,
-			&cluster.OnboardCmd,
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
