@@ -19,5 +19,6 @@ var Cmd = cli.Command{
 		&getCmd,
 		&listCmd,
 		&deleteCmd,
+		&watchCmd,
 	},
 }
