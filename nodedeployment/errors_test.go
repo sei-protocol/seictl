@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -36,6 +37,25 @@ func TestEmitStatus_PreservesAPIStatus(t *testing.T) {
 	}
 	if got.Status != metav1.StatusFailure {
 		t.Errorf("status = %q; want Failure", got.Status)
+	}
+}
+
+func TestEmitStatus_UnwrapsThroughFmtErrorf(t *testing.T) {
+	inner := apierrors.NewNotFound(schema.GroupResource{Group: "sei.io", Resource: "seinodedeployments"}, "missing")
+	wrapped := fmt.Errorf("apply SeiNodeDeployment default/missing: %w", inner)
+
+	var buf bytes.Buffer
+	emitStatus(&buf, wrapped)
+
+	var got metav1.Status
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Reason != metav1.StatusReasonNotFound {
+		t.Errorf("reason = %q; want NotFound (errors.As must walk %%w wrap)", got.Reason)
+	}
+	if got.Code != 404 {
+		t.Errorf("code = %d; want 404", got.Code)
 	}
 }
 

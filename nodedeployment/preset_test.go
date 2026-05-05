@@ -13,7 +13,7 @@ func TestRender_GenesisChain(t *testing.T) {
 		name:      "crater-lake-1",
 		namespace: "nightly",
 		chainID:   "crater-lake-1",
-		image:     "ghcr.io/sei-protocol/sei:v0.1.2",
+		image:     "ghcr.io/sei-protocol/sei:v6.4.0",
 		replicas:  3,
 		hasReps:   true,
 	})
@@ -33,8 +33,12 @@ func TestRender_GenesisChain(t *testing.T) {
 	if !found || chainID != "crater-lake-1" {
 		t.Errorf("spec.genesis.chainId = %q; want crater-lake-1", chainID)
 	}
+	tmplChainID, found, _ := unstructured.NestedString(got.Object, "spec", "template", "spec", "chainId")
+	if !found || tmplChainID != "crater-lake-1" {
+		t.Errorf("spec.template.spec.chainId = %q; want crater-lake-1 (--chain-id must hit both paths for genesis-chain)", tmplChainID)
+	}
 	image, _, _ := unstructured.NestedString(got.Object, "spec", "template", "spec", "image")
-	if image != "ghcr.io/sei-protocol/sei:v0.1.2" {
+	if image != "ghcr.io/sei-protocol/sei:v6.4.0" {
 		t.Errorf("image = %q; want overridden", image)
 	}
 	replicas, _, _ := unstructured.NestedInt64(got.Object, "spec", "replicas")
@@ -49,10 +53,31 @@ func TestRender_GenesisChain(t *testing.T) {
 	}
 }
 
+func TestRender_RPCChainIDDoesNotTouchGenesis(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "rpc",
+		name:    "rpc-fleet",
+		chainID: "pacific-1",
+		image:   "img:1",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	tmplChainID, _, _ := unstructured.NestedString(got.Object, "spec", "template", "spec", "chainId")
+	if tmplChainID != "pacific-1" {
+		t.Errorf("spec.template.spec.chainId = %q; want pacific-1", tmplChainID)
+	}
+	if _, found, _ := unstructured.NestedString(got.Object, "spec", "genesis", "chainId"); found {
+		t.Errorf("spec.genesis.chainId set on rpc preset; should only appear on genesis-chain")
+	}
+}
+
 func TestRender_RPCPresetDefaults(t *testing.T) {
 	got, err := render(renderArgs{
-		preset: "rpc",
-		name:   "rpc-fleet",
+		preset:  "rpc",
+		name:    "rpc-fleet",
+		chainID: "pacific-1",
+		image:   "ghcr.io/sei-protocol/sei:v6.4.0",
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -74,8 +99,28 @@ func TestRender_RequiredFlags(t *testing.T) {
 		want string
 	}{
 		{"missing preset", renderArgs{name: "x"}, "--preset is required"},
-		{"missing name", renderArgs{preset: "genesis-chain"}, "--name is required"},
+		{"missing name", renderArgs{preset: "genesis-chain"}, "name is required"},
 		{"unknown preset", renderArgs{preset: "no-such", name: "x"}, "unknown preset"},
+		{
+			"genesis-chain without chain-id",
+			renderArgs{preset: "genesis-chain", name: "x", image: "img:1"},
+			"requires .spec.genesis.chainId",
+		},
+		{
+			"genesis-chain without image",
+			renderArgs{preset: "genesis-chain", name: "x", chainID: "c"},
+			"requires .spec.template.spec.image",
+		},
+		{
+			"rpc without chain-id",
+			renderArgs{preset: "rpc", name: "x", image: "img:1"},
+			"requires .spec.template.spec.chainId",
+		},
+		{
+			"rpc without image",
+			renderArgs{preset: "rpc", name: "x", chainID: "pacific-1"},
+			"requires .spec.template.spec.image",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,8 +137,9 @@ func TestRender_RequiredFlags(t *testing.T) {
 
 func TestRender_SetOverrides(t *testing.T) {
 	got, err := render(renderArgs{
-		preset: "rpc",
-		name:   "x",
+		preset:  "rpc",
+		name:    "x",
+		chainID: "pacific-1",
 		sets: []string{
 			"spec.template.spec.image=custom:tag",
 			"spec.replicas=5",
@@ -119,10 +165,11 @@ func TestRender_SetOverrides(t *testing.T) {
 
 func TestRender_SetPrecedence(t *testing.T) {
 	got, err := render(renderArgs{
-		preset: "rpc",
-		name:   "x",
-		image:  "from-flag:1",
-		sets:   []string{"spec.template.spec.image=from-set:2"},
+		preset:  "rpc",
+		name:    "x",
+		chainID: "pacific-1",
+		image:   "from-flag:1",
+		sets:    []string{"spec.template.spec.image=from-set:2"},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -130,6 +177,29 @@ func TestRender_SetPrecedence(t *testing.T) {
 	image, _, _ := unstructured.NestedString(got.Object, "spec", "template", "spec", "image")
 	if image != "from-set:2" {
 		t.Errorf("image = %q; --set should beat --image", image)
+	}
+}
+
+func TestRender_SetCannotRetargetMetadata(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:    "rpc",
+		name:      "x",
+		namespace: "nightly",
+		chainID:   "pacific-1",
+		image:     "img:1",
+		sets: []string{
+			"metadata.namespace=kube-system",
+			"metadata.name=hijacked",
+		},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if got.GetNamespace() != "nightly" {
+		t.Errorf("namespace = %q; --set must not retarget post-resolution", got.GetNamespace())
+	}
+	if got.GetName() != "x" {
+		t.Errorf("name = %q; --set must not rename", got.GetName())
 	}
 }
 

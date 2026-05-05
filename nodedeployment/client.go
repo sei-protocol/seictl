@@ -2,8 +2,6 @@ package nodedeployment
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -11,55 +9,45 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// loadConfig follows kubeconfig precedence: --kubeconfig flag,
-// $KUBECONFIG, then $HOME/.kube/config. In-cluster config takes over
-// when no kubeconfig is locatable AND ServiceAccount tokens are
-// mounted, matching kubectl's behavior.
-func loadConfig(kubeconfigPath string) (*rest.Config, error) {
-	if kubeconfigPath == "" {
-		kubeconfigPath = os.Getenv("KUBECONFIG")
-	}
-	if kubeconfigPath == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			candidate := filepath.Join(home, ".kube", "config")
-			if _, err := os.Stat(candidate); err == nil {
-				kubeconfigPath = candidate
-			}
-		}
-	}
-	if kubeconfigPath != "" {
-		return clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-	}
-	return rest.InClusterConfig()
+// kubeconfig wraps clientcmd's deferred loader so a single source
+// honors $KUBECONFIG colon-merge, --kubeconfig override, in-cluster
+// fallback (apiserver + SA namespace from /var/run/secrets), and
+// kubectl's namespace precedence (override > context > "default").
+type kubeconfig struct {
+	cfg clientcmd.ClientConfig
 }
 
-// resolveNamespace honors -n / --namespace if set, otherwise reads the
-// kubeconfig context's default. Falls back to "default" when neither is
-// set or when running in-cluster without a namespace hint.
-func resolveNamespace(kubeconfigPath, override string) string {
-	if override != "" {
-		return override
+// loadKubeconfig returns a deferred-loading client config. It does not
+// read any files until ClientConfig() / Namespace() is called, so
+// constructing one is cheap.
+func loadKubeconfig(explicitPath, namespaceOverride string) *kubeconfig {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if explicitPath != "" {
+		rules.ExplicitPath = explicitPath
 	}
-	if kubeconfigPath == "" {
-		kubeconfigPath = os.Getenv("KUBECONFIG")
+	overrides := &clientcmd.ConfigOverrides{}
+	if namespaceOverride != "" {
+		overrides.Context.Namespace = namespaceOverride
 	}
-	if kubeconfigPath == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			candidate := filepath.Join(home, ".kube", "config")
-			if _, err := os.Stat(candidate); err == nil {
-				kubeconfigPath = candidate
-			}
-		}
+	return &kubeconfig{
+		cfg: clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides),
 	}
-	if kubeconfigPath != "" {
-		cfg, err := clientcmd.LoadFromFile(kubeconfigPath)
-		if err == nil && cfg.CurrentContext != "" {
-			if ctx, ok := cfg.Contexts[cfg.CurrentContext]; ok && ctx.Namespace != "" {
-				return ctx.Namespace
-			}
-		}
+}
+
+func (k *kubeconfig) RESTConfig() (*rest.Config, error) {
+	cfg, err := k.cfg.ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load kubeconfig: %w", err)
 	}
-	return "default"
+	return cfg, nil
+}
+
+func (k *kubeconfig) Namespace() (string, error) {
+	ns, _, err := k.cfg.Namespace()
+	if err != nil {
+		return "", fmt.Errorf("resolve namespace: %w", err)
+	}
+	return ns, nil
 }
 
 // newClient constructs a controller-runtime client capable of

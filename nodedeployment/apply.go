@@ -12,9 +12,15 @@ import (
 )
 
 func applyAction(ctx context.Context, c *cli.Command) error {
+	name := c.StringArg("name")
+	if name == "" {
+		emitStatus(os.Stderr, usageError("name argument required: seictl nd apply <name> --preset ..."))
+		return cli.Exit("", 1)
+	}
+
 	args := renderArgs{
 		preset:    c.String("preset"),
-		name:      c.String("name"),
+		name:      name,
 		namespace: c.String("namespace"),
 		chainID:   c.String("chain-id"),
 		image:     c.String("image"),
@@ -25,30 +31,40 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		args.hasReps = true
 	}
 	dryRun := c.Bool("dry-run")
-	kubeconfig := c.String("kubeconfig")
 
-	if args.namespace == "" {
-		args.namespace = resolveNamespace(kubeconfig, "")
+	kc := loadKubeconfig(c.String("kubeconfig"), args.namespace)
+	cfg, err := kc.RESTConfig()
+	if err != nil {
+		emitStatus(os.Stderr, err)
+		return cli.Exit("", 1)
 	}
+	resolvedNS, err := kc.Namespace()
+	if err != nil {
+		emitStatus(os.Stderr, err)
+		return cli.Exit("", 1)
+	}
+	args.namespace = resolvedNS
 
 	obj, err := render(args)
-	if err != nil {
-		emitStatus(os.Stderr, usageError("%s", err.Error()))
-		return cli.Exit("", 1)
-	}
-
-	cfg, err := loadConfig(kubeconfig)
-	if err != nil {
-		emitStatus(os.Stderr, fmt.Errorf("load kubeconfig: %w", err))
-		return cli.Exit("", 1)
-	}
-	kc, err := newClient(cfg)
 	if err != nil {
 		emitStatus(os.Stderr, err)
 		return cli.Exit("", 1)
 	}
 
-	if err := snd.Apply(ctx, kc, obj, dryRun); err != nil {
+	mode := "applying"
+	if dryRun {
+		mode = "applying (dry-run)"
+	}
+	fmt.Fprintf(os.Stderr, "seictl: %s SeiNodeDeployment %s/%s to %s\n",
+		mode, obj.GetNamespace(), obj.GetName(), cfg.Host)
+
+	kcli, err := newClient(cfg)
+	if err != nil {
+		emitStatus(os.Stderr, err)
+		return cli.Exit("", 1)
+	}
+
+	if err := snd.Apply(ctx, kcli, obj, dryRun); err != nil {
 		emitStatus(os.Stderr, fmt.Errorf("apply SeiNodeDeployment %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
 		return cli.Exit("", 1)
 	}
@@ -67,8 +83,23 @@ var applyCmd = cli.Command{
 	Description: "Loads the named preset, applies discrete-flag and --set " +
 		"overrides, and server-side-applies the result. With --dry-run, " +
 		"the apiserver validates and returns the would-be-applied CR " +
-		"without persisting. The post-apply CR is emitted to stdout as " +
-		"JSON; errors land on stderr as a metav1.Status object.",
+		"without persisting. " +
+		"\n\n" +
+		"Layering, lowest precedence first: preset YAML, discrete flags " +
+		"(--chain-id, --image, --replicas), --set. " +
+		"\n\n" +
+		"Cluster + namespace come from --kubeconfig (or $KUBECONFIG, " +
+		"or $HOME/.kube/config, or in-cluster) and -n (or the kubeconfig " +
+		"context's default-namespace, or the in-cluster ServiceAccount's " +
+		"namespace). seictl prints the resolved cluster + namespace on " +
+		"stderr before applying. " +
+		"\n\n" +
+		"Output: post-apply CR on stdout as JSON. Errors on stderr as a " +
+		"metav1.Status object (parse with `jq -r .reason`).",
+	ArgsUsage: "<name>",
+	Arguments: []cli.Argument{
+		&cli.StringArg{Name: "name", UsageText: "metadata.name of the SeiNodeDeployment"},
+	},
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:     "preset",
@@ -76,22 +107,17 @@ var applyCmd = cli.Command{
 			Required: true,
 		},
 		&cli.StringFlag{
-			Name:     "name",
-			Usage:    "metadata.name of the SeiNodeDeployment",
-			Required: true,
-		},
-		&cli.StringFlag{
 			Name:    "namespace",
 			Aliases: []string{"n"},
-			Usage:   "Target namespace (defaults to kubeconfig context's namespace)",
+			Usage:   "Target namespace (defaults to kubeconfig context or in-cluster SA)",
 		},
 		&cli.StringFlag{
 			Name:  "chain-id",
-			Usage: "Chain ID (sets spec.genesis.chainId; required by genesis-chain preset)",
+			Usage: "Chain ID — sets spec.template.spec.chainId (and spec.genesis.chainId for genesis-chain). Required by all v1 presets.",
 		},
 		&cli.StringFlag{
 			Name:  "image",
-			Usage: "seid container image (sets spec.template.spec.image)",
+			Usage: "seid container image (sets spec.template.spec.image; required by all v1 presets)",
 		},
 		&cli.IntFlag{
 			Name:  "replicas",
@@ -99,7 +125,7 @@ var applyCmd = cli.Command{
 		},
 		&cli.StringSliceFlag{
 			Name:  "set",
-			Usage: "Strategic-merge override, dotted path (e.g. --set spec.template.spec.image=foo). Repeatable.",
+			Usage: "Strategic-merge override, dotted path (e.g. --set spec.template.spec.image=foo). Wins on collision with discrete flags. Repeatable.",
 		},
 		&cli.BoolFlag{
 			Name:  "dry-run",
@@ -108,7 +134,7 @@ var applyCmd = cli.Command{
 		&cli.StringFlag{
 			Name:    "kubeconfig",
 			Sources: cli.EnvVars("KUBECONFIG"),
-			Usage:   "Path to kubeconfig (defaults to $KUBECONFIG, then $HOME/.kube/config)",
+			Usage:   "Path to kubeconfig (honors KUBECONFIG colon-merge); defaults to $HOME/.kube/config or in-cluster",
 		},
 	},
 	Action: applyAction,

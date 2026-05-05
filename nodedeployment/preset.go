@@ -24,21 +24,43 @@ type renderArgs struct {
 	sets      []string
 }
 
+// presetRequiredFields lists the spec paths each preset needs as
+// non-empty strings after all overrides are applied. Add to this map
+// when adding presets.
+//
+// The CRD enforces these at the apiserver too — this layer surfaces
+// them as a friendly metav1.Status before SSA round-trips, so a typo
+// gets a clear "preset rpc requires .spec.template.spec.chainId"
+// instead of an apiserver Invalid with a wall of FieldValueRequired
+// causes.
+var presetRequiredFields = map[string][][]string{
+	"genesis-chain": {
+		{"spec", "genesis", "chainId"},
+		{"spec", "template", "spec", "chainId"},
+		{"spec", "template", "spec", "image"},
+	},
+	"rpc": {
+		{"spec", "template", "spec", "chainId"},
+		{"spec", "template", "spec", "image"},
+	},
+}
+
 // render loads the named preset, applies discrete-flag overrides, then
 // applies --set overrides, and returns the resulting unstructured SND
 // with metadata.name / metadata.namespace and provenance annotations
-// populated.
+// populated. Per-preset required fields are validated last; an unset
+// required field surfaces as a usageError before SSA.
 func render(args renderArgs) (*unstructured.Unstructured, error) {
 	if args.preset == "" {
-		return nil, fmt.Errorf("--preset is required (known: %s)", strings.Join(presetNames(), ", "))
+		return nil, usageError("--preset is required (known: %s)", strings.Join(presetNames(), ", "))
 	}
 	if args.name == "" {
-		return nil, fmt.Errorf("--name is required")
+		return nil, usageError("name is required: seictl nd apply <name> --preset ...")
 	}
 
 	data, err := loadPreset(args.preset)
 	if err != nil {
-		return nil, err
+		return nil, usageError("%s", err.Error())
 	}
 
 	jsonBytes, err := yaml.YAMLToJSON(data)
@@ -50,10 +72,6 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		return nil, fmt.Errorf("decode preset %q: %w", args.preset, err)
 	}
 	u.SetGroupVersionKind(snd.GVK)
-	u.SetName(args.name)
-	if args.namespace != "" {
-		u.SetNamespace(args.namespace)
-	}
 
 	if args.image != "" {
 		if err := unstructured.SetNestedField(u.Object, args.image, "spec", "template", "spec", "image"); err != nil {
@@ -66,17 +84,35 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		}
 	}
 	if args.chainID != "" {
-		if err := unstructured.SetNestedField(u.Object, args.chainID, "spec", "genesis", "chainId"); err != nil {
-			return nil, fmt.Errorf("apply --chain-id: %w", err)
+		// Every node template needs the chain ID it serves. genesis-chain
+		// additionally writes spec.genesis.chainId so the genesis ceremony
+		// names the chain being created.
+		if err := unstructured.SetNestedField(u.Object, args.chainID, "spec", "template", "spec", "chainId"); err != nil {
+			return nil, fmt.Errorf("apply --chain-id (template): %w", err)
+		}
+		if args.preset == "genesis-chain" {
+			if err := unstructured.SetNestedField(u.Object, args.chainID, "spec", "genesis", "chainId"); err != nil {
+				return nil, fmt.Errorf("apply --chain-id (genesis): %w", err)
+			}
 		}
 	}
 
 	for _, expr := range args.sets {
 		if err := applySet(u.Object, expr); err != nil {
-			return nil, fmt.Errorf("apply --set %q: %w", expr, err)
+			return nil, usageError("apply --set %q: %s", expr, err.Error())
 		}
 	}
 
+	// Re-assert identity after --set so a malicious or accidental
+	// --set metadata.namespace=kube-system can't silently retarget.
+	u.SetName(args.name)
+	if args.namespace != "" {
+		u.SetNamespace(args.namespace)
+	}
+
+	// Provenance annotations. NOT A TRUST BOUNDARY — anyone with
+	// `kubectl edit snd` can forge these. Downstream consumers must
+	// not gate behavior on them without separate signing.
 	annotations := u.GetAnnotations()
 	if annotations == nil {
 		annotations = map[string]string{}
@@ -84,6 +120,14 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	annotations["seictl.sei.io/preset"] = args.preset
 	annotations["seictl.sei.io/version"] = version
 	u.SetAnnotations(annotations)
+
+	for _, fields := range presetRequiredFields[args.preset] {
+		val, found, _ := unstructured.NestedString(u.Object, fields...)
+		if !found || val == "" {
+			return nil, usageError("preset %q requires .%s — set via flag or --set %s=<value>",
+				args.preset, strings.Join(fields, "."), strings.Join(fields, "."))
+		}
+	}
 
 	return u, nil
 }
@@ -111,7 +155,7 @@ func applySet(root map[string]interface{}, expr string) error {
 		return fmt.Errorf("empty path before '='")
 	}
 	if strings.ContainsAny(rawPath, "[]") {
-		return fmt.Errorf("list-index syntax in --set paths is not supported (path: %q)", rawPath)
+		return fmt.Errorf("list-index syntax in --set paths is not supported (path: %q); rewrite as a top-level field or file an issue with the case", rawPath)
 	}
 	fields := strings.Split(rawPath, ".")
 	for _, f := range fields {
