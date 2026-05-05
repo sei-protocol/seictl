@@ -12,15 +12,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const (
-	Group      = "sei.io"
-	Version    = "v1alpha1"
-	Kind       = "SeiNodeDeployment"
-	ListKind   = "SeiNodeDeploymentList"
+var (
+	GVK        = schema.GroupVersionKind{Group: "sei.io", Version: "v1alpha1", Kind: "SeiNodeDeployment"}
 	FieldOwner = client.FieldOwner("seictl")
 )
-
-var GVK = schema.GroupVersionKind{Group: Group, Version: Version, Kind: Kind}
 
 func New() *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
