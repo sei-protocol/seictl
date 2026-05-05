@@ -90,7 +90,6 @@ func isUntrackedOrEmpty(line string) bool {
 	return line[0] == '?' && line[1] == '?'
 }
 
-// SeedBranchOptions drives PushSeedBranch.
 type SeedBranchOptions struct {
 	RepoPath      string
 	Branch        string
@@ -99,16 +98,12 @@ type SeedBranchOptions struct {
 	Files         map[string][]byte
 }
 
-// SeedBranchResult names the branch ref pushed to origin.
 type SeedBranchResult struct {
 	Branch string
 	Ref    string
 }
 
-// PushSeedBranch creates Branch off origin/BaseBranch, writes Files,
-// commits, and pushes to origin. Returns the local current branch to
-// whatever it was on entry. Idempotent: if origin/Branch already
-// exists, it skips the seed and returns the existing ref.
+// PushSeedBranch is idempotent against an existing origin/Branch.
 func PushSeedBranch(opts SeedBranchOptions) (*SeedBranchResult, error) {
 	if opts.BaseBranch == "" {
 		opts.BaseBranch = "main"
