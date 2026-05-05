@@ -72,6 +72,9 @@ func onboardStubs(t *testing.T) (onboardDeps, string, string) {
 		createPR: func(opts githubpr.Options) (*githubpr.Result, error) {
 			return &githubpr.Result{Branch: opts.Branch, URL: "https://github.com/example/pr/1"}, nil
 		},
+		pushSeedBranch: func(opts githubpr.SeedBranchOptions) (*githubpr.SeedBranchResult, error) {
+			return &githubpr.SeedBranchResult{Branch: opts.Branch, Ref: "refs/heads/" + opts.Branch}, nil
+		},
 		discoverRepo: func(string) (string, error) { return repoPath, nil },
 		writeConfig:  config.Write,
 	}
@@ -109,17 +112,26 @@ func TestRunOnboard_DryRunEmitsWouldCreate(t *testing.T) {
 	if _, statErr := os.Stat(cfgPath); statErr == nil {
 		t.Errorf("config file written on dry-run at %s", cfgPath)
 	}
-	if len(data.GeneratedFiles) != 4 {
-		t.Errorf("generated files: got %d, want 4 (3 cell + aggregator)", len(data.GeneratedFiles))
+	if len(data.GeneratedFiles) != 8 {
+		t.Errorf("generated files: got %d, want 8 (6 cell + aggregator + workspace seed)", len(data.GeneratedFiles))
 	}
-	var sawAggregator bool
+	var sawAggregator, sawWorkspaceSeed bool
 	for _, p := range data.GeneratedFiles {
 		if p == "clusters/harbor/engineers/kustomization.yaml" {
 			sawAggregator = true
 		}
+		if p == "clusters/harbor/eng/bdc/.gitkeep" {
+			sawWorkspaceSeed = true
+		}
 	}
 	if !sawAggregator {
 		t.Errorf("aggregator path missing from generated files: %v", data.GeneratedFiles)
+	}
+	if !sawWorkspaceSeed {
+		t.Errorf("workspace seed path missing from generated files: %v", data.GeneratedFiles)
+	}
+	if data.WorkspaceBranch != "eng-bdc-workspace" {
+		t.Errorf("workspace branch: got %q, want eng-bdc-workspace", data.WorkspaceBranch)
 	}
 }
 

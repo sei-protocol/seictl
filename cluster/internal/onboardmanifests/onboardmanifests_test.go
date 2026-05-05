@@ -5,17 +5,20 @@ import (
 	"testing"
 )
 
-func TestGenerate_ReturnsThreeFilesAtExpectedPaths(t *testing.T) {
+func TestGenerate_ReturnsAllCellFilesAtExpectedPaths(t *testing.T) {
 	files, err := Generate(Cell{Alias: "bdc", Namespace: "eng-bdc"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if len(files) != 3 {
-		t.Fatalf("files: got %d, want 3", len(files))
+	if len(files) != 6 {
+		t.Fatalf("files: got %d, want 6", len(files))
 	}
 	want := map[string]bool{
 		"clusters/harbor/engineers/bdc/namespace.yaml":                false,
 		"clusters/harbor/engineers/bdc/workload-service-account.yaml": false,
+		"clusters/harbor/engineers/bdc/flux-gitrepository.yaml":       false,
+		"clusters/harbor/engineers/bdc/flux-kustomization.yaml":       false,
+		"clusters/harbor/engineers/bdc/flux-rbac.yaml":                false,
 		"clusters/harbor/engineers/bdc/kustomization.yaml":            false,
 	}
 	for _, f := range files {
@@ -59,11 +62,19 @@ func TestGenerate_ServiceAccountHasNoIRSAAnnotation(t *testing.T) {
 	}
 }
 
-func TestGenerate_KustomizationReferencesBoth(t *testing.T) {
+func TestGenerate_KustomizationReferencesAllResources(t *testing.T) {
 	files, _ := Generate(Cell{Alias: "bdc", Namespace: "eng-bdc"})
-	k := contentFor(t, files, "kustomization.yaml")
-	if !strings.Contains(k, "namespace.yaml") || !strings.Contains(k, "workload-service-account.yaml") {
-		t.Errorf("kustomization missing resource refs: %s", k)
+	k := contentFor(t, files, "/kustomization.yaml")
+	for _, want := range []string{
+		"namespace.yaml",
+		"workload-service-account.yaml",
+		"flux-gitrepository.yaml",
+		"flux-kustomization.yaml",
+		"flux-rbac.yaml",
+	} {
+		if !strings.Contains(k, want) {
+			t.Errorf("cell kustomization missing resource %q in:\n%s", want, k)
+		}
 	}
 }
 

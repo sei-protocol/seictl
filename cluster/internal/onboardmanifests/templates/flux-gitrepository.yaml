@@ -1,0 +1,16 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: eng-{{.Alias}}-workspace
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/managed-by: flux
+    tide.sei.io/cell-type: personal
+    tide.sei.io/owner: {{.Alias}}
+spec:
+  interval: 1m
+  url: ssh://git@github.com/sei-protocol/platform.git
+  ref:
+    branch: eng-{{.Alias}}-workspace
+  secretRef:
+    name: flux-system

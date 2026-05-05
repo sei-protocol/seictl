@@ -37,11 +37,12 @@ type OnboardResult struct {
 	ConfigPath string `json:"configPath"`
 	// Idempotent re-runs omit unchanged files (e.g. an aggregator entry
 	// already present in the resources list).
-	GeneratedFiles []string      `json:"generatedFiles"`
-	Branch         string        `json:"branch,omitempty"`
-	PRURL          string        `json:"prUrl,omitempty"`
-	AWSResources   []AWSResource `json:"awsResources"`
-	DryRun         bool          `json:"dryRun"`
+	GeneratedFiles  []string      `json:"generatedFiles"`
+	Branch          string        `json:"branch,omitempty"`
+	WorkspaceBranch string        `json:"workspaceBranch,omitempty"`
+	PRURL           string        `json:"prUrl,omitempty"`
+	AWSResources    []AWSResource `json:"awsResources"`
+	DryRun          bool          `json:"dryRun"`
 }
 
 // AWSResource action ∈ {create, exists, would-create}.
@@ -69,6 +70,7 @@ type onboardDeps struct {
 	checkGHAuth      func() error
 	checkClean       func(repoPath string) error
 	createPR         func(opts githubpr.Options) (*githubpr.Result, error)
+	pushSeedBranch   func(opts githubpr.SeedBranchOptions) (*githubpr.SeedBranchResult, error)
 	discoverRepo     func(start string) (string, error)
 	writeConfig      func(path string, c config.Config) *clioutput.Error
 }
@@ -84,6 +86,7 @@ var defaultOnboardDeps = onboardDeps{
 	checkGHAuth:      githubpr.CheckAuth,
 	checkClean:       githubpr.CheckCleanTree,
 	createPR:         githubpr.CreatePR,
+	pushSeedBranch:   githubpr.PushSeedBranch,
 	discoverRepo:     githubpr.DiscoverRepo,
 	writeConfig:      config.Write,
 }
@@ -203,6 +206,12 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 		}
 	}
 
+	workspaceBranch := "eng-" + in.Alias + "-workspace"
+	workspaceSeedPath := fmt.Sprintf("clusters/harbor/eng/%s/.gitkeep", in.Alias)
+	if !in.NoPR {
+		generatedPaths = append(generatedPaths, workspaceSeedPath)
+	}
+
 	res := OnboardResult{
 		Alias:          in.Alias,
 		Namespace:      namespace,
@@ -211,8 +220,24 @@ func runOnboard(ctx context.Context, in onboardInput, out io.Writer, deps onboar
 		AWSResources:   awsArtifactsToResources(iamArts, piArt),
 		DryRun:         dryRun,
 	}
+	if !in.NoPR {
+		res.WorkspaceBranch = workspaceBranch
+	}
 
 	if in.Apply && !in.NoPR {
+		seedRes, serr := deps.pushSeedBranch(githubpr.SeedBranchOptions{
+			RepoPath:      repoPath,
+			Branch:        workspaceBranch,
+			BaseBranch:    "main",
+			CommitMessage: fmt.Sprintf("chore(eng/%s): seed workspace branch", in.Alias),
+			Files:         map[string][]byte{workspaceSeedPath: []byte("\n")},
+		})
+		if serr != nil {
+			return failOnboard(out, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatPRCreateFailed,
+				"seed workspace branch: %v", serr))
+		}
+		res.WorkspaceBranch = seedRes.Branch
+
 		body, berr := renderPRBody(in.Alias, scope, generatedPaths)
 		if berr != nil {
 			return failOnboard(out, clioutput.Newf(clioutput.ExitOnboard, clioutput.CatPRCreateFailed,
