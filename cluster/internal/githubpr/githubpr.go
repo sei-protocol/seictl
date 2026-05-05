@@ -90,6 +90,88 @@ func isUntrackedOrEmpty(line string) bool {
 	return line[0] == '?' && line[1] == '?'
 }
 
+// SeedBranchOptions drives PushSeedBranch.
+type SeedBranchOptions struct {
+	RepoPath      string
+	Branch        string
+	BaseBranch    string
+	CommitMessage string
+	Files         map[string][]byte
+}
+
+// SeedBranchResult names the branch ref pushed to origin.
+type SeedBranchResult struct {
+	Branch string
+	Ref    string
+}
+
+// PushSeedBranch creates Branch off origin/BaseBranch, writes Files,
+// commits, and pushes to origin. Returns the local current branch to
+// whatever it was on entry. Idempotent: if origin/Branch already
+// exists, it skips the seed and returns the existing ref.
+func PushSeedBranch(opts SeedBranchOptions) (*SeedBranchResult, error) {
+	if opts.BaseBranch == "" {
+		opts.BaseBranch = "main"
+	}
+	if _, err := runIn(opts.RepoPath, "git", "fetch", "origin", opts.BaseBranch); err != nil {
+		return nil, fmt.Errorf("git fetch origin %s: %w", opts.BaseBranch, err)
+	}
+	if exists, err := remoteBranchExists(opts.RepoPath, opts.Branch); err != nil {
+		return nil, err
+	} else if exists {
+		return &SeedBranchResult{Branch: opts.Branch, Ref: "refs/heads/" + opts.Branch}, nil
+	}
+
+	prev, err := runIn(opts.RepoPath, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("git rev-parse HEAD: %w", err)
+	}
+	prevBranch := strings.TrimSpace(string(prev))
+
+	if err := refuseLossyCheckout(opts.RepoPath, opts.Branch); err != nil {
+		return nil, err
+	}
+	if _, err := runIn(opts.RepoPath, "git", "checkout", "-B", opts.Branch, "origin/"+opts.BaseBranch); err != nil {
+		return nil, fmt.Errorf("git checkout seed branch: %w", err)
+	}
+
+	addArgs := []string{"add"}
+	for path, body := range opts.Files {
+		full := filepath.Join(opts.RepoPath, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return nil, fmt.Errorf("mkdir %s: %w", filepath.Dir(full), err)
+		}
+		if err := os.WriteFile(full, body, 0o644); err != nil {
+			return nil, fmt.Errorf("write %s: %w", full, err)
+		}
+		addArgs = append(addArgs, path)
+	}
+	if _, err := runIn(opts.RepoPath, "git", addArgs...); err != nil {
+		return nil, fmt.Errorf("git add seed: %w", err)
+	}
+	if _, err := runIn(opts.RepoPath, "git", "commit", "-m", opts.CommitMessage); err != nil {
+		return nil, fmt.Errorf("git commit seed: %w", err)
+	}
+	if _, err := runIn(opts.RepoPath, "git", "push", "-u", "origin", opts.Branch); err != nil {
+		return nil, fmt.Errorf("git push seed: %w", err)
+	}
+
+	if prevBranch != "" && prevBranch != "HEAD" && prevBranch != opts.Branch {
+		if _, err := runIn(opts.RepoPath, "git", "checkout", prevBranch); err != nil {
+			return nil, fmt.Errorf("git checkout %s: %w", prevBranch, err)
+		}
+	}
+	return &SeedBranchResult{Branch: opts.Branch, Ref: "refs/heads/" + opts.Branch}, nil
+}
+
+func remoteBranchExists(repoPath, branch string) (bool, error) {
+	out, err := runIn(repoPath, "git", "ls-remote", "--heads", "origin", branch)
+	if err != nil {
+		return false, fmt.Errorf("git ls-remote origin %s: %w", branch, err)
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
 // CreatePR branches, writes files, commits, pushes, and opens a PR.
 // Idempotent against a prior partial run: a remote branch with an open
 // PR returns that PR's URL with no further mutation.

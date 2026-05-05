@@ -1,16 +1,20 @@
 // Package onboardmanifests generates the engineer cell's Kustomize
 // resources for `seictl onboard`.
 //
-// v1 ships three files: namespace, bare ServiceAccount (the K8s anchor
-// for Pod Identity), and the kustomization that wires them together.
-// No Role / RoleBinding — engineers operate as cluster-admin via SSO
-// today; per-engineer scoped K8s identity is tracked at
+// v1 ships namespace, bare workload ServiceAccount (the K8s anchor for
+// Pod Identity), the per-engineer Flux GitRepository + Kustomization
+// that watches the workspace branch, the in-namespace flux-reconciler
+// SA + admin RoleBinding (security boundary; see sei-protocol/seictl#130),
+// and the kustomization that wires them together. No engineer Role /
+// RoleBinding for human identity — engineers operate as cluster-admin
+// via SSO today; per-engineer scoped K8s identity is tracked at
 // sei-protocol/seictl#80.
 //
-// The ServiceAccount carries no eks.amazonaws.com/role-arn annotation
-// — that's IRSA's pattern, not Pod Identity. EKS Pod Identity binds
-// server-side via (cluster, namespace, serviceAccount); annotating the
-// SA is at best a no-op and at worst misleading to readers.
+// The workload ServiceAccount carries no eks.amazonaws.com/role-arn
+// annotation — that's IRSA's pattern, not Pod Identity. EKS Pod
+// Identity binds server-side via (cluster, namespace, serviceAccount);
+// annotating the SA is at best a no-op and at worst misleading to
+// readers.
 package onboardmanifests
 
 import (
@@ -33,12 +37,21 @@ type File struct {
 	Content []byte
 }
 
-// Generate returns the three engineer-cell files at their target
-// platform-repo paths (`clusters/harbor/engineers/<alias>/...`).
+var cellTemplates = []string{
+	"namespace.yaml",
+	"workload-service-account.yaml",
+	"flux-gitrepository.yaml",
+	"flux-kustomization.yaml",
+	"flux-rbac.yaml",
+	"kustomization.yaml",
+}
+
+// Generate returns the engineer-cell files at their target platform-repo
+// paths (`clusters/harbor/engineers/<alias>/...`).
 func Generate(cell Cell) ([]File, error) {
 	dir := fmt.Sprintf("clusters/harbor/engineers/%s/", cell.Alias)
-	out := make([]File, 0, 3)
-	for _, name := range []string{"namespace.yaml", "workload-service-account.yaml", "kustomization.yaml"} {
+	out := make([]File, 0, len(cellTemplates))
+	for _, name := range cellTemplates {
 		body, err := render(name, cell)
 		if err != nil {
 			return nil, fmt.Errorf("render %s: %w", name, err)

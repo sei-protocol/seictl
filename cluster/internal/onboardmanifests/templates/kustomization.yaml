@@ -3,6 +3,9 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - workload-service-account.yaml
+  - flux-gitrepository.yaml
+  - flux-kustomization.yaml
+  - flux-rbac.yaml
 commonLabels:
   tide.sei.io/cell-type: personal
   tide.sei.io/owner: {{.Alias}}

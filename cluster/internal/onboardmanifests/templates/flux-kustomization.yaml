@@ -1,0 +1,18 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: eng-{{.Alias}}-workspace
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/managed-by: flux
+    tide.sei.io/cell-type: personal
+    tide.sei.io/owner: {{.Alias}}
+spec:
+  interval: 5m
+  path: clusters/harbor/eng/{{.Alias}}
+  prune: true
+  serviceAccountName: flux-reconciler
+  sourceRef:
+    kind: GitRepository
+    name: eng-{{.Alias}}-workspace
+  targetNamespace: {{.Namespace}}
