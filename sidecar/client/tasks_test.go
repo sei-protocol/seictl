@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/leanovate/gopter"
@@ -585,5 +586,111 @@ func TestAwaitConditionJSONRoundTrip(t *testing.T) {
 	// JSON numbers decode as float64.
 	if p["targetHeight"] != float64(8000) {
 		t.Errorf("targetHeight = %v (type %T), want 8000", p["targetHeight"], p["targetHeight"])
+	}
+}
+
+// --- upload-file ---
+
+func TestUploadFileRoundTrip(t *testing.T) {
+	task := UploadFileTask{
+		File:   "/sei/tmp/exported-state.json",
+		Bucket: "sei-genesis",
+		Key:    "pacific-1/exported-state.json",
+		Region: "eu-central-1",
+	}
+	if err := task.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	req := task.ToTaskRequest()
+	if req.Type != TaskTypeUploadFile {
+		t.Errorf("Type = %q, want %q", req.Type, TaskTypeUploadFile)
+	}
+	if req.Params == nil {
+		t.Fatal("Params is nil; want populated map")
+	}
+
+	rebuilt := UploadFileTaskFromParams(*req.Params)
+	if rebuilt != task {
+		t.Errorf("round-trip mismatch:\n got: %+v\nwant: %+v", rebuilt, task)
+	}
+}
+
+func TestUploadFileRoundTrip_JSONWire(t *testing.T) {
+	task := UploadFileTask{
+		File:   "/sei/tmp/exported-state.json",
+		Bucket: "sei-genesis",
+		Key:    "pacific-1/exported-state.json",
+		Region: "eu-central-1",
+	}
+	req := task.ToTaskRequest()
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// The on-the-wire JSON keys are what the sidecar tasks/upload_file.go
+	// UploadFileRequest decoder expects. Pin them so a tag rename here is
+	// caught at the cross-PR boundary.
+	got := string(data)
+	for _, want := range []string{`"file":"`, `"bucket":"`, `"key":"`, `"region":"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("wire JSON %q missing key fragment %q", got, want)
+		}
+	}
+
+	var decoded TaskRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Type != TaskTypeUploadFile {
+		t.Errorf("decoded Type = %q, want %q", decoded.Type, TaskTypeUploadFile)
+	}
+	if decoded.Params == nil {
+		t.Fatal("decoded Params is nil")
+	}
+	p := *decoded.Params
+	if p["file"] != task.File || p["bucket"] != task.Bucket || p["key"] != task.Key || p["region"] != task.Region {
+		t.Errorf("wire decode mismatch: got %+v, want %+v", p, task)
+	}
+}
+
+func TestUploadFileValidation(t *testing.T) {
+	full := UploadFileTask{
+		File:   "/sei/tmp/f.json",
+		Bucket: "b",
+		Key:    "k",
+		Region: "r",
+	}
+	cases := []struct {
+		name      string
+		mutate    func(*UploadFileTask)
+		errSubstr string
+	}{
+		{"all set", nil, ""},
+		{"missing File", func(u *UploadFileTask) { u.File = "" }, "File"},
+		{"missing Bucket", func(u *UploadFileTask) { u.Bucket = "" }, "Bucket"},
+		{"missing Key", func(u *UploadFileTask) { u.Key = "" }, "Key"},
+		{"missing Region", func(u *UploadFileTask) { u.Region = "" }, "Region"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			task := full
+			if tc.mutate != nil {
+				tc.mutate(&task)
+			}
+			err := task.Validate()
+			if tc.errSubstr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error mentioning %q, got nil", tc.errSubstr)
+			}
+			if !strings.Contains(err.Error(), tc.errSubstr) {
+				t.Errorf("error %q does not mention %q", err.Error(), tc.errSubstr)
+			}
+		})
 	}
 }
