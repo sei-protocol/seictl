@@ -15,11 +15,7 @@ Dual-purpose tool: CLI for Sei node operators and HTTP sidecar server for the se
 - **OpenAPI spec**: `sidecar/api/openapi.yaml` — source of truth for the sidecar HTTP contract
 - **Internal**: `internal/patch/` — TOML/JSON merge-patch logic
 
-**Engineer-harness surface** (`cluster/`):
-- **Cluster verbs**: `cluster/{context,bench,…}.go` export `cli.Command` vars registered by `main.go`. New cluster-facing verbs go here.
-- **Quarantined internals**: `cluster/internal/{clioutput,identity,validate,kube,aws,render}/` are only importable from `cluster/...`.
-- **Templates**: `cluster/templates/` — vendored autobake YAML/JSON.
-- **Why quarantined**: the workload abstraction (benchmarks, stress tests, integration tests) is still emerging; `cluster/` is the unit that splits into its own binary when it crystallizes. See `cluster/README.md` for the contract.
+**Engineer-harness surface**: being rebuilt around `node` / `nodedeployment` verbs with preset-driven defaults.
 
 ## Code Standards
 
