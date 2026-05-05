@@ -1,0 +1,11 @@
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+spec:
+  replicas: 4
+  template:
+    spec:
+      image: ghcr.io/sei-protocol/sei:latest
+      validator: {}
+  genesis: {}
+  updateStrategy:
+    rollingUpdate: {}

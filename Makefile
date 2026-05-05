@@ -1,13 +1,16 @@
 BIN       := seictl
 BUILD_DIR := ./build
+VERSION   := $(shell jq -r .version version.json)
+
+LDFLAGS := -X 'github.com/sei-protocol/seictl/nodedeployment.version=$(VERSION)'
 
 .PHONY: build install run test lint fmt generate clean
 
 build:
-	go build -o $(BUILD_DIR)/$(BIN) .
+	go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BIN) .
 
 install:
-	go install .
+	go install -ldflags "$(LDFLAGS)" .
 
 run:
 	go run . $(ARGS)
