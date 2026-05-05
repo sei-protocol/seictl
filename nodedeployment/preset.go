@@ -11,8 +11,6 @@ import (
 	"github.com/sei-protocol/seictl/internal/snd"
 )
 
-// renderArgs feeds a preset render. Discrete fields beat preset
-// defaults; --set entries beat discrete fields.
 type renderArgs struct {
 	preset    string
 	name      string
@@ -24,15 +22,9 @@ type renderArgs struct {
 	sets      []string
 }
 
-// presetRequiredFields lists the spec paths each preset needs as
-// non-empty strings after all overrides are applied. Add to this map
-// when adding presets.
-//
-// The CRD enforces these at the apiserver too — this layer surfaces
-// them as a friendly metav1.Status before SSA round-trips, so a typo
-// gets a clear "preset rpc requires .spec.template.spec.chainId"
-// instead of an apiserver Invalid with a wall of FieldValueRequired
-// causes.
+// presetRequiredFields surfaces missing required fields as a friendly
+// usageError before SSA, so a typo gets "preset rpc requires
+// .spec.template.spec.chainId" instead of an apiserver Invalid wall.
 var presetRequiredFields = map[string][][]string{
 	"genesis-chain": {
 		{"spec", "genesis", "chainId"},
@@ -45,11 +37,6 @@ var presetRequiredFields = map[string][][]string{
 	},
 }
 
-// render loads the named preset, applies discrete-flag overrides, then
-// applies --set overrides, and returns the resulting unstructured SND
-// with metadata.name / metadata.namespace and provenance annotations
-// populated. Per-preset required fields are validated last; an unset
-// required field surfaces as a usageError before SSA.
 func render(args renderArgs) (*unstructured.Unstructured, error) {
 	if args.preset == "" {
 		return nil, usageError("--preset is required (known: %s)", strings.Join(presetNames(), ", "))
@@ -84,9 +71,6 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		}
 	}
 	if args.chainID != "" {
-		// Every node template needs the chain ID it serves. genesis-chain
-		// additionally writes spec.genesis.chainId so the genesis ceremony
-		// names the chain being created.
 		if err := unstructured.SetNestedField(u.Object, args.chainID, "spec", "template", "spec", "chainId"); err != nil {
 			return nil, fmt.Errorf("apply --chain-id (template): %w", err)
 		}
@@ -103,16 +87,15 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		}
 	}
 
-	// Re-assert identity after --set so a malicious or accidental
-	// --set metadata.namespace=kube-system can't silently retarget.
+	// Reassert identity after --set so --set metadata.namespace=kube-system
+	// can't silently retarget.
 	u.SetName(args.name)
 	if args.namespace != "" {
 		u.SetNamespace(args.namespace)
 	}
 
-	// Provenance annotations. NOT A TRUST BOUNDARY — anyone with
-	// `kubectl edit snd` can forge these. Downstream consumers must
-	// not gate behavior on them without separate signing.
+	// NOT A TRUST BOUNDARY — anyone with `kubectl edit snd` can forge
+	// these. Downstream consumers must not gate behavior on them.
 	annotations := u.GetAnnotations()
 	if annotations == nil {
 		annotations = map[string]string{}
@@ -132,18 +115,8 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	return u, nil
 }
 
-// applySet parses a single --set expression and writes it into obj.
-//
-// Supported forms:
-//
-//	a.b.c=value           -> obj.a.b.c = value
-//	a.b=true|false        -> typed bool
-//	a.b=42                -> typed int64
-//	a.b=                  -> empty string
-//
-// List-index syntax (a.b[0].c=value) is intentionally not supported in
-// v1 — the embedded presets don't need it, and unstructured.SetNested*
-// helpers cover map paths cleanly. Add when a real consumer asks.
+// applySet writes a single dotted-path --set expression. List-index
+// syntax is intentionally unsupported; add when a real consumer asks.
 func applySet(root map[string]interface{}, expr string) error {
 	eq := strings.Index(expr, "=")
 	if eq < 0 {
@@ -166,9 +139,6 @@ func applySet(root map[string]interface{}, expr string) error {
 	return unstructured.SetNestedField(root, parseValue(rawVal), fields...)
 }
 
-// parseValue converts a raw RHS string into a Go value the unstructured
-// layer accepts (DeepCopyJSONValue: bool, int64, float64, string,
-// []interface{}, map[string]interface{}).
 func parseValue(raw string) interface{} {
 	switch raw {
 	case "":

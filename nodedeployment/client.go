@@ -9,17 +9,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// kubeconfig wraps clientcmd's deferred loader so a single source
-// honors $KUBECONFIG colon-merge, --kubeconfig override, in-cluster
-// fallback (apiserver + SA namespace from /var/run/secrets), and
-// kubectl's namespace precedence (override > context > "default").
+// kubeconfig honors --kubeconfig, $KUBECONFIG colon-merge, in-cluster
+// fallback, and kubectl namespace precedence (override > context >
+// "default") through a single deferred loader.
 type kubeconfig struct {
 	cfg clientcmd.ClientConfig
 }
 
-// loadKubeconfig returns a deferred-loading client config. It does not
-// read any files until ClientConfig() / Namespace() is called, so
-// constructing one is cheap.
 func loadKubeconfig(explicitPath, namespaceOverride string) *kubeconfig {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if explicitPath != "" {
@@ -50,10 +46,8 @@ func (k *kubeconfig) Namespace() (string, error) {
 	return ns, nil
 }
 
-// newClient constructs a controller-runtime client capable of
-// server-side-applying unstructured.Unstructured objects with our GVK.
-// No scheme registration is required for unstructured payloads — the
-// runtime resolves GVK from the object itself.
+// newClient builds a controller-runtime client for unstructured SSA;
+// no scheme registration needed since GVK is read off the object.
 func newClient(cfg *rest.Config) (client.Client, error) {
 	c, err := client.New(cfg, client.Options{Scheme: runtime.NewScheme()})
 	if err != nil {

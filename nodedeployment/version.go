@@ -1,10 +1,8 @@
 package nodedeployment
 
-// version is the seictl release stamped onto provenance annotations on
-// applied SNDs. Overridden at link time via:
+// version is stamped onto provenance annotations. Linker override:
 //
-//	go build -ldflags "-X 'github.com/sei-protocol/seictl/nodedeployment.version=$VERSION'"
+//	-ldflags "-X 'github.com/sei-protocol/seictl/nodedeployment.version=$VERSION'"
 //
-// `make build` reads version.json and passes it through; bare `go
-// build` and `go test` see "dev".
+// `make build` wires version.json; bare `go build`/`go test` see "dev".
 var version = "dev"

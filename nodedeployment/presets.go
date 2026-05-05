@@ -11,7 +11,6 @@ import (
 //go:embed presets/*.yaml
 var presetFS embed.FS
 
-// presetNames returns the names of every embedded preset, sorted.
 func presetNames() []string {
 	entries, err := presetFS.ReadDir("presets")
 	if err != nil {
@@ -28,8 +27,6 @@ func presetNames() []string {
 	return names
 }
 
-// loadPreset returns the raw YAML bytes for the named preset, or an
-// error listing the known presets if the name is unknown.
 func loadPreset(name string) ([]byte, error) {
 	data, err := presetFS.ReadFile(path.Join("presets", name+".yaml"))
 	if err != nil {

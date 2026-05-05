@@ -11,11 +11,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// emitStatus writes a metav1.Status object to w (typically stderr) so
-// orchestrator scripts can `jq -r .reason` to discriminate timeout vs
-// validation vs transient API failure without parsing exit codes. err
-// is wrapped to preserve the upstream Status when available, otherwise
-// shaped into a generic InternalError.
+// emitStatus writes err as a metav1.Status so callers can `jq -r
+// .reason` to discriminate failure classes. Wraps non-Status errors
+// as InternalError.
 func emitStatus(w io.Writer, err error) {
 	if err == nil {
 		return
@@ -41,9 +39,8 @@ func toStatus(err error) *metav1.Status {
 	}
 }
 
-// usageError signals a CLI-level validation failure (bad flags, unknown
-// preset). Reported as a metav1.Status with reason=Invalid so the same
-// stderr discriminator works.
+// usageError reports CLI validation failures as Status{Reason:Invalid}
+// so the stderr discriminator above still works.
 func usageError(format string, args ...interface{}) error {
 	return apierrors.NewBadRequest(fmt.Sprintf(format, args...))
 }
