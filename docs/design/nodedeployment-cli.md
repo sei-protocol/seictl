@@ -74,16 +74,28 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  A[seictl nd watch foo<br/>--until=Ready] --> B[informer-backed Watch]
+  A[seictl nd watch foo<br/>--until=Ready] --> B[client-go<br/>watch.UntilWithSync]
   B --> C{event arrives}
   C -->|MODIFIED| D[emit SND as one NDJSON line]
-  D --> E{.status.phase}
+  D --> E[kubectl/pkg/cmd/wait<br/>condition match]
   E -->|matches --until| F[exit 0]
   E -->|terminal Failed| G[metav1.Status reason=Failed<br/>+ .status.plan.failedTaskDetail.error<br/>on stderr; exit 1]
   E -->|other phase| C
   C -->|timeout| H[metav1.Status reason=Timeout<br/>on stderr; exit 1]
   C -->|API error| I[metav1.Status reason=InternalError<br/>on stderr; exit 1]
 ```
+
+### Implementation: build on existing libraries
+
+Each verb is glue around existing K8s ecosystem libraries — no hand-rolled watch, apply, condition-matching, or jsonpath logic.
+
+| Verb | Library |
+|---|---|
+| `apply` | `sigs.k8s.io/controller-runtime/pkg/client.Patch` with `client.Apply` (server-side-apply, dry-run via `client.DryRunAll`). |
+| `get` / `list` / `delete` | `sigs.k8s.io/controller-runtime/pkg/client` typed client over the SND scheme. |
+| `watch` | `k8s.io/client-go/tools/watch.UntilWithSync` for the watch + informer + reconnect machinery; `k8s.io/kubectl/pkg/cmd/wait` for `--until=...` condition evaluation. |
+| Output formatting (`-o json/yaml/jsonpath/name`) | `k8s.io/cli-runtime/pkg/printers`. |
+| Error wrapping into `metav1.Status` | `k8s.io/apimachinery/pkg/api/errors` (`NewInternalError`, `NewTimeoutError`, etc.). |
 
 ### Preset taxonomy (2 for v1)
 
@@ -130,12 +142,11 @@ Follow `kubectl` / `kubectl wait` convention: `0` on success, `1` on anything el
 
 ### Endpoint synthesis
 
-The orchestrator needs URLs (e.g. `endpoints.tendermintRpc[0]`). The data lives at `.status.internalService.{name, namespace, ports.{rpc, rest, evmHttp}}` + `.status.perPodServices[]` on the SND today. Two paths:
+Consumers need composed URLs (e.g. `http://chain-rpc.nightly.svc:26657`). The data today lives at `.status.internalService` + `.status.perPodServices[]` as service handles, not URLs.
 
-1. **Long-term:** `sei-k8s-controller` writes `.status.endpoints.{tendermintRpc, tendermintRest, evmJsonRpc, evmWs}` directly. Then `kubectl get snd -o jsonpath='{.status.endpoints.evmJsonRpc[0]}'` works without seictl in the loop.
-2. **Stop-gap (v1):** seictl computes URLs client-side from `.status.internalService` and adds them to the returned CR object under `.status.endpoints` before emitting. Same shape the controller will eventually emit, so consumers don't break when the field migrates upstream.
+**v1 stance: block on the upstream fix; seictl does not synthesize URLs client-side.** `sei-protocol/sei-k8s-controller#171` tracks adding `.status.endpoints.{tendermintRpc, tendermintRest, evmJsonRpc, evmWs}` to the SND. Once that lands, `kubectl get snd -o jsonpath='{.status.endpoints.evmJsonRpc[0]}'` works with no CLI in the loop.
 
-A separate issue against `sei-k8s-controller` will track path (1).
+Until then, consumers that need URLs (seiload, the QA mocha harness, the nightly release-test orchestrator) glue them from `.status.internalService` themselves — same as today. seictl emits the SND as-is; we don't carry a temporary client-side overlay that would drift from the upstream shape.
 
 ## Alternatives
 
