@@ -201,25 +201,28 @@ func TestDeserialize_ConfigReload(t *testing.T) {
 	}
 }
 
-// TestDeserialize_SnapshotUpload verifies that the snapshot-upload handler
-// correctly deserializes simple string fields from the wire format.
-func TestDeserialize_SnapshotUpload(t *testing.T) {
-	handler := NewSnapshotUploader(t.TempDir(), "b", "r", "c", 0, nil).Handler()
-
-	params := map[string]any{
-		"bucket": "",
-		"region": "us-east-1",
+// TestNewSnapshotUploader_RejectsEmptyConfig verifies that the constructor
+// fails fast when bucket, region, or chainID is empty rather than producing
+// an uploader whose runLoop polls forever uploading nothing.
+func TestNewSnapshotUploader_RejectsEmptyConfig(t *testing.T) {
+	tests := []struct {
+		name                          string
+		bucket, region, chainID, want string
+	}{
+		{"empty bucket", "", "us-east-1", "c", "required"},
+		{"empty region", "b", "", "c", "required"},
+		{"empty chainID", "b", "us-east-1", "", "required"},
 	}
-
-	err := handler(context.Background(), params)
-	if err == nil {
-		t.Fatal("expected error for empty bucket, got nil")
-	}
-	if strings.Contains(err.Error(), "parsing params") {
-		t.Fatalf("deserialization failed: %v", err)
-	}
-	if !strings.Contains(err.Error(), "missing required param 'bucket'") {
-		t.Errorf("expected bucket validation error, got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewSnapshotUploader(t.TempDir(), tt.bucket, tt.region, tt.chainID, 0, nil)
+			if err == nil {
+				t.Fatal("expected constructor error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error %q does not mention %q", err.Error(), tt.want)
+			}
+		})
 	}
 }
 
