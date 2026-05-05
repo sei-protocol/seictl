@@ -11,7 +11,7 @@ authors: bdchatham
 
 PR #133 deleted ~9.4k LOC of `cluster/` higher-order verbs (`chain up/down`, `rpc up/down`, `bench up/down/list`, `onboard`, `context`, `per-pod`). Those verbs abstracted away the underlying `SeiNodeDeployment` CRD into pseudo-custom resources that aren't real CRDs and added complexity beyond their ergonomic payoff. The previous design (`docs/design/cluster-cli.md`) covered that surface; this design supersedes it.
 
-Brandon's intent (verbatim message to his manager, 2026-05-04):
+Brandon's intent:
 
 > Remove higher-order commands from seictl and just provide the basic building blocks for SeiNode and SeiNodeDeployments. The interface looks like `seictl nodedeployment --preset genesis-chain --chain-id crater-lake-1`. A primary goal of the higher-order commands was ergonomics — the preset convention will be enough to make this composable without turning the interface into parameter soup. Implement basics: list, watch, status.
 
