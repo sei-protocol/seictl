@@ -1,5 +1,5 @@
 ---
-status: Draft
+status: Accepted
 date: 2026-05-05
 issue: sei-protocol/Tide#25
 authors: bdchatham
