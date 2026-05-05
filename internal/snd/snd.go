@@ -14,6 +14,7 @@ import (
 
 var (
 	GVK        = schema.GroupVersionKind{Group: "sei.io", Version: "v1alpha1", Kind: "SeiNodeDeployment"}
+	ListGVK    = schema.GroupVersionKind{Group: "sei.io", Version: "v1alpha1", Kind: "SeiNodeDeploymentList"}
 	FieldOwner = client.FieldOwner("seictl")
 )
 
@@ -21,6 +22,12 @@ func New() *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(GVK)
 	return obj
+}
+
+func NewList() *unstructured.UnstructuredList {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(ListGVK)
+	return list
 }
 
 // Apply server-side-applies obj as the seictl FieldManager, mutating

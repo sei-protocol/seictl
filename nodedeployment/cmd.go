@@ -16,5 +16,8 @@ var Cmd = cli.Command{
 	Usage:   "Manage SeiNodeDeployment custom resources via embedded presets",
 	Commands: []*cli.Command{
 		&applyCmd,
+		&getCmd,
+		&listCmd,
+		&deleteCmd,
 	},
 }
