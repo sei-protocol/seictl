@@ -69,7 +69,6 @@ const (
 	TaskTypeUploadGenesisArtifacts = string(engine.TaskUploadGenesisArtifacts)
 	TaskTypeAssembleGenesis        = string(engine.TaskAssembleAndUploadGenesis)
 	TaskTypeSetGenesisPeers        = string(engine.TaskSetGenesisPeers)
-	TaskTypeAssembleGenesisFork    = string(engine.TaskAssembleGenesisFork)
 	TaskTypeExportState            = string(engine.TaskExportState)
 )
 
@@ -709,60 +708,6 @@ func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
 		nodes[i] = map[string]interface{}{"name": n.Name}
 	}
 	p := map[string]interface{}{
-		"accountBalance": t.AccountBalance,
-		"namespace":      t.Namespace,
-		"nodes":          nodes,
-	}
-	if accounts := genesisAccountsToWire(t.Accounts); accounts != nil {
-		p["accounts"] = accounts
-	}
-	req := TaskRequest{Type: t.TaskType(), Params: &p}
-	t.applyMeta(&req)
-	return req
-}
-
-// AssembleGenesisForkTask is the fork-mode counterpart of
-// AssembleAndUploadGenesisTask. The sidecar forks SourceChainID's
-// exported state into ChainID.
-type AssembleGenesisForkTask struct {
-	TaskMeta
-	SourceChainID  string
-	ChainID        string
-	AccountBalance string
-	Namespace      string
-	Nodes          []GenesisNodeParam
-	Accounts       []GenesisAccountEntry
-}
-
-func (t AssembleGenesisForkTask) TaskType() string { return TaskTypeAssembleGenesisFork }
-
-func (t AssembleGenesisForkTask) Validate() error {
-	if t.SourceChainID == "" {
-		return fmt.Errorf("assemble-genesis-fork: missing required field SourceChainID")
-	}
-	if t.ChainID == "" {
-		return fmt.Errorf("assemble-genesis-fork: missing required field ChainID")
-	}
-	if t.AccountBalance == "" {
-		return fmt.Errorf("assemble-genesis-fork: missing required field AccountBalance")
-	}
-	if t.Namespace == "" {
-		return fmt.Errorf("assemble-genesis-fork: missing required field Namespace")
-	}
-	if len(t.Nodes) == 0 {
-		return fmt.Errorf("assemble-genesis-fork: at least one node is required")
-	}
-	return validateGenesisAccounts("assemble-genesis-fork", t.Accounts)
-}
-
-func (t AssembleGenesisForkTask) ToTaskRequest() TaskRequest {
-	nodes := make([]interface{}, len(t.Nodes))
-	for i, n := range t.Nodes {
-		nodes[i] = map[string]interface{}{"name": n.Name}
-	}
-	p := map[string]interface{}{
-		"sourceChainId":  t.SourceChainID,
-		"chainId":        t.ChainID,
 		"accountBalance": t.AccountBalance,
 		"namespace":      t.Namespace,
 		"nodes":          nodes,

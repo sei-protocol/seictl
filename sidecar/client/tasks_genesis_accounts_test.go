@@ -19,17 +19,6 @@ func validNonForkTask(accounts []GenesisAccountEntry) AssembleAndUploadGenesisTa
 	}
 }
 
-func validForkTask(accounts []GenesisAccountEntry) AssembleGenesisForkTask {
-	return AssembleGenesisForkTask{
-		SourceChainID:  "pacific-1",
-		ChainID:        "fork-1",
-		AccountBalance: "1000usei",
-		Namespace:      "default",
-		Nodes:          []GenesisNodeParam{{Name: "node-0"}},
-		Accounts:       accounts,
-	}
-}
-
 func TestAssembleAndUploadGenesisTask_ValidateAccounts(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -87,68 +76,5 @@ func TestAssembleAndUploadGenesisTask_ToTaskRequest_SerializesAccounts(t *testin
 	entry := got[0].(map[string]interface{})
 	if entry["address"] != validSeiAddr1 || entry["balance"] != "1000usei" {
 		t.Errorf("entry: got %+v", entry)
-	}
-}
-
-func TestAssembleGenesisForkTask_Validate(t *testing.T) {
-	cases := []struct {
-		name    string
-		mutate  func(*AssembleGenesisForkTask)
-		wantErr string
-	}{
-		{name: "valid", mutate: func(*AssembleGenesisForkTask) {}},
-		{name: "missing SourceChainID", mutate: func(t *AssembleGenesisForkTask) { t.SourceChainID = "" }, wantErr: "SourceChainID"},
-		{name: "missing ChainID", mutate: func(t *AssembleGenesisForkTask) { t.ChainID = "" }, wantErr: "ChainID"},
-		{name: "missing AccountBalance", mutate: func(t *AssembleGenesisForkTask) { t.AccountBalance = "" }, wantErr: "AccountBalance"},
-		{name: "missing Namespace", mutate: func(t *AssembleGenesisForkTask) { t.Namespace = "" }, wantErr: "Namespace"},
-		{name: "no nodes", mutate: func(t *AssembleGenesisForkTask) { t.Nodes = nil }, wantErr: "node"},
-		{name: "bad account", mutate: func(t *AssembleGenesisForkTask) {
-			t.Accounts = []GenesisAccountEntry{{Address: "junk", Balance: "1usei"}}
-		}, wantErr: "address"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			task := validForkTask(nil)
-			tc.mutate(&task)
-			err := task.Validate()
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Errorf("expected nil error, got %v", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
-			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Errorf("error: got %q, want substring %q", err.Error(), tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestAssembleGenesisForkTask_ToTaskRequest_OmitsEmpty(t *testing.T) {
-	req := validForkTask(nil).ToTaskRequest()
-	if req.Params == nil {
-		t.Fatal("Params nil")
-	}
-	if _, present := (*req.Params)["accounts"]; present {
-		t.Errorf("nil accounts should omit field; got: %+v", *req.Params)
-	}
-}
-
-func TestAssembleGenesisForkTask_ToTaskRequest(t *testing.T) {
-	accs := []GenesisAccountEntry{{Address: validSeiAddr1, Balance: "5usei"}}
-	req := validForkTask(accs).ToTaskRequest()
-	if req.Type != TaskTypeAssembleGenesisFork {
-		t.Errorf("Type: got %q", req.Type)
-	}
-	p := *req.Params
-	if p["sourceChainId"] != "pacific-1" || p["chainId"] != "fork-1" {
-		t.Errorf("fork-specific fields: %+v", p)
-	}
-	got := p["accounts"].([]interface{})
-	if len(got) != 1 {
-		t.Fatalf("accounts: %+v", got)
 	}
 }
