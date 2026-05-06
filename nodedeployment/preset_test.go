@@ -72,6 +72,75 @@ func TestRender_RPCChainIDDoesNotTouchGenesis(t *testing.T) {
 	}
 }
 
+func TestRender_TemplateLabels(t *testing.T) {
+	cases := []struct {
+		preset string
+		role   string
+	}{
+		{"genesis-chain", "validator"},
+		{"rpc", "node"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.preset, func(t *testing.T) {
+			got, err := render(renderArgs{
+				preset:  tc.preset,
+				name:    "demo",
+				chainID: "bench-x",
+				image:   "img:1",
+			})
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			labels, _, _ := unstructured.NestedStringMap(got.Object, "spec", "template", "metadata", "labels")
+			if labels["sei.io/chain"] != "bench-x" {
+				t.Errorf("template.labels[sei.io/chain] = %q; want bench-x", labels["sei.io/chain"])
+			}
+			if labels["sei.io/role"] != tc.role {
+				t.Errorf("template.labels[sei.io/role] = %q; want %s", labels["sei.io/role"], tc.role)
+			}
+		})
+	}
+}
+
+func TestRender_RPCAutoWiresPeers(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "rpc",
+		name:    "rpc-fleet",
+		chainID: "bench-nightly-12345",
+		image:   "img:1",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	peers, found, _ := unstructured.NestedSlice(got.Object, "spec", "template", "spec", "peers")
+	if !found || len(peers) != 1 {
+		t.Fatalf("expected one peer source, got %v (found=%v)", peers, found)
+	}
+	peer := peers[0].(map[string]interface{})
+	selector, _, _ := unstructured.NestedStringMap(peer, "label", "selector")
+	if selector["sei.io/chain"] != "bench-nightly-12345" {
+		t.Errorf("peers[0].label.selector[sei.io/chain] = %q; want bench-nightly-12345", selector["sei.io/chain"])
+	}
+	if _, present := selector["sei.io/role"]; present {
+		t.Errorf("peers[0].label.selector has sei.io/role; v1 matches on chain-id only (uniqueness does the work)")
+	}
+}
+
+func TestRender_GenesisChainOmitsPeers(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "genesis-chain",
+		name:    "validators",
+		chainID: "bench-x",
+		image:   "img:1",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if _, found, _ := unstructured.NestedSlice(got.Object, "spec", "template", "spec", "peers"); found {
+		t.Errorf("genesis-chain should not auto-wire peers; validators bootstrap from genesis ceremony")
+	}
+}
+
 func TestRender_RPCPresetDefaults(t *testing.T) {
 	got, err := render(renderArgs{
 		preset:  "rpc",

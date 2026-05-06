@@ -37,6 +37,14 @@ var presetRequiredFields = map[string][][]string{
 	},
 }
 
+// presetRoles is the sei.io/role value stamped onto each preset's
+// template.metadata.labels. Convention from prod manifests:
+// validators carry "validator", general fullnodes carry "node".
+var presetRoles = map[string]string{
+	"genesis-chain": "validator",
+	"rpc":           "node",
+}
+
 func render(args renderArgs) (*unstructured.Unstructured, error) {
 	if args.preset == "" {
 		return nil, usageError("--preset is required (known: %s)", strings.Join(presetNames(), ", "))
@@ -74,9 +82,31 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		if err := unstructured.SetNestedField(u.Object, args.chainID, "spec", "template", "spec", "chainId"); err != nil {
 			return nil, fmt.Errorf("apply --chain-id (template): %w", err)
 		}
+		if err := unstructured.SetNestedField(u.Object, args.chainID, "spec", "template", "metadata", "labels", "sei.io/chain"); err != nil {
+			return nil, fmt.Errorf("apply --chain-id (template label): %w", err)
+		}
+		if role, ok := presetRoles[args.preset]; ok {
+			if err := unstructured.SetNestedField(u.Object, role, "spec", "template", "metadata", "labels", "sei.io/role"); err != nil {
+				return nil, fmt.Errorf("apply preset role label: %w", err)
+			}
+		}
 		if args.preset == "genesis-chain" {
 			if err := unstructured.SetNestedField(u.Object, args.chainID, "spec", "genesis", "chainId"); err != nil {
 				return nil, fmt.Errorf("apply --chain-id (genesis): %w", err)
+			}
+		}
+		if args.preset == "rpc" {
+			peers := []interface{}{
+				map[string]interface{}{
+					"label": map[string]interface{}{
+						"selector": map[string]interface{}{
+							"sei.io/chain": args.chainID,
+						},
+					},
+				},
+			}
+			if err := unstructured.SetNestedSlice(u.Object, peers, "spec", "template", "spec", "peers"); err != nil {
+				return nil, fmt.Errorf("apply rpc peer source: %w", err)
 			}
 		}
 	}
