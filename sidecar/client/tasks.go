@@ -71,7 +71,6 @@ const (
 	TaskTypeSetGenesisPeers        = string(engine.TaskSetGenesisPeers)
 	TaskTypeAssembleGenesisFork    = string(engine.TaskAssembleGenesisFork)
 	TaskTypeExportState            = string(engine.TaskExportState)
-	TaskTypeUploadFile             = string(engine.TaskUploadFile)
 )
 
 // Known condition and action values for AwaitConditionTask.
@@ -814,57 +813,4 @@ func (t AwaitConditionTask) ToTaskRequest() TaskRequest {
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	t.applyMeta(&req)
 	return req
-}
-
-// UploadFileTask streams a local file at File to s3://Bucket/Key in Region.
-// Used by the fork-genesis export Job's seid container to ship the
-// exported-state.json artifact to S3 via the in-pod sidecar.
-type UploadFileTask struct {
-	TaskMeta
-	File   string
-	Bucket string
-	Key    string
-	Region string
-}
-
-func (t UploadFileTask) TaskType() string { return TaskTypeUploadFile }
-
-func (t UploadFileTask) Validate() error {
-	if t.File == "" {
-		return fmt.Errorf("upload-file: missing required field File")
-	}
-	if t.Bucket == "" {
-		return fmt.Errorf("upload-file: missing required field Bucket")
-	}
-	if t.Key == "" {
-		return fmt.Errorf("upload-file: missing required field Key")
-	}
-	if t.Region == "" {
-		return fmt.Errorf("upload-file: missing required field Region")
-	}
-	return nil
-}
-
-func (t UploadFileTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
-		"file":   t.File,
-		"bucket": t.Bucket,
-		"key":    t.Key,
-		"region": t.Region,
-	}
-	req := TaskRequest{Type: t.TaskType(), Params: &p}
-	t.applyMeta(&req)
-	return req
-}
-
-// UploadFileTaskFromParams reconstructs an UploadFileTask from a generic
-// params map. Useful for round-trip testing.
-func UploadFileTaskFromParams(params map[string]interface{}) UploadFileTask {
-	s := func(k string) string { v, _ := params[k].(string); return v }
-	return UploadFileTask{
-		File:   s("file"),
-		Bucket: s("bucket"),
-		Key:    s("key"),
-		Region: s("region"),
-	}
 }
