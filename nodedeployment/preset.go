@@ -12,14 +12,15 @@ import (
 )
 
 type renderArgs struct {
-	preset    string
-	name      string
-	namespace string
-	chainID   string
-	image     string
-	replicas  int
-	hasReps   bool
-	sets      []string
+	preset          string
+	name            string
+	namespace       string
+	chainID         string
+	image           string
+	replicas        int
+	hasReps         bool
+	sets            []string
+	genesisAccounts []string
 }
 
 // presetRequiredFields surfaces missing required fields as a friendly
@@ -111,6 +112,26 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		}
 	}
 
+	if len(args.genesisAccounts) > 0 {
+		if args.preset != "genesis-chain" {
+			return nil, usageError("--genesis-account is only valid with --preset genesis-chain")
+		}
+		accounts := make([]interface{}, 0, len(args.genesisAccounts))
+		for _, entry := range args.genesisAccounts {
+			addr, balance, parseErr := parseGenesisAccount(entry)
+			if parseErr != nil {
+				return nil, usageError("apply --genesis-account %q: %s", entry, parseErr.Error())
+			}
+			accounts = append(accounts, map[string]interface{}{
+				"address": addr,
+				"balance": balance,
+			})
+		}
+		if err := unstructured.SetNestedSlice(u.Object, accounts, "spec", "genesis", "accounts"); err != nil {
+			return nil, fmt.Errorf("apply --genesis-account: %w", err)
+		}
+	}
+
 	for _, expr := range args.sets {
 		if err := applySet(u.Object, expr); err != nil {
 			return nil, usageError("apply --set %q: %s", expr, err.Error())
@@ -167,6 +188,25 @@ func applySet(root map[string]interface{}, expr string) error {
 		}
 	}
 	return unstructured.SetNestedField(root, parseValue(rawVal), fields...)
+}
+
+// parseGenesisAccount parses a `<address>:<balance>` --genesis-account entry.
+// The balance side accepts the standard cosmos coin format (one or more
+// `<int><denom>` separated by commas — e.g. `1000usei,500uatom`).
+func parseGenesisAccount(entry string) (string, string, error) {
+	idx := strings.Index(entry, ":")
+	if idx < 0 {
+		return "", "", fmt.Errorf("missing ':' between address and balance")
+	}
+	addr := strings.TrimSpace(entry[:idx])
+	balance := strings.TrimSpace(entry[idx+1:])
+	if addr == "" {
+		return "", "", fmt.Errorf("empty address before ':'")
+	}
+	if balance == "" {
+		return "", "", fmt.Errorf("empty balance after ':'")
+	}
+	return addr, balance, nil
 }
 
 func parseValue(raw string) interface{} {

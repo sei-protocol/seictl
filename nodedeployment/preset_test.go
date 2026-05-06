@@ -204,6 +204,103 @@ func TestRender_RequiredFlags(t *testing.T) {
 	}
 }
 
+func TestRender_GenesisAccountFlag(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "genesis-chain",
+		name:    "qa-test",
+		chainID: "qa-test",
+		image:   "img:1",
+		genesisAccounts: []string{
+			"sei1abc:1000000000usei",
+			"0xdef:500000000usei,2000uusdc",
+		},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	accounts, found, _ := unstructured.NestedSlice(got.Object, "spec", "genesis", "accounts")
+	if !found || len(accounts) != 2 {
+		t.Fatalf("expected 2 accounts, got %v (found=%v)", accounts, found)
+	}
+	a0 := accounts[0].(map[string]interface{})
+	if a0["address"] != "sei1abc" {
+		t.Errorf("accounts[0].address = %v; want sei1abc", a0["address"])
+	}
+	if a0["balance"] != "1000000000usei" {
+		t.Errorf("accounts[0].balance = %v; want 1000000000usei", a0["balance"])
+	}
+	a1 := accounts[1].(map[string]interface{})
+	if a1["address"] != "0xdef" {
+		t.Errorf("accounts[1].address = %v; want 0xdef", a1["address"])
+	}
+	if a1["balance"] != "500000000usei,2000uusdc" {
+		t.Errorf("accounts[1].balance = %v; want 500000000usei,2000uusdc", a1["balance"])
+	}
+}
+
+func TestRender_GenesisAccountRejectsNonGenesisPreset(t *testing.T) {
+	_, err := render(renderArgs{
+		preset:          "rpc",
+		name:            "rpc-fleet",
+		chainID:         "pacific-1",
+		image:           "img:1",
+		genesisAccounts: []string{"sei1abc:1000usei"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only valid with --preset genesis-chain") {
+		t.Errorf("expected 'only valid with --preset genesis-chain' error, got %v", err)
+	}
+}
+
+func TestRender_GenesisAccountSetCanOverride(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:          "genesis-chain",
+		name:            "x",
+		chainID:         "c",
+		image:           "img:1",
+		genesisAccounts: []string{"sei1abc:1000usei"},
+		sets:            []string{"spec.genesis.accountBalance=2000usei"},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	accounts, _, _ := unstructured.NestedSlice(got.Object, "spec", "genesis", "accounts")
+	if len(accounts) != 1 {
+		t.Errorf("--genesis-account should still produce its entry; got len=%d", len(accounts))
+	}
+	bal, _, _ := unstructured.NestedString(got.Object, "spec", "genesis", "accountBalance")
+	if bal != "2000usei" {
+		t.Errorf("--set after --genesis-account should set accountBalance; got %q", bal)
+	}
+}
+
+func TestParseGenesisAccount_Errors(t *testing.T) {
+	cases := []struct {
+		entry string
+		want  string
+	}{
+		{"no-colon", "missing ':'"},
+		{":1000usei", "empty address"},
+		{"sei1abc:", "empty balance"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.entry, func(t *testing.T) {
+			_, err := render(renderArgs{
+				preset:          "genesis-chain",
+				name:            "x",
+				chainID:         "c",
+				image:           "img:1",
+				genesisAccounts: []string{tc.entry},
+			})
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %q; want containing %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
 func TestRender_SetOverrides(t *testing.T) {
 	got, err := render(renderArgs{
 		preset:  "rpc",
