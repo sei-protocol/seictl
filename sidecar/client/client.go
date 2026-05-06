@@ -351,3 +351,10 @@ func (c *SidecarClient) SubmitAssembleAndUploadGenesisTask(ctx context.Context, 
 	}
 	return c.SubmitTask(ctx, task.ToTaskRequest())
 }
+
+func (c *SidecarClient) SubmitSetGenesisPeersTask(ctx context.Context, task SetGenesisPeersTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}

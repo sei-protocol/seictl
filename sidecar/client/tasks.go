@@ -69,7 +69,6 @@ const (
 	TaskTypeUploadGenesisArtifacts = string(engine.TaskUploadGenesisArtifacts)
 	TaskTypeAssembleGenesis        = string(engine.TaskAssembleAndUploadGenesis)
 	TaskTypeSetGenesisPeers        = string(engine.TaskSetGenesisPeers)
-	TaskTypeExportState            = string(engine.TaskExportState)
 )
 
 // Known condition and action values for AwaitConditionTask.
@@ -373,6 +372,20 @@ func (t MarkReadyTask) TaskType() string { return TaskTypeMarkReady }
 func (t MarkReadyTask) Validate() error  { return nil }
 
 func (t MarkReadyTask) ToTaskRequest() TaskRequest {
+	req := TaskRequest{Type: t.TaskType()}
+	t.applyMeta(&req)
+	return req
+}
+
+// SetGenesisPeersTask requests the sidecar to publish this node's peer
+// entry to the shared genesis peers list (S3 coordinates derived from
+// the sidecar environment).
+type SetGenesisPeersTask struct{ TaskMeta }
+
+func (t SetGenesisPeersTask) TaskType() string { return TaskTypeSetGenesisPeers }
+func (t SetGenesisPeersTask) Validate() error  { return nil }
+
+func (t SetGenesisPeersTask) ToTaskRequest() TaskRequest {
 	req := TaskRequest{Type: t.TaskType()}
 	t.applyMeta(&req)
 	return req
