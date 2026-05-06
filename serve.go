@@ -105,7 +105,6 @@ var serveCmd = cli.Command{
 			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
 			engine.TaskAssembleGenesisFork:      tasks.NewGenesisForkAssembler(homeDir, genesisBucket, genesisRegion, nil, nil).Handler(),
 			engine.TaskExportState:              tasks.NewStateExporter(homeDir, nil).Handler(),
-			engine.TaskUploadFile:               tasks.NewUploadFileTask(nil).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)
