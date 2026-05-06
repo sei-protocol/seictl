@@ -326,7 +326,7 @@ func TestDeserialize_StateSync(t *testing.T) {
 // TestDeserialize_ResultExport verifies that the result-export handler
 // correctly deserializes the bucket, region, and optional fields.
 func TestDeserialize_ResultExport(t *testing.T) {
-	handler := NewResultExporter(t.TempDir(), nil).Handler()
+	handler := NewResultExporter(t.TempDir(), "test-1", "test-pod-0", nil).Handler()
 
 	params := map[string]any{
 		"bucket": "",

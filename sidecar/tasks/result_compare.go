@@ -121,6 +121,7 @@ func (l *comparisonLoop) compareBlocksUpTo(ctx context.Context, latestHeight int
 			return false, sleep(ctx, l.pollInterval)
 		}
 
+		shadow.BlocksCompared.WithLabelValues(l.exporter.chainID, l.exporter.podName).Inc()
 		l.pageBuf = append(l.pageBuf, *result)
 
 		if result.Diverged() {
@@ -137,8 +138,15 @@ func (l *comparisonLoop) compareBlocksUpTo(ctx context.Context, latestHeight int
 }
 
 func (l *comparisonLoop) handleDivergence(ctx context.Context, result shadow.CompareResult) error {
+	layer := "0"
+	if result.DivergenceLayer != nil {
+		layer = fmt.Sprintf("%d", *result.DivergenceLayer)
+	}
+	shadow.Divergences.WithLabelValues(l.exporter.chainID, l.exporter.podName, layer).Inc()
+
 	exportLog.Info("app-hash divergence detected",
 		"height", l.height,
+		"divergence-layer", layer,
 		"shadow-app-hash", result.Layer0.ShadowAppHash,
 		"canonical-app-hash", result.Layer0.CanonicalAppHash)
 

@@ -51,14 +51,19 @@ type exportState struct {
 // them in compressed NDJSON pages to S3.
 type ResultExporter struct {
 	homeDir           string
+	chainID           string
+	podName           string
 	s3UploaderFactory seis3.UploaderFactory
 }
 
-func NewResultExporter(homeDir string, factory seis3.UploaderFactory) *ResultExporter {
+// NewResultExporter creates an exporter targeting the given home directory.
+// chainID and podName label shadow comparison metrics; pass empty strings
+// if the exporter is only used in non-comparison mode.
+func NewResultExporter(homeDir, chainID, podName string, factory seis3.UploaderFactory) *ResultExporter {
 	if factory == nil {
 		factory = seis3.DefaultUploaderFactory
 	}
-	return &ResultExporter{homeDir: homeDir, s3UploaderFactory: factory}
+	return &ResultExporter{homeDir: homeDir, chainID: chainID, podName: podName, s3UploaderFactory: factory}
 }
 
 func (e *ResultExporter) Handler() engine.TaskHandler {
