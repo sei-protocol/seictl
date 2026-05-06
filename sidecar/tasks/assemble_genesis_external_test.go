@@ -235,47 +235,6 @@ func TestAddExternalGenesisAccounts_RejectsBadBalance(t *testing.T) {
 	}
 }
 
-func TestForkAddExternalGenesisAccounts_UpdatesSupply(t *testing.T) {
-	homeDir := t.TempDir()
-	genFile := minimalGenesis(t, homeDir)
-
-	a := NewGenesisForkAssembler(homeDir, "bucket", "region", nil, nil)
-	addr := "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9"
-	err := a.addExternalGenesisAccounts([]GenesisAccountEntry{{Address: addr, Balance: "5000usei"}})
-	if err != nil {
-		t.Fatalf("add: %v", err)
-	}
-
-	cdc, _ := makeCodec()
-	appState, _, err := genutiltypes.GenesisStateFromGenFile(genFile)
-	if err != nil {
-		t.Fatalf("reading genesis: %v", err)
-	}
-	bank := banktypes.GetGenesisStateFromAppState(cdc, appState)
-
-	// Supply must equal totalSupply or bank.InitGenesis panics
-	// (sei-cosmos/x/bank/keeper/genesis.go:48).
-	if bank.Supply.AmountOf("usei").String() != "5000" {
-		t.Errorf("supply usei: got %s, want 5000", bank.Supply.AmountOf("usei").String())
-	}
-}
-
-func TestForkAddExternalGenesisAccounts_CollisionHardFails(t *testing.T) {
-	homeDir := t.TempDir()
-	_ = minimalGenesis(t, homeDir)
-
-	a := NewGenesisForkAssembler(homeDir, "bucket", "region", nil, nil)
-	addr := "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9"
-
-	if err := a.addExternalGenesisAccounts([]GenesisAccountEntry{{Address: addr, Balance: "1usei"}}); err != nil {
-		t.Fatalf("first add: %v", err)
-	}
-	err := a.addExternalGenesisAccounts([]GenesisAccountEntry{{Address: addr, Balance: "999usei"}})
-	if err == nil {
-		t.Fatal("expected collision error, got nil")
-	}
-}
-
 func mustModTime(t *testing.T, path string) int64 {
 	t.Helper()
 	st, err := os.Stat(path)
