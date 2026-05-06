@@ -101,12 +101,9 @@ func TestUpload_UploadsArchiveAndLatestTxt(t *testing.T) {
 	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
 
 	mock := newMockS3Uploader()
-	uploader, err := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
-	if err != nil {
-		t.Fatalf("NewSnapshotUploader: %v", err)
-	}
+	uploader := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 
-	err = uploader.Upload(context.Background())
+	err := uploader.Upload(context.Background())
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
@@ -133,12 +130,9 @@ func TestUpload_SkipsWhenAlreadyUploaded(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
 	mock := newMockS3Uploader()
-	uploader, err := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
-	if err != nil {
-		t.Fatalf("NewSnapshotUploader: %v", err)
-	}
+	uploader := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 
-	err = uploader.Upload(context.Background())
+	err := uploader.Upload(context.Background())
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
@@ -157,12 +151,9 @@ func TestUpload_UploadsNewerSnapshot(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
 	mock := newMockS3Uploader()
-	uploader, err := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
-	if err != nil {
-		t.Fatalf("NewSnapshotUploader: %v", err)
-	}
+	uploader := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 
-	err = uploader.Upload(context.Background())
+	err := uploader.Upload(context.Background())
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
@@ -177,12 +168,9 @@ func TestUpload_NoOpsWhenTooFewSnapshots(t *testing.T) {
 	setupSnapshotDirs(t, homeDir, []int64{1000})
 
 	mock := newMockS3Uploader()
-	uploader, err := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
-	if err != nil {
-		t.Fatalf("NewSnapshotUploader: %v", err)
-	}
+	uploader := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 
-	err = uploader.Upload(context.Background())
+	err := uploader.Upload(context.Background())
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
@@ -197,12 +185,9 @@ func TestUpload_WritesUploadState(t *testing.T) {
 	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
 
 	mock := newMockS3Uploader()
-	uploader, err := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
-	if err != nil {
-		t.Fatalf("NewSnapshotUploader: %v", err)
-	}
+	uploader := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 
-	err = uploader.Upload(context.Background())
+	err := uploader.Upload(context.Background())
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}

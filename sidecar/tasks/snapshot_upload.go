@@ -51,13 +51,8 @@ type SnapshotUploader struct {
 }
 
 // NewSnapshotUploader creates an uploader targeting the given home directory.
-// Bucket, region, and chainID are read from environment at construction time
-// and rejected here if empty so the caller fails fast rather than entering
-// runLoop and uploading nothing forever.
-func NewSnapshotUploader(homeDir, bucket, region, chainID string, uploadInterval time.Duration, factory seis3.UploaderFactory) (*SnapshotUploader, error) {
-	if bucket == "" || region == "" || chainID == "" {
-		return nil, fmt.Errorf("snapshot-upload: bucket, region, and chainID are required")
-	}
+// Bucket, region, and chainID are read from environment at construction time.
+func NewSnapshotUploader(homeDir, bucket, region, chainID string, uploadInterval time.Duration, factory seis3.UploaderFactory) *SnapshotUploader {
 	if factory == nil {
 		factory = seis3.DefaultUploaderFactory
 	}
@@ -71,7 +66,7 @@ func NewSnapshotUploader(homeDir, bucket, region, chainID string, uploadInterval
 		chainID:           chainID,
 		uploadInterval:    uploadInterval,
 		s3UploaderFactory: factory,
-	}, nil
+	}
 }
 
 // Handler returns an engine.TaskHandler for the snapshot-upload task.

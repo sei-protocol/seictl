@@ -80,11 +80,6 @@ var serveCmd = cli.Command{
 			return fmt.Errorf("creating snapshot restorer: %w", err)
 		}
 
-		snapshotUploader, err := tasks.NewSnapshotUploader(homeDir, snapshotBucket, snapshotRegion, chainID, snapshotUploadInterval, nil)
-		if err != nil {
-			return fmt.Errorf("creating snapshot uploader: %w", err)
-		}
-
 		handlers := map[engine.TaskType]engine.TaskHandler{
 			engine.TaskSnapshotRestore:          snapshotRestorer.Handler(),
 			engine.TaskDiscoverPeers:            tasks.NewPeerDiscoverer(homeDir, nil, nil).Handler(),
@@ -95,7 +90,7 @@ var serveCmd = cli.Command{
 			engine.TaskMarkReady:                tasks.MarkReadyHandler(),
 			engine.TaskConfigureGenesis:         tasks.NewGenesisFetcher(homeDir, chainID, genesisBucket, genesisRegion, nil).Handler(),
 			engine.TaskConfigureStateSync:       tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
-			engine.TaskSnapshotUpload:           snapshotUploader.Handler(),
+			engine.TaskSnapshotUpload:           tasks.NewSnapshotUploader(homeDir, snapshotBucket, snapshotRegion, chainID, snapshotUploadInterval, nil).Handler(),
 			engine.TaskResultExport:             tasks.NewResultExporter(homeDir, nil).Handler(),
 			engine.TaskAwaitCondition:           tasks.NewConditionWaiter(nil).Handler(),
 			engine.TaskGenerateIdentity:         tasks.NewIdentityGenerator(homeDir).Handler(),
@@ -105,7 +100,6 @@ var serveCmd = cli.Command{
 			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
 			engine.TaskAssembleGenesisFork:      tasks.NewGenesisForkAssembler(homeDir, genesisBucket, genesisRegion, nil, nil).Handler(),
 			engine.TaskExportState:              tasks.NewStateExporter(homeDir, nil).Handler(),
-			engine.TaskUploadFile:               tasks.NewUploadFileTask(nil).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)

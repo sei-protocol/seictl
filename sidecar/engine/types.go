@@ -29,7 +29,6 @@ const (
 	TaskSetGenesisPeers          TaskType = "set-genesis-peers"
 	TaskAssembleGenesisFork      TaskType = "assemble-genesis-fork"
 	TaskExportState              TaskType = "export-state"
-	TaskUploadFile               TaskType = "upload-file"
 )
 
 // Task is a unit of work submitted by the controller. When ID is set, the
