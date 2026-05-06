@@ -149,11 +149,11 @@ const (
 
 // PeerSource is a single peer discovery source.
 type PeerSource struct {
-	Type      PeerSourceType
-	Region    string
-	Tags      map[string]string
-	Addresses []string
-	Endpoints []string
+	Type      PeerSourceType    `json:"type"`
+	Region    string            `json:"region,omitempty"`
+	Tags      map[string]string `json:"tags,omitempty"`
+	Addresses []string          `json:"addresses,omitempty"`
+	Endpoints []string          `json:"endpoints,omitempty"`
 }
 
 // DiscoverPeersTask resolves peers from one or more sources.
