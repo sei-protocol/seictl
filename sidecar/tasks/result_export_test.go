@@ -14,7 +14,10 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
+	"github.com/sei-protocol/seictl/sidecar/shadow"
 )
 
 type mockResultUploader struct{}
@@ -58,7 +61,7 @@ func TestExportBootstrapFromSnapshotHeight(t *testing.T) {
 		t.Fatalf("writing snapshot height file: %v", err)
 	}
 
-	e := NewResultExporter(tmpDir, nil)
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", nil)
 	state := e.readExportState()
 
 	if state.LastExportedHeight != 198030000 {
@@ -68,7 +71,7 @@ func TestExportBootstrapFromSnapshotHeight(t *testing.T) {
 
 func TestExportBootstrapNoFiles(t *testing.T) {
 	tmpDir := t.TempDir()
-	e := NewResultExporter(tmpDir, nil)
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", nil)
 	state := e.readExportState()
 
 	if state.LastExportedHeight != 0 {
@@ -87,7 +90,7 @@ func TestExportBootstrapPreferStateFile(t *testing.T) {
 		t.Fatalf("writing snapshot height file: %v", err)
 	}
 
-	e := NewResultExporter(tmpDir, nil)
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", nil)
 	state := e.readExportState()
 
 	if state.LastExportedHeight != 200000000 {
@@ -102,7 +105,7 @@ func TestExportRPCUnavailable(t *testing.T) {
 	srv.Close()
 
 	tmpDir := t.TempDir()
-	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", mockResultUploaderFactory())
 
 	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
@@ -122,7 +125,7 @@ func TestExportRPCNon200Status(t *testing.T) {
 	defer srv.Close()
 
 	tmpDir := t.TempDir()
-	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", mockResultUploaderFactory())
 
 	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
@@ -155,7 +158,7 @@ func TestExportS3UploaderFactoryError(t *testing.T) {
 		t.Fatalf("writing snapshot height file: %v", err)
 	}
 
-	e := NewResultExporter(tmpDir, failingUploaderFactory("simulated AWS error"))
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", failingUploaderFactory("simulated AWS error"))
 
 	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
@@ -181,7 +184,7 @@ func TestExportWritesStateAfterPage(t *testing.T) {
 		t.Fatalf("writing snapshot height file: %v", err)
 	}
 
-	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", mockResultUploaderFactory())
 	err := e.Export(context.Background(), ResultExportRequest{
 		Bucket:      "test-bucket",
 		Prefix:      "results",
@@ -200,7 +203,7 @@ func TestExportWritesStateAfterPage(t *testing.T) {
 
 func TestExportHandler_MissingParams(t *testing.T) {
 	tmpDir := t.TempDir()
-	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", mockResultUploaderFactory())
 	handler := e.Handler()
 
 	cases := []struct {
@@ -256,7 +259,7 @@ func TestHandlerRouting_WithCanonicalRPC_CallsExportAndCompare(t *testing.T) {
 	defer srv.Close()
 
 	tmpDir := t.TempDir()
-	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", mockResultUploaderFactory())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -277,7 +280,7 @@ func TestHandlerRouting_WithoutCanonicalRPC_CallsExport(t *testing.T) {
 	defer srv.Close()
 
 	tmpDir := t.TempDir()
-	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", mockResultUploaderFactory())
 
 	err := e.Handler()(context.Background(), map[string]any{
 		"bucket":      "test-bucket",
@@ -299,7 +302,10 @@ func TestExportAndCompare_DivergenceDetected(t *testing.T) {
 	defer canonicalSrv.Close()
 
 	tmpDir := t.TempDir()
-	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+	const testPodName = "shadow-test-0"
+	e := NewResultExporter(tmpDir, "test-1", testPodName, mockResultUploaderFactory())
+
+	divergenceBefore := testutil.ToFloat64(shadow.Divergences.WithLabelValues("test-1", testPodName, "0"))
 
 	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
@@ -317,6 +323,13 @@ func TestExportAndCompare_DivergenceDetected(t *testing.T) {
 	if state.LastExportedHeight != 1 {
 		t.Errorf("LastExportedHeight = %d, want 1 (diverged at first block)", state.LastExportedHeight)
 	}
+
+	if got := testutil.ToFloat64(shadow.Divergences.WithLabelValues("test-1", testPodName, "0")); got-divergenceBefore != 1 {
+		t.Errorf("seictl_shadow_divergences_total{chain_id=test-1,pod_name=%s,divergence_layer=0} delta = %v, want 1", testPodName, got-divergenceBefore)
+	}
+	if got := testutil.ToFloat64(shadow.BlocksCompared.WithLabelValues("test-1", testPodName)); got < 1 {
+		t.Errorf("seictl_shadow_blocks_compared_total{chain_id=test-1,pod_name=%s} = %v, want >= 1", testPodName, got)
+	}
 }
 
 func TestExportAndCompare_ContextCancelled(t *testing.T) {
@@ -324,7 +337,7 @@ func TestExportAndCompare_ContextCancelled(t *testing.T) {
 	defer srv.Close()
 
 	tmpDir := t.TempDir()
-	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", mockResultUploaderFactory())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -345,7 +358,7 @@ func TestExportAndCompare_S3UploaderError(t *testing.T) {
 	defer srv.Close()
 
 	tmpDir := t.TempDir()
-	e := NewResultExporter(tmpDir, failingUploaderFactory("AWS creds expired"))
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", failingUploaderFactory("AWS creds expired"))
 
 	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
@@ -373,7 +386,7 @@ func TestExportAndCompare_ResumesFromExportState(t *testing.T) {
 		t.Fatalf("writing state: %v", err)
 	}
 
-	e := NewResultExporter(tmpDir, mockResultUploaderFactory())
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", mockResultUploaderFactory())
 	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
 		Region:       "us-east-1",
@@ -400,7 +413,7 @@ func TestExportAndCompare_UploadsDivergenceReport(t *testing.T) {
 
 	recorder := &recordingUploader{}
 	tmpDir := t.TempDir()
-	e := NewResultExporter(tmpDir, func(_ context.Context, _ string) (seis3.Uploader, error) {
+	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", func(_ context.Context, _ string) (seis3.Uploader, error) {
 		return recorder, nil
 	})
 
