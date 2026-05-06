@@ -243,6 +243,20 @@ func TestMarkReadyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSetGenesisPeersRoundTrip(t *testing.T) {
+	task := SetGenesisPeersTask{}
+	if err := task.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	req := task.ToTaskRequest()
+	if req.Type != TaskTypeSetGenesisPeers {
+		t.Errorf("Type = %q, want %q", req.Type, TaskTypeSetGenesisPeers)
+	}
+	if req.Params != nil {
+		t.Errorf("Params = %v, want nil", req.Params)
+	}
+}
+
 func TestSnapshotRestoreValidation(t *testing.T) {
 	// SnapshotRestoreTask has no required fields — TargetHeight=0 means "use latest"
 	cases := []struct {
