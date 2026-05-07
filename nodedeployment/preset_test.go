@@ -1,9 +1,11 @@
 package nodedeployment
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/urfave/cli/v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -511,6 +513,130 @@ func TestApplySet_ListIndex_TypeMismatchSurfaces(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "expects list") {
 		t.Errorf("err = %v; want containing 'expects list'", err)
+	}
+}
+
+func TestRender_OverrideFlag(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "rpc",
+		name:    "qa-test",
+		chainID: "qa-test",
+		image:   "img:1",
+		overrides: []string{
+			"evm.enabled_legacy_sei_apis=sei_getLogs,sei_getBlockByNumber",
+			"tx_index.indexer=kv",
+		},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	overrides, found, _ := unstructured.NestedStringMap(got.Object, "spec", "template", "spec", "overrides")
+	if !found {
+		t.Fatal("overrides map not found")
+	}
+	if got := overrides["evm.enabled_legacy_sei_apis"]; got != "sei_getLogs,sei_getBlockByNumber" {
+		t.Errorf("evm.enabled_legacy_sei_apis = %q; want %q", got, "sei_getLogs,sei_getBlockByNumber")
+	}
+	if got := overrides["tx_index.indexer"]; got != "kv" {
+		t.Errorf("tx_index.indexer = %q; want %q", got, "kv")
+	}
+}
+
+func TestApplyOverride_PreservesExistingMap(t *testing.T) {
+	root := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"template": map[string]interface{}{
+				"spec": map[string]interface{}{
+					"overrides": map[string]interface{}{
+						"chain.moniker": "preset-default",
+					},
+				},
+			},
+		},
+	}
+	if err := applyOverride(root, "evm.enabled_legacy_sei_apis=sei_getLogs"); err != nil {
+		t.Fatalf("applyOverride: %v", err)
+	}
+	overrides, _, _ := unstructured.NestedStringMap(root, "spec", "template", "spec", "overrides")
+	if overrides["chain.moniker"] != "preset-default" {
+		t.Errorf("preset-supplied entry was clobbered: chain.moniker = %q", overrides["chain.moniker"])
+	}
+	if overrides["evm.enabled_legacy_sei_apis"] != "sei_getLogs" {
+		t.Errorf("override not written: evm.enabled_legacy_sei_apis = %q", overrides["evm.enabled_legacy_sei_apis"])
+	}
+}
+
+func TestApplyOverride_ValueWithEquals(t *testing.T) {
+	root := map[string]interface{}{}
+	if err := applyOverride(root, "chain.min_gas_prices=0.1usei,0.5=stake"); err != nil {
+		t.Fatalf("applyOverride: %v", err)
+	}
+	overrides, _, _ := unstructured.NestedStringMap(root, "spec", "template", "spec", "overrides")
+	if got := overrides["chain.min_gas_prices"]; got != "0.1usei,0.5=stake" {
+		t.Errorf("value with embedded '=' not preserved: got %q", got)
+	}
+}
+
+// urfave/cli's StringSliceFlag splits values on ',' by default;
+// this asserts the command-level guard is in place.
+func TestApplyCmd_FlagsDoNotSplitOnComma(t *testing.T) {
+	if !applyCmd.DisableSliceFlagSeparator {
+		t.Fatal("applyCmd.DisableSliceFlagSeparator must be true; otherwise comma-bearing flag values get split by urfave/cli")
+	}
+
+	var capturedOverride, capturedSet, capturedGenesis []string
+	origAction := applyCmd.Action
+	applyCmd.Action = func(_ context.Context, c *cli.Command) error {
+		capturedOverride = c.StringSlice("override")
+		capturedSet = c.StringSlice("set")
+		capturedGenesis = c.StringSlice("genesis-account")
+		return nil
+	}
+	t.Cleanup(func() { applyCmd.Action = origAction })
+
+	err := applyCmd.Run(context.Background(), []string{
+		"apply", "qa-rpc",
+		"--preset", "rpc",
+		"--chain-id", "qa-rpc",
+		"--image", "img:1",
+		"--override", "evm.enabled_legacy_sei_apis=sei_getLogs,sei_getBlockByNumber",
+		"--set", "spec.template.spec.image=foo,bar",
+		"--genesis-account", "sei1abc:1000usei,500uatom",
+	})
+	if err != nil {
+		t.Fatalf("apply Run: %v", err)
+	}
+
+	if len(capturedOverride) != 1 ||
+		capturedOverride[0] != "evm.enabled_legacy_sei_apis=sei_getLogs,sei_getBlockByNumber" {
+		t.Errorf("--override split by parser: %v", capturedOverride)
+	}
+	if len(capturedSet) != 1 || capturedSet[0] != "spec.template.spec.image=foo,bar" {
+		t.Errorf("--set split by parser: %v", capturedSet)
+	}
+	if len(capturedGenesis) != 1 || capturedGenesis[0] != "sei1abc:1000usei,500uatom" {
+		t.Errorf("--genesis-account split by parser: %v", capturedGenesis)
+	}
+}
+
+func TestApplyOverride_Errors(t *testing.T) {
+	cases := []struct {
+		expr string
+		want string
+	}{
+		{"no-equals", "missing '='"},
+		{"=value", "empty key"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.expr, func(t *testing.T) {
+			err := applyOverride(map[string]interface{}{}, tc.expr)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %q; want containing %q", err.Error(), tc.want)
+			}
+		})
 	}
 }
 

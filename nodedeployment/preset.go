@@ -21,6 +21,7 @@ type renderArgs struct {
 	hasReps         bool
 	sets            []string
 	genesisAccounts []string
+	overrides       []string
 }
 
 // presetRequiredFields surfaces missing required fields as a friendly
@@ -138,6 +139,12 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		}
 	}
 
+	for _, expr := range args.overrides {
+		if err := applyOverride(u.Object, expr); err != nil {
+			return nil, usageError("apply --override %q: %s", expr, err.Error())
+		}
+	}
+
 	// Reassert identity after --set so --set metadata.namespace=kube-system
 	// can't silently retarget.
 	u.SetName(args.name)
@@ -164,6 +171,30 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	}
 
 	return u, nil
+}
+
+// applyOverride writes a single key=value pair into
+// spec.template.spec.overrides. Keys may contain dots because the
+// overrides map's keys are themselves dotted TOML paths.
+func applyOverride(root map[string]interface{}, expr string) error {
+	eq := strings.Index(expr, "=")
+	if eq < 0 {
+		return fmt.Errorf("missing '=' in --override expression")
+	}
+	key := expr[:eq]
+	val := expr[eq+1:]
+	if key == "" {
+		return fmt.Errorf("empty key before '='")
+	}
+	existing, _, err := unstructured.NestedStringMap(root, "spec", "template", "spec", "overrides")
+	if err != nil {
+		return fmt.Errorf("read existing overrides: %w", err)
+	}
+	if existing == nil {
+		existing = map[string]string{}
+	}
+	existing[key] = val
+	return unstructured.SetNestedStringMap(root, existing, "spec", "template", "spec", "overrides")
 }
 
 // applySet writes a single dotted-path --set expression. Each segment is a

@@ -26,6 +26,7 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		image:           c.String("image"),
 		sets:            c.StringSlice("set"),
 		genesisAccounts: c.StringSlice("genesis-account"),
+		overrides:       c.StringSlice("override"),
 	}
 	if c.IsSet("replicas") {
 		args.replicas = int(c.Int("replicas"))
@@ -79,8 +80,11 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 }
 
 var applyCmd = cli.Command{
-	Name:  "apply",
-	Usage: "Render a preset and server-side-apply the resulting SeiNodeDeployment",
+	Name: "apply",
+	// urfave/cli's StringSliceFlag splits values on `,` by default,
+	// mangling multi-denom coins and TOML list values.
+	DisableSliceFlagSeparator: true,
+	Usage:                     "Render a preset and server-side-apply the resulting SeiNodeDeployment",
 	Description: "Loads the named preset, applies discrete-flag and --set " +
 		"overrides, and server-side-applies the result. With --dry-run, " +
 		"the apiserver validates and returns the would-be-applied CR " +
@@ -131,6 +135,10 @@ var applyCmd = cli.Command{
 		&cli.StringSliceFlag{
 			Name:  "genesis-account",
 			Usage: "Append a GenesisAccount to spec.genesis.accounts: --genesis-account <address>:<balance> (e.g. --genesis-account sei1abc...:1000000000usei). Balance accepts the standard cosmos coin format (comma-separated denominations). Repeatable. Requires --preset genesis-chain. --set spec.genesis.accounts[N]... overrides on collision.",
+		},
+		&cli.StringSliceFlag{
+			Name:  "override",
+			Usage: "Set a key in spec.template.spec.overrides: --override <toml-path>=<value> (e.g. --override evm.enabled_legacy_sei_apis=sei_getLogs,sei_getBlockByNumber). Keys are dotted TOML paths consumed by the controller's config-apply pipeline; --set cannot reach this map because its parser splits on every dot. Repeatable.",
 		},
 		&cli.BoolFlag{
 			Name:  "dry-run",
