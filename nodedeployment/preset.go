@@ -174,10 +174,8 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 }
 
 // applyOverride writes a single key=value pair into
-// spec.template.spec.overrides. Unlike --set, the key may contain dots
-// because the overrides map's keys are themselves dotted TOML paths
-// (e.g. "evm.enabled_legacy_sei_apis"). The first '=' separates key
-// from value; subsequent '=' characters are part of the value.
+// spec.template.spec.overrides. Keys may contain dots because the
+// overrides map's keys are themselves dotted TOML paths.
 func applyOverride(root map[string]interface{}, expr string) error {
 	eq := strings.Index(expr, "=")
 	if eq < 0 {

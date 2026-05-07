@@ -577,13 +577,8 @@ func TestApplyOverride_ValueWithEquals(t *testing.T) {
 	}
 }
 
-// TestApplyCmd_FlagsDoNotSplitOnComma exercises the actual urfave/cli flag
-// parser end-to-end. urfave/cli's StringSliceFlag splits values on ','
-// unless DisableSliceFlagSeparator is set on the Command. Without this,
-// --override evm.enabled_legacy_sei_apis=a,b would arrive as ["...=a", "b"].
-// Same latent bug applied to --set (e.g. multi-denom min_gas_prices) and
-// --genesis-account (multi-denom balances). All three are guarded by the
-// command-level DisableSliceFlagSeparator: true.
+// urfave/cli's StringSliceFlag splits values on ',' by default;
+// this asserts the command-level guard is in place.
 func TestApplyCmd_FlagsDoNotSplitOnComma(t *testing.T) {
 	if !applyCmd.DisableSliceFlagSeparator {
 		t.Fatal("applyCmd.DisableSliceFlagSeparator must be true; otherwise comma-bearing flag values get split by urfave/cli")
