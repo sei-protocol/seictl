@@ -204,6 +204,103 @@ func TestRender_RequiredFlags(t *testing.T) {
 	}
 }
 
+func TestRender_GenesisAccountFlag(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "genesis-chain",
+		name:    "qa-test",
+		chainID: "qa-test",
+		image:   "img:1",
+		genesisAccounts: []string{
+			"sei1abc:1000000000usei",
+			"0xdef:500000000usei,2000uusdc",
+		},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	accounts, found, _ := unstructured.NestedSlice(got.Object, "spec", "genesis", "accounts")
+	if !found || len(accounts) != 2 {
+		t.Fatalf("expected 2 accounts, got %v (found=%v)", accounts, found)
+	}
+	a0 := accounts[0].(map[string]interface{})
+	if a0["address"] != "sei1abc" {
+		t.Errorf("accounts[0].address = %v; want sei1abc", a0["address"])
+	}
+	if a0["balance"] != "1000000000usei" {
+		t.Errorf("accounts[0].balance = %v; want 1000000000usei", a0["balance"])
+	}
+	a1 := accounts[1].(map[string]interface{})
+	if a1["address"] != "0xdef" {
+		t.Errorf("accounts[1].address = %v; want 0xdef", a1["address"])
+	}
+	if a1["balance"] != "500000000usei,2000uusdc" {
+		t.Errorf("accounts[1].balance = %v; want 500000000usei,2000uusdc", a1["balance"])
+	}
+}
+
+func TestRender_GenesisAccountRejectsNonGenesisPreset(t *testing.T) {
+	_, err := render(renderArgs{
+		preset:          "rpc",
+		name:            "rpc-fleet",
+		chainID:         "pacific-1",
+		image:           "img:1",
+		genesisAccounts: []string{"sei1abc:1000usei"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only valid with --preset genesis-chain") {
+		t.Errorf("expected 'only valid with --preset genesis-chain' error, got %v", err)
+	}
+}
+
+func TestRender_GenesisAccountSetCanOverride(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:          "genesis-chain",
+		name:            "x",
+		chainID:         "c",
+		image:           "img:1",
+		genesisAccounts: []string{"sei1abc:1000usei"},
+		sets:            []string{"spec.genesis.accountBalance=2000usei"},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	accounts, _, _ := unstructured.NestedSlice(got.Object, "spec", "genesis", "accounts")
+	if len(accounts) != 1 {
+		t.Errorf("--genesis-account should still produce its entry; got len=%d", len(accounts))
+	}
+	bal, _, _ := unstructured.NestedString(got.Object, "spec", "genesis", "accountBalance")
+	if bal != "2000usei" {
+		t.Errorf("--set after --genesis-account should set accountBalance; got %q", bal)
+	}
+}
+
+func TestParseGenesisAccount_Errors(t *testing.T) {
+	cases := []struct {
+		entry string
+		want  string
+	}{
+		{"no-colon", "missing ':'"},
+		{":1000usei", "empty address"},
+		{"sei1abc:", "empty balance"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.entry, func(t *testing.T) {
+			_, err := render(renderArgs{
+				preset:          "genesis-chain",
+				name:            "x",
+				chainID:         "c",
+				image:           "img:1",
+				genesisAccounts: []string{tc.entry},
+			})
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %q; want containing %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
 func TestRender_SetOverrides(t *testing.T) {
 	got, err := render(renderArgs{
 		preset:  "rpc",
@@ -280,7 +377,12 @@ func TestApplySet_Errors(t *testing.T) {
 		{"no-equals", "missing '='"},
 		{"=value", "empty path"},
 		{"a..b=v", "empty segment"},
-		{"a[0]=v", "list-index syntax"},
+		{"a[=v", "without closing"},
+		{"a[]=v", "empty list index"},
+		{"a[abc]=v", "malformed list index"},
+		{"a[-1]=v", "negative list index"},
+		{"[0]=v", "without preceding key"},
+		{"foo=null", "value 'null' is not supported"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.expr, func(t *testing.T) {
@@ -292,6 +394,123 @@ func TestApplySet_Errors(t *testing.T) {
 				t.Errorf("err = %q; want containing %q", err.Error(), tc.want)
 			}
 		})
+	}
+}
+
+func TestApplySet_ListIndex_AppendIntoEmptyList(t *testing.T) {
+	root := map[string]interface{}{}
+	if err := applySet(root, "spec.genesis.accounts[0].address=sei1abc"); err != nil {
+		t.Fatalf("applySet: %v", err)
+	}
+	if err := applySet(root, "spec.genesis.accounts[0].balance=1000usei"); err != nil {
+		t.Fatalf("applySet: %v", err)
+	}
+	accounts, _, _ := unstructured.NestedSlice(root, "spec", "genesis", "accounts")
+	if len(accounts) != 1 {
+		t.Fatalf("len(accounts) = %d; want 1", len(accounts))
+	}
+	a0, ok := accounts[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("accounts[0] is %T; want map", accounts[0])
+	}
+	if a0["address"] != "sei1abc" {
+		t.Errorf("accounts[0].address = %v; want sei1abc", a0["address"])
+	}
+	if a0["balance"] != "1000usei" {
+		t.Errorf("accounts[0].balance = %v; want 1000usei", a0["balance"])
+	}
+}
+
+func TestApplySet_ListIndex_AppendSequential(t *testing.T) {
+	root := map[string]interface{}{}
+	exprs := []string{
+		"spec.genesis.accounts[0].address=sei1aaa",
+		"spec.genesis.accounts[0].balance=100usei",
+		"spec.genesis.accounts[1].address=sei1bbb",
+		"spec.genesis.accounts[1].balance=200usei",
+	}
+	for _, e := range exprs {
+		if err := applySet(root, e); err != nil {
+			t.Fatalf("applySet(%q): %v", e, err)
+		}
+	}
+	accounts, _, _ := unstructured.NestedSlice(root, "spec", "genesis", "accounts")
+	if len(accounts) != 2 {
+		t.Fatalf("len(accounts) = %d; want 2", len(accounts))
+	}
+	a1 := accounts[1].(map[string]interface{})
+	if a1["address"] != "sei1bbb" || a1["balance"] != "200usei" {
+		t.Errorf("accounts[1] = %v; want {address=sei1bbb, balance=200usei}", a1)
+	}
+}
+
+func TestApplySet_ListIndex_SetOnExisting(t *testing.T) {
+	root := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"template": map[string]interface{}{
+				"spec": map[string]interface{}{
+					"peers": []interface{}{
+						map[string]interface{}{
+							"label": map[string]interface{}{
+								"original": "value",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := applySet(root, "spec.template.spec.peers[0].label.original=overridden"); err != nil {
+		t.Fatalf("applySet: %v", err)
+	}
+	peers, _, _ := unstructured.NestedSlice(root, "spec", "template", "spec", "peers")
+	p0 := peers[0].(map[string]interface{})
+	label := p0["label"].(map[string]interface{})
+	if label["original"] != "overridden" {
+		t.Errorf("peers[0].label.original = %v; want overridden", label["original"])
+	}
+}
+
+func TestApplySet_ListIndex_SparseRejected(t *testing.T) {
+	root := map[string]interface{}{}
+	err := applySet(root, "spec.accounts[2].address=foo")
+	if err == nil {
+		t.Fatalf("expected error for sparse index, got nil")
+	}
+	if !strings.Contains(err.Error(), "out of range") {
+		t.Errorf("err = %v; want containing 'out of range'", err)
+	}
+	if !strings.Contains(err.Error(), ".accounts[2]") {
+		t.Errorf("err = %v; want containing failing segment '.accounts[2]'", err)
+	}
+}
+
+func TestApplySet_ListIndex_LeafScalar(t *testing.T) {
+	root := map[string]interface{}{}
+	if err := applySet(root, "tags[0]=alpha"); err != nil {
+		t.Fatalf("applySet: %v", err)
+	}
+	if err := applySet(root, "tags[1]=beta"); err != nil {
+		t.Fatalf("applySet: %v", err)
+	}
+	tags, _, _ := unstructured.NestedSlice(root, "tags")
+	if len(tags) != 2 || tags[0] != "alpha" || tags[1] != "beta" {
+		t.Errorf("tags = %v; want [alpha beta]", tags)
+	}
+}
+
+func TestApplySet_ListIndex_TypeMismatchSurfaces(t *testing.T) {
+	root := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"accounts": "not-a-list",
+		},
+	}
+	err := applySet(root, "spec.accounts[0]=foo")
+	if err == nil {
+		t.Fatalf("expected error for non-list field, got nil")
+	}
+	if !strings.Contains(err.Error(), "expects list") {
+		t.Errorf("err = %v; want containing 'expects list'", err)
 	}
 }
 

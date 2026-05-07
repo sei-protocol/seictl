@@ -19,12 +19,13 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 	}
 
 	args := renderArgs{
-		preset:    c.String("preset"),
-		name:      name,
-		namespace: c.String("namespace"),
-		chainID:   c.String("chain-id"),
-		image:     c.String("image"),
-		sets:      c.StringSlice("set"),
+		preset:          c.String("preset"),
+		name:            name,
+		namespace:       c.String("namespace"),
+		chainID:         c.String("chain-id"),
+		image:           c.String("image"),
+		sets:            c.StringSlice("set"),
+		genesisAccounts: c.StringSlice("genesis-account"),
 	}
 	if c.IsSet("replicas") {
 		args.replicas = int(c.Int("replicas"))
@@ -125,7 +126,11 @@ var applyCmd = cli.Command{
 		},
 		&cli.StringSliceFlag{
 			Name:  "set",
-			Usage: "Strategic-merge override, dotted path (e.g. --set spec.template.spec.image=foo). Wins on collision with discrete flags. Repeatable.",
+			Usage: "Strategic-merge override, dotted path with optional list-index suffix (e.g. --set spec.template.spec.image=foo, --set spec.genesis.accounts[0].address=sei1abc). Wins on collision with discrete flags. Repeatable.",
+		},
+		&cli.StringSliceFlag{
+			Name:  "genesis-account",
+			Usage: "Append a GenesisAccount to spec.genesis.accounts: --genesis-account <address>:<balance> (e.g. --genesis-account sei1abc...:1000000000usei). Balance accepts the standard cosmos coin format (comma-separated denominations). Repeatable. Requires --preset genesis-chain. --set spec.genesis.accounts[N]... overrides on collision.",
 		},
 		&cli.BoolFlag{
 			Name:  "dry-run",
