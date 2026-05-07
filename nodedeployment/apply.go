@@ -80,8 +80,13 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 }
 
 var applyCmd = cli.Command{
-	Name:  "apply",
-	Usage: "Render a preset and server-side-apply the resulting SeiNodeDeployment",
+	Name: "apply",
+	// urfave/cli StringSliceFlag splits values on `,` for both env-var and
+	// argv input. --set, --genesis-account, and --override all carry
+	// comma-bearing values (multi-denom coins, comma-separated TOML lists),
+	// so disable the slice-flag splitter for the whole command.
+	DisableSliceFlagSeparator: true,
+	Usage:                     "Render a preset and server-side-apply the resulting SeiNodeDeployment",
 	Description: "Loads the named preset, applies discrete-flag and --set " +
 		"overrides, and server-side-applies the result. With --dry-run, " +
 		"the apiserver validates and returns the would-be-applied CR " +

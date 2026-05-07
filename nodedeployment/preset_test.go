@@ -1,9 +1,11 @@
 package nodedeployment
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/urfave/cli/v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -572,6 +574,53 @@ func TestApplyOverride_ValueWithEquals(t *testing.T) {
 	overrides, _, _ := unstructured.NestedStringMap(root, "spec", "template", "spec", "overrides")
 	if got := overrides["chain.min_gas_prices"]; got != "0.1usei,0.5=stake" {
 		t.Errorf("value with embedded '=' not preserved: got %q", got)
+	}
+}
+
+// TestApplyCmd_FlagsDoNotSplitOnComma exercises the actual urfave/cli flag
+// parser end-to-end. urfave/cli's StringSliceFlag splits values on ','
+// unless DisableSliceFlagSeparator is set on the Command. Without this,
+// --override evm.enabled_legacy_sei_apis=a,b would arrive as ["...=a", "b"].
+// Same latent bug applied to --set (e.g. multi-denom min_gas_prices) and
+// --genesis-account (multi-denom balances). All three are guarded by the
+// command-level DisableSliceFlagSeparator: true.
+func TestApplyCmd_FlagsDoNotSplitOnComma(t *testing.T) {
+	if !applyCmd.DisableSliceFlagSeparator {
+		t.Fatal("applyCmd.DisableSliceFlagSeparator must be true; otherwise comma-bearing flag values get split by urfave/cli")
+	}
+
+	var capturedOverride, capturedSet, capturedGenesis []string
+	origAction := applyCmd.Action
+	applyCmd.Action = func(_ context.Context, c *cli.Command) error {
+		capturedOverride = c.StringSlice("override")
+		capturedSet = c.StringSlice("set")
+		capturedGenesis = c.StringSlice("genesis-account")
+		return nil
+	}
+	t.Cleanup(func() { applyCmd.Action = origAction })
+
+	err := applyCmd.Run(context.Background(), []string{
+		"apply", "qa-rpc",
+		"--preset", "rpc",
+		"--chain-id", "qa-rpc",
+		"--image", "img:1",
+		"--override", "evm.enabled_legacy_sei_apis=sei_getLogs,sei_getBlockByNumber",
+		"--set", "spec.template.spec.image=foo,bar",
+		"--genesis-account", "sei1abc:1000usei,500uatom",
+	})
+	if err != nil {
+		t.Fatalf("apply Run: %v", err)
+	}
+
+	if len(capturedOverride) != 1 ||
+		capturedOverride[0] != "evm.enabled_legacy_sei_apis=sei_getLogs,sei_getBlockByNumber" {
+		t.Errorf("--override split by parser: %v", capturedOverride)
+	}
+	if len(capturedSet) != 1 || capturedSet[0] != "spec.template.spec.image=foo,bar" {
+		t.Errorf("--set split by parser: %v", capturedSet)
+	}
+	if len(capturedGenesis) != 1 || capturedGenesis[0] != "sei1abc:1000usei,500uatom" {
+		t.Errorf("--genesis-account split by parser: %v", capturedGenesis)
 	}
 }
 
