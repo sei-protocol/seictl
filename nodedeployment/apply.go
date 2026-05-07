@@ -26,6 +26,7 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		image:           c.String("image"),
 		sets:            c.StringSlice("set"),
 		genesisAccounts: c.StringSlice("genesis-account"),
+		overrides:       c.StringSlice("override"),
 	}
 	if c.IsSet("replicas") {
 		args.replicas = int(c.Int("replicas"))
@@ -131,6 +132,10 @@ var applyCmd = cli.Command{
 		&cli.StringSliceFlag{
 			Name:  "genesis-account",
 			Usage: "Append a GenesisAccount to spec.genesis.accounts: --genesis-account <address>:<balance> (e.g. --genesis-account sei1abc...:1000000000usei). Balance accepts the standard cosmos coin format (comma-separated denominations). Repeatable. Requires --preset genesis-chain. --set spec.genesis.accounts[N]... overrides on collision.",
+		},
+		&cli.StringSliceFlag{
+			Name:  "override",
+			Usage: "Set a key in spec.template.spec.overrides: --override <toml-path>=<value> (e.g. --override evm.enabled_legacy_sei_apis=sei_getLogs,sei_getBlockByNumber). Keys are dotted TOML paths consumed by the controller's config-apply pipeline; --set cannot reach this map because its parser splits on every dot. Repeatable.",
 		},
 		&cli.BoolFlag{
 			Name:  "dry-run",
