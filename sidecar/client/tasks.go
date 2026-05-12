@@ -1,11 +1,13 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/cosmos/btcutil/bech32"
 	seiconfig "github.com/sei-protocol/sei-config"
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/tasks"
 )
 
 const seiBech32HRP = "sei"
@@ -53,6 +55,8 @@ const (
 	TaskTypeUploadGenesisArtifacts = string(engine.TaskUploadGenesisArtifacts)
 	TaskTypeAssembleGenesis        = string(engine.TaskAssembleAndUploadGenesis)
 	TaskTypeSetGenesisPeers        = string(engine.TaskSetGenesisPeers)
+
+	TaskTypeGovVote = string(engine.TaskGovVote)
 )
 
 // Known condition and action values for AwaitConditionTask.
@@ -724,4 +728,57 @@ func (t AwaitConditionTask) ToTaskRequest() TaskRequest {
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
+}
+
+// GovVoteTask casts a Cosmos gov v1beta1 vote on behalf of the
+// validator's operator account. The chain's last-write-wins semantics
+// on (proposalID, voter) make repeated submissions safe at the chain
+// layer; the caller's request is treated as authoritative.
+type GovVoteTask struct {
+	ChainID    string
+	KeyName    string
+	ProposalID uint64
+	Option     string // yes | no | abstain | no_with_veto
+	Memo       string
+	Fees       string
+	Gas        uint64
+}
+
+func (t GovVoteTask) TaskType() string { return TaskTypeGovVote }
+
+func (t GovVoteTask) Validate() error {
+	if t.ChainID == "" {
+		return errors.New("gov-vote: chainId required")
+	}
+	if t.KeyName == "" {
+		return errors.New("gov-vote: keyName required")
+	}
+	if t.ProposalID == 0 {
+		return errors.New("gov-vote: proposalId required (must be > 0)")
+	}
+	if _, err := tasks.ParseVoteOption(t.Option); err != nil {
+		return fmt.Errorf("gov-vote: %w", err)
+	}
+	if t.Fees == "" {
+		return errors.New("gov-vote: fees required")
+	}
+	if t.Gas == 0 {
+		return errors.New("gov-vote: gas required (must be > 0)")
+	}
+	return nil
+}
+
+func (t GovVoteTask) ToTaskRequest() TaskRequest {
+	p := map[string]interface{}{
+		"chainId":    t.ChainID,
+		"keyName":    t.KeyName,
+		"proposalId": t.ProposalID,
+		"option":     t.Option,
+		"fees":       t.Fees,
+		"gas":        t.Gas,
+	}
+	if t.Memo != "" {
+		p["memo"] = t.Memo
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
 }

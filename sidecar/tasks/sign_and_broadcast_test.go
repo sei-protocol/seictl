@@ -13,6 +13,7 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-cosmos/crypto/hd"
 	"github.com/sei-protocol/sei-chain/sei-cosmos/crypto/keyring"
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
+	txtypes "github.com/sei-protocol/sei-chain/sei-cosmos/types/tx"
 	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
@@ -27,9 +28,10 @@ type fakeTxClient struct {
 	sequence      uint64
 	accountErr    error
 
-	broadcastResp *sdk.TxResponse
-	broadcastErr  error
-	broadcasts    int
+	broadcastResp  *sdk.TxResponse
+	broadcastErr   error
+	broadcasts     int
+	lastTxBytes    []byte
 
 	// queryDefault returns canned data for any hash (mirroring production
 	// QueryTx). Nil returns not-found.
@@ -44,10 +46,11 @@ func (f *fakeTxClient) AccountNumberSequence(_ context.Context, _ sdk.AccAddress
 	return f.accountNumber, f.sequence, f.accountErr
 }
 
-func (f *fakeTxClient) BroadcastSync(_ context.Context, _ []byte) (*sdk.TxResponse, error) {
+func (f *fakeTxClient) BroadcastSync(_ context.Context, txBytes []byte) (*sdk.TxResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.broadcasts++
+	f.lastTxBytes = append(f.lastTxBytes[:0], txBytes...)
 	if f.broadcastErr != nil {
 		return nil, f.broadcastErr
 	}
@@ -269,6 +272,58 @@ func TestAccountRetrieverFailure_Propagates(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "account retrieve") {
 		t.Fatalf("error should mention account retrieve, got %q", err.Error())
+	}
+}
+
+// TestSignedTxHasNoFeePayerOrGranter asserts the signed tx's AuthInfo
+// leaves fee_payer and fee_granter empty (closes seictl#172 item 3).
+// The signer-pays-its-own-fees invariant is implicit today — tx.Factory
+// never plumbs WithFeePayer — but if a future contributor wires those
+// fields, the denom whitelist tells us nothing about who's paying.
+// This test locks the invariant at the signed-bytes level.
+func TestSignedTxHasNoFeePayerOrGranter(t *testing.T) {
+	cfg, addr := newGuardCfg(t, "pacific-1")
+	tc := &fakeTxClient{
+		accountNumber: 17,
+		sequence:      42,
+		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h", Height: 0},
+		// Return inclusion on first poll so the test doesn't wait
+		// the full inclusionPollTimeout.
+		queryDefault: &sdk.TxResponse{Code: 0, Height: 7},
+	}
+
+	_, err := signAndBroadcast(context.Background(), cfg, tc, SignAndBroadcastInput{
+		ChainID: "pacific-1",
+		KeyName: "node_admin",
+		Msg:     makeMsgVote(t, addr),
+		Fees:    "4000usei",
+		Gas:     200_000,
+		TaskID:  "00000000-0000-0000-0000-0000000000fe",
+	}, addr)
+	if err != nil {
+		t.Fatalf("signAndBroadcast: %v", err)
+	}
+	if len(tc.lastTxBytes) == 0 {
+		t.Fatal("no tx bytes captured")
+	}
+
+	// Decode the proto Tx directly and assert the raw AuthInfo.Fee
+	// fields. sdk.FeeTx.FeePayer() falls back to GetSigners()[0] when
+	// Fee.Payer is empty, so checking the interface method alone would
+	// silently accept a future `WithFeePayer(signer)` plumbing — the
+	// invariant we want is no fee-grant lookup, i.e. proto fields blank.
+	var pbTx txtypes.Tx
+	if err := pbTx.Unmarshal(tc.lastTxBytes); err != nil {
+		t.Fatalf("proto unmarshal tx: %v", err)
+	}
+	if pbTx.AuthInfo == nil || pbTx.AuthInfo.Fee == nil {
+		t.Fatalf("decoded tx missing AuthInfo.Fee")
+	}
+	if pbTx.AuthInfo.Fee.Payer != "" {
+		t.Errorf("AuthInfo.Fee.Payer = %q, want empty", pbTx.AuthInfo.Fee.Payer)
+	}
+	if pbTx.AuthInfo.Fee.Granter != "" {
+		t.Errorf("AuthInfo.Fee.Granter = %q, want empty", pbTx.AuthInfo.Fee.Granter)
 	}
 }
 

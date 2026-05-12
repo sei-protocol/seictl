@@ -122,6 +122,7 @@ var serveCmd = cli.Command{
 			engine.TaskUploadGenesisArtifacts:   tasks.NewGenesisArtifactUploader(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
 			engine.TaskAssembleAndUploadGenesis: tasks.NewGenesisAssembler(homeDir, genesisBucket, genesisRegion, chainID, nil, nil).Handler(),
 			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
+			engine.TaskGovVote:                  tasks.NewGovVoter(execCfg).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)
