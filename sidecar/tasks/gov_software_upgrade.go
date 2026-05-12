@@ -1,4 +1,4 @@
-// Package tasks — gov-submit-proposal handler.
+// Package tasks — gov-software-upgrade handler.
 //
 // SECURITY POSTURE NOTE — sei-protocol/seictl#163 / #165
 //
@@ -13,15 +13,11 @@
 // BroadcastSync and task-result persist re-runs this handler on
 // pod restart, which re-signs at sequence+1 and broadcasts a SECOND
 // proposal with identical content. The operator pays InitialDeposit
-// twice and two near-identical proposals appear on chain.
-//
-// Engine UUID dedupe protects against same-UUID resubmission via the
-// API; it does NOT protect against the crash-mid-broadcast window.
-// MVP scope is software-upgrade only — the chain-level impact is
-// bounded (upgrade module applies once at the named height) but the
-// pattern propagates to higher-risk proposal types (community-pool
-// spend = double-spend). #174 tracks the pre-broadcast txHash marker
-// that closes this window for all sign-tx handlers.
+// twice and two near-identical proposals appear on chain. Each future
+// proposal-type handler is a separate file deliberately — that file
+// MUST evaluate its own rehydration impact before shipping. #174
+// tracks the pre-broadcast txHash marker that closes this window for
+// all sign-tx handlers.
 
 package tasks
 
@@ -38,28 +34,20 @@ import (
 	"github.com/sei-protocol/seilog"
 )
 
-var govSubmitLog = seilog.NewLogger("seictl", "task", "gov-submit-proposal")
+var govSoftwareUpgradeLog = seilog.NewLogger("seictl", "task", "gov-software-upgrade")
 
-// ProposalTypeSoftwareUpgrade is the only proposal type supported in
-// MVP. Other content types (param-change, community-pool-spend, text)
-// share the same scaffolding but need separate review of their
-// rehydration-double-broadcast impact before they can ship.
-const ProposalTypeSoftwareUpgrade = "software-upgrade"
-
-// GovSubmitProposalRequest holds gov-submit-proposal params. Idempotency
-// is NOT handled — MsgSubmitProposal creates a new proposal on every
-// broadcast. See the REHYDRATION WARNING at the top of this file.
-type GovSubmitProposalRequest struct {
+// GovSoftwareUpgradeRequest holds gov-software-upgrade params.
+// Idempotency is NOT handled — see the REHYDRATION WARNING at the
+// top of this file.
+type GovSoftwareUpgradeRequest struct {
 	ChainID string `json:"chainId"`
 	KeyName string `json:"keyName"`
-
-	Type string `json:"type"` // software-upgrade
 
 	Title       string `json:"title"`
 	Description string `json:"description"`
 
-	UpgradeName   string `json:"upgradeName,omitempty"`
-	UpgradeHeight int64  `json:"upgradeHeight,omitempty"`
+	UpgradeName   string `json:"upgradeName"`
+	UpgradeHeight int64  `json:"upgradeHeight"`
 	UpgradeInfo   string `json:"upgradeInfo,omitempty"`
 
 	InitialDeposit string `json:"initialDeposit"`
@@ -69,26 +57,27 @@ type GovSubmitProposalRequest struct {
 	Gas  uint64 `json:"gas"`
 }
 
-// GovProposer captures cfg by value at construction; engine.Config is
-// documented read-only after startup, so the copy is safe.
-type GovProposer struct {
+// GovSoftwareUpgrader captures cfg by value at construction;
+// engine.Config is documented read-only after startup, so the copy
+// is safe.
+type GovSoftwareUpgrader struct {
 	cfg engine.ExecutionConfig
 }
 
-func NewGovProposer(cfg engine.ExecutionConfig) *GovProposer {
-	return &GovProposer{cfg: cfg}
+func NewGovSoftwareUpgrader(cfg engine.ExecutionConfig) *GovSoftwareUpgrader {
+	return &GovSoftwareUpgrader{cfg: cfg}
 }
 
 // Handler delegates to SignAndBroadcast after MsgSubmitProposal
 // construction. See the REHYDRATION WARNING at the top of this file:
 // a crash between broadcast and result-persist re-submits a second
 // proposal with identical content. Acceptable for software-upgrade
-// (bounded damage) but the pattern must NOT be reused for non-MVP
-// proposal types without first wiring the pre-broadcast txHash marker
-// from #174.
-func (g *GovProposer) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params GovSubmitProposalRequest) error {
-		msg, err := buildSubmitProposalMsg(g.cfg, params)
+// (the upgrade module applies once at the named height) but the
+// pattern must not be reused for other proposal types without first
+// wiring the pre-broadcast txHash marker from #174.
+func (g *GovSoftwareUpgrader) Handler() engine.TaskHandler {
+	return engine.TypedHandler(func(ctx context.Context, params GovSoftwareUpgradeRequest) error {
+		msg, err := buildSoftwareUpgradeMsg(g.cfg, params)
 		if err != nil {
 			return err
 		}
@@ -108,11 +97,10 @@ func (g *GovProposer) Handler() engine.TaskHandler {
 		if result.IncludedAt != nil {
 			inclusionStatus = "included"
 		}
-		govSubmitLog.Info("proposal broadcast",
+		govSoftwareUpgradeLog.Info("proposal broadcast",
 			"taskId", engine.TaskIDFromContext(ctx),
 			"chainId", params.ChainID,
 			"keyName", params.KeyName,
-			"type", params.Type,
 			"upgradeName", params.UpgradeName,
 			"upgradeHeight", params.UpgradeHeight,
 			"deposit", params.InitialDeposit,
@@ -124,20 +112,28 @@ func (g *GovProposer) Handler() engine.TaskHandler {
 	})
 }
 
-func buildSubmitProposalMsg(cfg engine.ExecutionConfig, params GovSubmitProposalRequest) (*govtypes.MsgSubmitProposal, error) {
+func buildSoftwareUpgradeMsg(cfg engine.ExecutionConfig, params GovSoftwareUpgradeRequest) (*govtypes.MsgSubmitProposal, error) {
 	if cfg.Keyring == nil {
 		return nil, Terminal(errors.New("keyring not configured: set SEI_KEYRING_BACKEND/SEI_KEYRING_PASSPHRASE on the sidecar"))
 	}
 	if params.KeyName == "" {
 		return nil, Terminal(errors.New("keyName required"))
 	}
+	if params.Title == "" {
+		return nil, Terminal(errors.New("title required"))
+	}
+	if params.Description == "" {
+		return nil, Terminal(errors.New("description required"))
+	}
+	if params.UpgradeName == "" {
+		return nil, Terminal(errors.New("upgradeName required"))
+	}
+	if params.UpgradeHeight <= 0 {
+		return nil, Terminal(errors.New("upgradeHeight required (must be > 0)"))
+	}
 	info, err := cfg.Keyring.Key(params.KeyName)
 	if err != nil {
 		return nil, Terminal(fmt.Errorf("keyring entry %q: %w", params.KeyName, err))
-	}
-	content, err := buildProposalContent(params)
-	if err != nil {
-		return nil, Terminal(err)
 	}
 	deposit, err := sdk.ParseCoinsNormalized(params.InitialDeposit)
 	if err != nil {
@@ -157,36 +153,14 @@ func buildSubmitProposalMsg(cfg engine.ExecutionConfig, params GovSubmitProposal
 			return nil, Terminal(fmt.Errorf("initialDeposit %q: denom %q not permitted (only %q)", params.InitialDeposit, c.Denom, feeDenom))
 		}
 	}
+	content := upgradetypes.NewSoftwareUpgradeProposal(params.Title, params.Description, upgradetypes.Plan{
+		Name:   params.UpgradeName,
+		Height: params.UpgradeHeight,
+		Info:   params.UpgradeInfo,
+	})
 	msg, err := govtypes.NewMsgSubmitProposal(content, deposit, info.GetAddress())
 	if err != nil {
 		return nil, Terminal(fmt.Errorf("build MsgSubmitProposal: %w", err))
 	}
 	return msg, nil
-}
-
-func buildProposalContent(params GovSubmitProposalRequest) (govtypes.Content, error) {
-	if params.Title == "" {
-		return nil, errors.New("title required")
-	}
-	if params.Description == "" {
-		return nil, errors.New("description required")
-	}
-	switch params.Type {
-	case ProposalTypeSoftwareUpgrade:
-		if params.UpgradeName == "" {
-			return nil, errors.New("upgradeName required for software-upgrade")
-		}
-		if params.UpgradeHeight <= 0 {
-			return nil, errors.New("upgradeHeight required for software-upgrade (must be > 0)")
-		}
-		return upgradetypes.NewSoftwareUpgradeProposal(params.Title, params.Description, upgradetypes.Plan{
-			Name:   params.UpgradeName,
-			Height: params.UpgradeHeight,
-			Info:   params.UpgradeInfo,
-		}), nil
-	case "":
-		return nil, errors.New("type required (allowed: software-upgrade)")
-	default:
-		return nil, fmt.Errorf("unsupported proposal type %q (allowed: software-upgrade)", params.Type)
-	}
 }
