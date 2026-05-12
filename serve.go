@@ -124,7 +124,7 @@ var serveCmd = cli.Command{
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)
-		eng.SetExecutionConfig(execCfg)
+		eng.Config = execCfg
 
 		srv := server.NewServer(":"+port, eng, homeDir)
 		srvErr := srv.ListenAndServe(ctx)
@@ -147,6 +147,12 @@ var serveCmd = cli.Command{
 // sidecar boots normally without it; sign-tx tasks will reject calls
 // with a clear "keyring not configured" error.
 func buildExecutionConfig(homeDir string) (engine.ExecutionConfig, error) {
+	// Read and wipe the passphrase before any other logic so every return
+	// path leaves /proc/<pid>/environ clean — including early returns for
+	// unset/unsupported backend and missing-passphrase checks.
+	passphrase := os.Getenv("SEI_KEYRING_PASSPHRASE")
+	_ = os.Unsetenv("SEI_KEYRING_PASSPHRASE")
+
 	backend := os.Getenv("SEI_KEYRING_BACKEND")
 	if backend == "" {
 		return engine.ExecutionConfig{}, nil
@@ -161,12 +167,6 @@ func buildExecutionConfig(homeDir string) (engine.ExecutionConfig, error) {
 	if dir == "" {
 		dir = filepath.Join(homeDir, "keyring-file")
 	}
-
-	// Read the passphrase and immediately wipe it from process env so any
-	// subsequent return path (including future validation that rejects
-	// non-empty values) can't observe it via /proc/<pid>/environ.
-	passphrase := os.Getenv("SEI_KEYRING_PASSPHRASE")
-	_ = os.Unsetenv("SEI_KEYRING_PASSPHRASE")
 
 	if backend == server.BackendFile && passphrase == "" {
 		return engine.ExecutionConfig{}, fmt.Errorf(

@@ -12,63 +12,44 @@ import (
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 )
 
-// Backend constants are the values accepted by SEI_KEYRING_BACKEND.
-// We define our own aliases (rather than re-using keyring.BackendFile
-// etc. directly in switch statements at call sites) so the env-contract
-// surface lives in one place and is searchable.
+// Values accepted by SEI_KEYRING_BACKEND. Aliased so the env-contract
+// surface lives in one place.
 const (
 	BackendTest = keyring.BackendTest
 	BackendFile = keyring.BackendFile
 	BackendOS   = keyring.BackendOS
 )
 
-// AllowedBackends lists the backends seictl supports today. The list is
-// intentionally narrow: KMS / Vault / remote-signer backends are deferred
-// per the in-pod governance signing design doc.
+// AllowedBackends is the narrow set supported today; KMS / Vault are deferred.
 var AllowedBackends = []string{BackendTest, BackendFile, BackendOS}
 
-// smokeTestAttempts and smokeTestBackoff bound the retry window for the
-// startup-time keyring liveness check. The retry exists to absorb the
-// rare kubelet Secret-mount race where the projected file is briefly
-// absent; beyond this window the keyring is genuinely broken and we
-// fail fast so the pod CrashLoopBackOffs.
+// Smoke-test retry window absorbs the kubelet Secret-mount race;
+// beyond this the keyring is genuinely broken and the pod fails fast.
 const (
 	smokeTestAttempts = 3
 	smokeTestBackoff  = 2 * time.Second
 )
 
-// smokeTestBackoffTestHook overrides smokeTestBackoff in tests. It is
-// not part of the package's public contract; the indirection exists so
-// failure-path tests don't wait the full 6 seconds.
+// Override hook for tests so failure paths don't wait the full 6 seconds.
 var smokeTestBackoffTestHook = smokeTestBackoff
 
 // OpenKeyring constructs a Cosmos SDK keyring for the given backend.
-//
-// For backend == file, the SDK's file backend prompts for the passphrase
-// via the supplied io.Reader. Some code paths inside 99designs/keyring
-// (which the SDK wraps) call the prompt twice (once to read, once to
-// confirm on key creation paths). We feed the passphrase twice to cover
-// both cases — the reader is consumed lazily so an unused second line is
-// harmless.
-//
-// The caller is responsible for unsetting SEI_KEYRING_PASSPHRASE from
-// the process environment after this function returns; doing it here
-// would couple the factory to the env-loading layer and make the
-// function harder to test.
+// For file backend, the passphrase is fed twice because the underlying
+// 99designs/keyring asks for it twice on key-creation paths.
+// Caller is responsible for unsetting SEI_KEYRING_PASSPHRASE post-return.
 func OpenKeyring(backend, dir, passphrase string) (keyring.Keyring, error) {
 	var input io.Reader
 	rootDir := dir
 	switch backend {
 	case BackendTest, BackendOS:
-		// rootDir is honored as-is; no passphrase prompt.
+		// rootDir honored as-is; no passphrase prompt.
 	case BackendFile:
 		if passphrase == "" {
 			return nil, fmt.Errorf("keyring backend %q requires a passphrase", backend)
 		}
 		input = strings.NewReader(passphrase + "\n" + passphrase + "\n")
-		// The SDK appends "keyring-file" to the supplied rootDir, so a
-		// caller passing /sei/keyring-file would land at
-		// /sei/keyring-file/keyring-file. Strip the suffix when present.
+		// SDK appends "keyring-file" internally; strip a trailing match
+		// so callers passing either /sei or /sei/keyring-file converge.
 		if filepath.Base(dir) == "keyring-file" {
 			rootDir = filepath.Dir(dir)
 		}
@@ -79,19 +60,15 @@ func OpenKeyring(backend, dir, passphrase string) (keyring.Keyring, error) {
 
 	kr, err := keyring.New(sdk.KeyringServiceName(), backend, rootDir, input)
 	if err != nil {
-		// errors.New severs the original chain: callers cannot recover the
-		// underlying SDK error via errors.Unwrap, so a typed field that
-		// happens to embed the passphrase cannot resurface through a
-		// future caller's %w wrap or %v print of a wrapped struct.
+		// errors.New severs the chain so a typed field embedding the
+		// passphrase cannot resurface via a caller's %w or %v of a wrap.
 		return nil, errors.New("open keyring: " + redactPassphrase(err.Error(), passphrase))
 	}
 	return kr, nil
 }
 
-// redactPassphrase removes any verbatim occurrence of the passphrase from
-// a string. The SDK keyring is not known to embed passphrases in error
-// chains, but defensive redaction is cheap and protects against future
-// regressions in upstream libraries.
+// redactPassphrase strips verbatim occurrences of the passphrase.
+// Defensive: the SDK isn't known to leak, but the guard is cheap.
 func redactPassphrase(s, passphrase string) string {
 	if passphrase == "" {
 		return s
@@ -99,15 +76,10 @@ func redactPassphrase(s, passphrase string) string {
 	return strings.ReplaceAll(s, passphrase, "[redacted]")
 }
 
-// SmokeTestKeyring verifies the keyring is structurally usable by
-// listing its entries. An empty keyring is a permitted outcome; the
-// first sign-tx will surface missing-key errors clearly to the caller.
-// The retry window absorbs the kubelet Secret-mount race.
-//
-// A defensive panic recovery wraps List() so the retry loop can run
-// even if the underlying keyring lib panics on a malformed config —
-// without recovery, the first attempt would tear down the process and
-// the bounded retry would be a no-op.
+// SmokeTestKeyring verifies the keyring is structurally usable.
+// An empty keyring is permitted; first sign-tx surfaces missing keys.
+// Panic recovery exists so the retry loop runs even if the underlying
+// lib panics on a malformed config.
 func SmokeTestKeyring(kr keyring.Keyring) error {
 	var lastErr error
 	for attempt := 1; attempt <= smokeTestAttempts; attempt++ {
@@ -130,9 +102,7 @@ func smokeTestAttempt(kr keyring.Keyring) (err error) {
 			err = fmt.Errorf("keyring backend panicked during smoke test: %v", r)
 		}
 	}()
-	// Discard the slice deliberately — listing decrypts the index, not
-	// the individual keys, which is the strongest non-destructive check
-	// we can perform without exercising signing material.
+	// List decrypts only the index — strongest non-destructive check.
 	_, err = kr.List()
 	return err
 }

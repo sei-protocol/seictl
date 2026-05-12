@@ -90,14 +90,8 @@ type StatusResponse struct {
 }
 
 // ExecutionConfig carries process-wide dependencies that the engine
-// makes available to task handlers. Fields are nil-valued when the
-// corresponding subsystem is not configured (e.g. Keyring is nil when
-// SEI_KEYRING_BACKEND is unset and governance signing is disabled).
-//
-// Handlers that need a dependency declare it as a constructor argument
-// today; this struct is the hand-off point from serve.go bootstrap into
-// the engine, so future sign-tx handlers can be wired without growing
-// serve.go's argument list further.
+// makes available to task handlers. Fields are nil when the
+// corresponding subsystem is not configured.
 type ExecutionConfig struct {
 	Keyring keyring.Keyring
 }

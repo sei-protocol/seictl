@@ -36,8 +36,12 @@ type Engine struct {
 	ctx      context.Context
 	ready    atomic.Bool
 	store    ResultStore
-	cfg      ExecutionConfig
 	mu       sync.Mutex
+
+	// Config carries handler dependencies (keyring, etc.). Set once
+	// during single-threaded startup before Submit is reachable; treated
+	// as read-only thereafter. No synchronization.
+	Config ExecutionConfig
 }
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
@@ -224,20 +228,6 @@ func (e *Engine) GetResult(id string) *TaskResult {
 		return nil
 	}
 	return r
-}
-
-// SetExecutionConfig installs the process-wide handler dependencies.
-// Must be called once after NewEngine and before Submit. Not safe to
-// call concurrently with task execution — there is no synchronization
-// because the field is set during single-threaded startup.
-func (e *Engine) SetExecutionConfig(cfg ExecutionConfig) {
-	e.cfg = cfg
-}
-
-// ExecutionConfig returns the installed handler dependencies. Returns a
-// zero value before SetExecutionConfig has been called.
-func (e *Engine) ExecutionConfig() ExecutionConfig {
-	return e.cfg
 }
 
 // RemoveResult removes a task by ID. Returns true if found.
