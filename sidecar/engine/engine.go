@@ -38,16 +38,14 @@ type Engine struct {
 	store    ResultStore
 	mu       sync.Mutex
 
-	// Config carries handler dependencies (keyring, etc.). Set once
-	// during single-threaded startup before Submit is reachable; treated
-	// as read-only thereafter. No synchronization.
+	// Config is set once during single-threaded startup before Submit
+	// is reachable; read-only thereafter. No synchronization.
 	Config ExecutionConfig
 }
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
-// Pure constructor — spawns no goroutines. Callers MUST install any
-// handler dependencies on e.Config before calling RehydrateStaleTasks,
-// otherwise a rehydrated sign-tx task would race with the config write.
+// Callers MUST install handler dependencies on e.Config before
+// RehydrateStaleTasks, else a rehydrated handler races with the write.
 func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store ResultStore) *Engine {
 	return &Engine{
 		handlers: handlers,
@@ -144,7 +142,10 @@ func (e *Engine) Submit(task Task) (string, error) {
 // runTask spawns a goroutine to run the handler and persist the result.
 func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
 	go func() {
-		err := e.execute(e.ctx, taskType, handler, params)
+		// Thread id through ctx for handlers that need it (e.g., sign-tx
+		// memo tagging) without changing the TaskHandler signature.
+		ctx := WithTaskID(e.ctx, id)
+		err := e.execute(ctx, taskType, handler, params)
 
 		t := time.Now().UTC()
 		tr := &TaskResult{

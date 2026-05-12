@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/sei-protocol/sei-chain/sei-cosmos/crypto/keyring"
+
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 )
 
 // TaskType identifies the kind of task to execute.
@@ -43,6 +45,24 @@ type Task struct {
 // TaskHandler executes a specific task type. Handlers MUST be idempotent:
 // the engine may re-execute a handler after a crash recovery.
 type TaskHandler func(ctx context.Context, params map[string]any) error
+
+type taskIDKey struct{}
+
+// TaskIDFromContext returns the engine-assigned task ID for the current
+// handler, or "" when ctx is not engine-produced. Sign-tx handlers use
+// this to derive the per-task memo tag.
+func TaskIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(taskIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// WithTaskID attaches a task ID to ctx for handler consumption. The engine
+// calls this in runTask; tests use it to bypass Submit.
+func WithTaskID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, taskIDKey{}, id)
+}
 
 // TaskStatus represents the lifecycle state of a task.
 type TaskStatus string
@@ -89,9 +109,14 @@ type StatusResponse struct {
 	Status string `json:"status"`
 }
 
-// ExecutionConfig carries process-wide dependencies that the engine
-// makes available to task handlers. Fields are nil when the
-// corresponding subsystem is not configured.
+// ExecutionConfig carries process-wide deps the engine exposes to handlers.
+// Fields are nil when the corresponding subsystem is not configured.
 type ExecutionConfig struct {
+	// Keyring is opened from SEI_KEYRING_BACKEND. Nil when unset;
+	// sign-tx handlers report a clear error rather than panic.
 	Keyring keyring.Keyring
+
+	// RPC talks to the co-located seid CometBFT RPC. Sign-tx handlers
+	// use it for the chain-confusion guard and inclusion polling.
+	RPC *rpc.Client
 }

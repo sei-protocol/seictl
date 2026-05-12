@@ -18,6 +18,10 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+const (
+	BearerAuthScopes = "bearerAuth.Scopes"
+)
+
 // Defines values for StatusResponseStatus.
 const (
 	Initializing StatusResponseStatus = "Initializing"
@@ -46,8 +50,14 @@ type StatusResponseStatus string
 
 // TaskRequest defines model for TaskRequest.
 type TaskRequest struct {
-	// Id Caller-provided task identifier. When set, the engine uses this as the canonical ID (enabling deterministic IDs from the controller). If a task with this ID already exists, the request is idempotent and returns the existing ID. When omitted, a random UUID is generated.
-	Id     *openapi_types.UUID     `json:"id,omitempty"`
+	// Id Caller-provided task identifier. When set, the engine uses
+	// this as the canonical ID (enabling deterministic IDs from
+	// the controller); if a task with this ID exists, the request
+	// is idempotent and returns the existing ID. When omitted, a
+	// random UUID is generated.
+	Id *openapi_types.UUID `json:"id,omitempty"`
+
+	// Params Task-type-specific parameters; validated server-side.
 	Params *map[string]interface{} `json:"params,omitempty"`
 
 	// Type Task type identifier.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 	"github.com/sei-protocol/seictl/sidecar/server"
 	"github.com/sei-protocol/seictl/sidecar/tasks"
 	"github.com/sei-protocol/seilog"
@@ -125,9 +126,8 @@ var serveCmd = cli.Command{
 
 		eng := engine.NewEngine(ctx, handlers, store)
 		eng.Config = execCfg
-		// Rehydrate AFTER Config is installed so any sign-tx tasks left
-		// in 'running' state see the full handler dependencies via the
-		// goroutine-spawn happens-before edge.
+		// Rehydrate after Config is installed so sign-tx handlers see
+		// the full dep set via the goroutine-spawn happens-before edge.
 		eng.RehydrateStaleTasks()
 
 		srv := server.NewServer(":"+port, eng, homeDir)
@@ -144,22 +144,21 @@ var serveCmd = cli.Command{
 	},
 }
 
-// buildExecutionConfig reads the keyring-related envs, opens the keyring
-// (when configured), and wipes the passphrase from the process env so it
-// no longer appears in /proc/<pid>/environ. The keyring is left nil when
-// SEI_KEYRING_BACKEND is unset — governance signing is opt-in and the
-// sidecar boots normally without it; sign-tx tasks will reject calls
-// with a clear "keyring not configured" error.
+// buildExecutionConfig assembles the engine's runtime dependencies:
+// keyring (opened from SEI_KEYRING_BACKEND, or nil) and RPC client
+// (pointed at the local seid). Sign-tx tasks consume both; tasks that
+// don't need them ignore the fields.
 func buildExecutionConfig(homeDir string) (engine.ExecutionConfig, error) {
-	// Read and wipe the passphrase before any other logic so every return
-	// path leaves /proc/<pid>/environ clean — including early returns for
-	// unset/unsupported backend and missing-passphrase checks.
+	// Wipe passphrase before any branching so every return path leaves
+	// /proc/<pid>/environ clean.
 	passphrase := os.Getenv("SEI_KEYRING_PASSPHRASE")
 	_ = os.Unsetenv("SEI_KEYRING_PASSPHRASE")
 
+	rpcClient := rpc.NewClient(rpc.DefaultEndpoint, nil)
+
 	backend := os.Getenv("SEI_KEYRING_BACKEND")
 	if backend == "" {
-		return engine.ExecutionConfig{}, nil
+		return engine.ExecutionConfig{RPC: rpcClient}, nil
 	}
 
 	if !slices.Contains(server.AllowedBackends, backend) {
@@ -179,9 +178,8 @@ func buildExecutionConfig(homeDir string) (engine.ExecutionConfig, error) {
 
 	kr, err := server.OpenKeyring(backend, dir, passphrase)
 	if err != nil {
-		// OpenKeyring already redacted the passphrase from err.Error();
-		// don't %w-wrap because that re-exposes any typed-field contents
-		// of the underlying SDK error chain.
+		// Don't %w-wrap: OpenKeyring redacted err.Error(), but a typed
+		// field in the underlying SDK chain could resurface the secret.
 		return engine.ExecutionConfig{}, err
 	}
 
@@ -190,5 +188,5 @@ func buildExecutionConfig(homeDir string) (engine.ExecutionConfig, error) {
 	}
 
 	serveLog.Info("keyring opened", "backend", backend, "dir", dir)
-	return engine.ExecutionConfig{Keyring: kr}, nil
+	return engine.ExecutionConfig{Keyring: kr, RPC: rpcClient}, nil
 }

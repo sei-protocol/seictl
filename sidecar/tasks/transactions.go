@@ -1,0 +1,152 @@
+package tasks
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	rpchttp "github.com/sei-protocol/sei-chain/sei-tendermint/rpc/client/http"
+
+	"github.com/sei-protocol/sei-chain/sei-cosmos/client"
+	"github.com/sei-protocol/sei-chain/sei-cosmos/codec"
+	codectypes "github.com/sei-protocol/sei-chain/sei-cosmos/codec/types"
+	cryptocodec "github.com/sei-protocol/sei-chain/sei-cosmos/crypto/codec"
+	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
+	authtx "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/tx"
+	authtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/types"
+	banktypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/bank/types"
+	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
+	stakingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/staking/types"
+	upgradetypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/upgrade/types"
+
+	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/rpc"
+)
+
+// tmRPCTimeout bounds the underlying HTTP client so a wedged seid does
+// not pin goroutines/conns indefinitely (the ctx-cancel select in
+// AccountNumberSequence returns the task but leaves the inflight call
+// behind until transport completes).
+const tmRPCTimeout = 30 * time.Second
+
+// newSDKTxClient wires the production txClient against the local seid RPC.
+func newSDKTxClient(cfg engine.ExecutionConfig, in SignAndBroadcastInput, fromAddr sdk.AccAddress) (txClient, error) {
+	rpcURL := rpc.DefaultEndpoint
+	if cfg.RPC != nil && cfg.RPC.Endpoint() != "" {
+		rpcURL = cfg.RPC.Endpoint()
+	}
+	tmClient, err := rpchttp.NewWithTimeout(rpcURL, tmRPCTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("tendermint RPC client at %s: %w", rpcURL, err)
+	}
+	registry, cdc, txCfg := makeSignTxCodec()
+	clientCtx := client.Context{}.
+		WithChainID(in.ChainID).
+		WithCodec(cdc).
+		WithInterfaceRegistry(registry).
+		WithTxConfig(txCfg).
+		WithKeyring(cfg.Keyring).
+		WithClient(tmClient).
+		WithFromAddress(fromAddr).
+		WithFromName(in.KeyName).
+		WithAccountRetriever(authtypes.AccountRetriever{}).
+		WithBroadcastMode("sync")
+	return &sdkTxClient{clientCtx: clientCtx}, nil
+}
+
+type sdkTxClient struct {
+	clientCtx client.Context
+}
+
+func (c *sdkTxClient) AccountNumberSequence(ctx context.Context, fromAddr sdk.AccAddress) (uint64, uint64, error) {
+	// AccountRetriever ignores context.Context; wrap in a goroutine so
+	// a hung seid does not outlive the engine's cancellation.
+	type res struct {
+		accNum, seq uint64
+		err         error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		a, s, err := authtypes.AccountRetriever{}.GetAccountNumberSequence(c.clientCtx, fromAddr)
+		ch <- res{a, s, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return 0, 0, ctx.Err()
+	case r := <-ch:
+		return r.accNum, r.seq, r.err
+	}
+}
+
+func (c *sdkTxClient) BroadcastSync(ctx context.Context, txBytes []byte) (*sdk.TxResponse, error) {
+	// Bypass clientCtx.BroadcastTxSync (hardcodes context.Background) so
+	// the engine's cancellation propagates into the broadcast HTTP call.
+	node, err := c.clientCtx.GetNode()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := node.BroadcastTxSync(ctx, txBytes)
+	if err != nil {
+		return nil, err
+	}
+	return sdk.NewResponseFormatBroadcastTx(resp), nil
+}
+
+func (c *sdkTxClient) QueryTx(ctx context.Context, txHashHex string) (*sdk.TxResponse, bool, error) {
+	if c.clientCtx.Client == nil {
+		return nil, false, errors.New("tx client has no Tendermint RPC client")
+	}
+	hashBytes, err := hex.DecodeString(txHashHex)
+	if err != nil {
+		return nil, false, fmt.Errorf("decode tx hash %q: %w", txHashHex, err)
+	}
+	res, err := c.clientCtx.Client.Tx(ctx, hashBytes, false)
+	if err != nil {
+		// CometBFT returns "tx not found" when the node has no record;
+		// treat any "not found" substring as found=false.
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("query /tx?hash=%s: %w", txHashHex, err)
+	}
+	resp := &sdk.TxResponse{
+		Height:    res.Height,
+		TxHash:    txHashHex,
+		Code:      res.TxResult.Code,
+		Codespace: res.TxResult.Codespace,
+		Data:      string(res.TxResult.Data),
+		RawLog:    res.TxResult.Log,
+		Info:      res.TxResult.Info,
+		GasWanted: res.TxResult.GasWanted,
+		GasUsed:   res.TxResult.GasUsed,
+	}
+	return resp, true, nil
+}
+
+// newSignTxInterfaceRegistry registers only the proto interfaces sign-tx
+// needs. Adding more pulls in transitive deps (notably x/wasm via x/evm)
+// that break CGO_ENABLED=0 builds.
+func newSignTxInterfaceRegistry() codectypes.InterfaceRegistry {
+	registry := codectypes.NewInterfaceRegistry()
+	cryptocodec.RegisterInterfaces(registry)
+	authtypes.RegisterInterfaces(registry)
+	banktypes.RegisterInterfaces(registry)
+	stakingtypes.RegisterInterfaces(registry)
+	govtypes.RegisterInterfaces(registry)
+	upgradetypes.RegisterInterfaces(registry)
+	return registry
+}
+
+// makeSignTxCodec is the single source of truth for the proto registry,
+// codec, and TxConfig used by both production sdkTxClient wiring and the
+// sign path. If interfaces ever diverge between the two, sign/encode
+// breaks in confusing ways; sharing here is load-bearing.
+func makeSignTxCodec() (codectypes.InterfaceRegistry, codec.Codec, client.TxConfig) {
+	registry := newSignTxInterfaceRegistry()
+	cdc := codec.NewProtoCodec(registry)
+	txCfg := authtx.NewTxConfig(cdc, authtx.DefaultSignModes)
+	return registry, cdc, txCfg
+}
