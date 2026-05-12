@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -78,7 +79,11 @@ func OpenKeyring(backend, dir, passphrase string) (keyring.Keyring, error) {
 
 	kr, err := keyring.New(sdk.KeyringServiceName(), backend, rootDir, input)
 	if err != nil {
-		return nil, fmt.Errorf("open keyring: %s", redactPassphrase(err.Error(), passphrase))
+		// errors.New severs the original chain: callers cannot recover the
+		// underlying SDK error via errors.Unwrap, so a typed field that
+		// happens to embed the passphrase cannot resurface through a
+		// future caller's %w wrap or %v print of a wrapped struct.
+		return nil, errors.New("open keyring: " + redactPassphrase(err.Error(), passphrase))
 	}
 	return kr, nil
 }
@@ -99,10 +104,10 @@ func redactPassphrase(s, passphrase string) string {
 // first sign-tx will surface missing-key errors clearly to the caller.
 // The retry window absorbs the kubelet Secret-mount race.
 //
-// The underlying 99designs/keyring library can panic on a malformed
-// configuration (e.g. a non-directory FileDir). We treat any such
-// panic as a smoke-test failure rather than letting it propagate; the
-// alternative is a process crash that bypasses the fail-fast logging.
+// A defensive panic recovery wraps List() so the retry loop can run
+// even if the underlying keyring lib panics on a malformed config —
+// without recovery, the first attempt would tear down the process and
+// the bounded retry would be a no-op.
 func SmokeTestKeyring(kr keyring.Keyring) error {
 	var lastErr error
 	for attempt := 1; attempt <= smokeTestAttempts; attempt++ {
@@ -125,6 +130,9 @@ func smokeTestAttempt(kr keyring.Keyring) (err error) {
 			err = fmt.Errorf("keyring backend panicked during smoke test: %v", r)
 		}
 	}()
+	// Discard the slice deliberately — listing decrypts the index, not
+	// the individual keys, which is the strongest non-destructive check
+	// we can perform without exercising signing material.
 	_, err = kr.List()
 	return err
 }

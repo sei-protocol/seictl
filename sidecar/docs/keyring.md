@@ -14,8 +14,10 @@ in the pod — lives in `docs/design/in-pod-governance-signing.md`.
 | Env | Values | Default | Required when |
 |---|---|---|---|
 | `SEI_KEYRING_BACKEND` | `test` \| `file` \| `os` | unset (governance signing disabled) | sign-tx tasks in use |
-| `SEI_KEYRING_DIR` | absolute path | `$SEI_HOME/keyring-file` | always honored when set; required for `file` |
+| `SEI_KEYRING_DIR` | absolute path | `<home>/keyring-file` where `<home>` is the `--home` flag (defaults to `$SEI_HOME`) | required for `file` |
 | `SEI_KEYRING_PASSPHRASE` | string | unset | `backend == file` |
+
+For the `file` backend, a trailing `/keyring-file` path segment is stripped before handoff to the SDK — the Cosmos SDK keyring re-appends `keyring-file/` internally, so callers passing `/sei/keyring-file` and `/sei` both end up at `/sei/keyring-file/*`. This matches both operator mental models.
 
 Unset `SEI_KEYRING_BACKEND` is the Phase-1 default: the sidecar starts normally
 and rejects sign-tx submissions with `keyring not configured`. The node's

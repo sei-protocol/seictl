@@ -227,19 +227,16 @@ func (e *Engine) GetResult(id string) *TaskResult {
 }
 
 // SetExecutionConfig installs the process-wide handler dependencies.
-// Intended to be called once after NewEngine and before Submit; calling
-// it under load is permitted (fields are read-mostly) but unusual.
+// Must be called once after NewEngine and before Submit. Not safe to
+// call concurrently with task execution — there is no synchronization
+// because the field is set during single-threaded startup.
 func (e *Engine) SetExecutionConfig(cfg ExecutionConfig) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.cfg = cfg
 }
 
 // ExecutionConfig returns the installed handler dependencies. Returns a
 // zero value before SetExecutionConfig has been called.
 func (e *Engine) ExecutionConfig() ExecutionConfig {
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	return e.cfg
 }
 

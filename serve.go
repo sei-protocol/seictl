@@ -162,20 +162,23 @@ func buildExecutionConfig(homeDir string) (engine.ExecutionConfig, error) {
 		dir = filepath.Join(homeDir, "keyring-file")
 	}
 
+	// Read the passphrase and immediately wipe it from process env so any
+	// subsequent return path (including future validation that rejects
+	// non-empty values) can't observe it via /proc/<pid>/environ.
 	passphrase := os.Getenv("SEI_KEYRING_PASSPHRASE")
+	_ = os.Unsetenv("SEI_KEYRING_PASSPHRASE")
+
 	if backend == server.BackendFile && passphrase == "" {
 		return engine.ExecutionConfig{}, fmt.Errorf(
 			"SEI_KEYRING_PASSPHRASE required when SEI_KEYRING_BACKEND=file")
 	}
 
 	kr, err := server.OpenKeyring(backend, dir, passphrase)
-	// Wipe the passphrase from the process env before doing anything
-	// else with the error — the env-var is no longer needed regardless
-	// of outcome, and a deferred unset would leak it into any code path
-	// that exits early via a different return.
-	_ = os.Unsetenv("SEI_KEYRING_PASSPHRASE")
 	if err != nil {
-		return engine.ExecutionConfig{}, fmt.Errorf("keyring open: %w", err)
+		// OpenKeyring already redacted the passphrase from err.Error();
+		// don't %w-wrap because that re-exposes any typed-field contents
+		// of the underlying SDK error chain.
+		return engine.ExecutionConfig{}, err
 	}
 
 	if err := server.SmokeTestKeyring(kr); err != nil {
