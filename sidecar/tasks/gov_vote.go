@@ -166,4 +166,3 @@ func defaultUint64(v, fallback uint64) uint64 {
 	}
 	return v
 }
-

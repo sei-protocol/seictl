@@ -35,8 +35,8 @@ import (
 	"time"
 	"unicode"
 
-	rpchttp "github.com/sei-protocol/sei-chain/sei-tendermint/rpc/client/http"
 	"github.com/sei-protocol/sei-chain/sei-tendermint/crypto/tmhash"
+	rpchttp "github.com/sei-protocol/sei-chain/sei-tendermint/rpc/client/http"
 
 	"github.com/sei-protocol/sei-chain/sei-cosmos/client"
 	"github.com/sei-protocol/sei-chain/sei-cosmos/client/tx"
@@ -103,17 +103,17 @@ type SignAndBroadcastInput struct {
 // extend this with task-type-specific fields written by the handler
 // AFTER this function returns.
 type SignAndBroadcastResult struct {
-	TxHash        string     `json:"txHash"`
-	Height        int64      `json:"height"`
-	Code          uint32     `json:"code"`
-	Codespace     string     `json:"codespace,omitempty"`
-	RawLog        string     `json:"rawLog,omitempty"`
-	GasWanted     int64      `json:"gasWanted"`
-	GasUsed       int64      `json:"gasUsed"`
-	Sequence      uint64     `json:"sequence"`
-	AccountNumber uint64     `json:"accountNumber"`
-	ChainID       string     `json:"chainId"`
-	BroadcastedAt time.Time  `json:"broadcastedAt"`
+	TxHash        string    `json:"txHash"`
+	Height        int64     `json:"height"`
+	Code          uint32    `json:"code"`
+	Codespace     string    `json:"codespace,omitempty"`
+	RawLog        string    `json:"rawLog,omitempty"`
+	GasWanted     int64     `json:"gasWanted"`
+	GasUsed       int64     `json:"gasUsed"`
+	Sequence      uint64    `json:"sequence"`
+	AccountNumber uint64    `json:"accountNumber"`
+	ChainID       string    `json:"chainId"`
+	BroadcastedAt time.Time `json:"broadcastedAt"`
 	// IncludedAt is nil when broadcast succeeded but inclusion polling
 	// timed out. The tx may still land — the caller may re-submit the
 	// same TaskID to short-circuit onto the existing checkpoint.
@@ -600,10 +600,10 @@ func guardChainID(ctx context.Context, rpcClient *rpc.Client, chainID string) er
 // Distinguishes three outcomes:
 //   - tx found on chain: (resp, nil)
 //   - timeout elapsed:   (nil,  nil)   — caller treats as "broadcast OK,
-//                                         inclusion-confirmation deferred"
+//     inclusion-confirmation deferred"
 //   - ctx cancelled:     (nil,  ctx.Err()) — caller surfaces as failure so
-//                                            the engine doesn't record a
-//                                            truncated task as completed
+//     the engine doesn't record a
+//     truncated task as completed
 func pollForInclusion(ctx context.Context, tc txClient, txHash string, timeout, interval time.Duration) (*sdk.TxResponse, error) {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -681,4 +681,3 @@ func makeSignTxCodec() (codec.Codec, client.TxConfig) {
 	txCfg := authtx.NewTxConfig(cdc, authtx.DefaultSignModes)
 	return cdc, txCfg
 }
-
