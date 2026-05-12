@@ -248,6 +248,7 @@ func TestE2E_StaleTaskRehydration(t *testing.T) {
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	}
 	eng := NewEngine(ctx, handlers, store2)
+	eng.RehydrateStaleTasks()
 
 	// Stale task should be re-executed and complete successfully.
 	result := waitForResult(t, eng, stale.ID)

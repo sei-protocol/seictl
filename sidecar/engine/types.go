@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/sei-protocol/sei-chain/sei-cosmos/crypto/keyring"
 )
 
 // TaskType identifies the kind of task to execute.
@@ -85,4 +87,11 @@ type TaskResult struct {
 // StatusResponse is the shape returned by the status endpoint.
 type StatusResponse struct {
 	Status string `json:"status"`
+}
+
+// ExecutionConfig carries process-wide dependencies that the engine
+// makes available to task handlers. Fields are nil when the
+// corresponding subsystem is not configured.
+type ExecutionConfig struct {
+	Keyring keyring.Keyring
 }
