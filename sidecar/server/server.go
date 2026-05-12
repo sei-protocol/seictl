@@ -15,7 +15,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seilog"
 )
+
+var serverLog = seilog.NewLogger("seictl", "sidecar", "server")
 
 const (
 	ed25519PrivKeyLen   = 64 // seed (32) + public key (32)
@@ -56,6 +59,7 @@ func NewServer(addr string, eng *engine.Engine, homeDir, authnMode string) *Serv
 		mux:     http.NewServeMux(),
 	}
 	s.mux.HandleFunc("GET /v0/healthz", s.handleHealthz)
+	s.mux.HandleFunc("GET /v0/startupz", s.handleHealthz)
 	s.mux.HandleFunc("GET /v0/livez", s.handleLivez)
 	s.mux.HandleFunc("GET /v0/status", s.handleStatus)
 	s.mux.Handle("GET /v0/metrics", promhttp.Handler())
@@ -90,12 +94,20 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleLivez(w http.ResponseWriter, _ *http.Request) {
-	if err := s.engine.Livez(); err != nil {
+// handleLivez follows the kube-apiserver convention: bare 200/503
+// status for kubelet probes. ?verbose=1 includes the underlying
+// store error for human triage.
+func (s *Server) handleLivez(w http.ResponseWriter, r *http.Request) {
+	err := s.engine.Livez()
+	if err == nil {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.URL.Query().Get("verbose") == "1" {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusServiceUnavailable)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -202,13 +214,21 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		// Cap impersonation-header amplification in trusted-header
+		// mode (proxy injects X-Remote-User / Group / Extra-*).
+		// Go's default is 1MB.
+		MaxHeaderBytes: 32 * 1024,
 	}
 
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// 25s leaves a 5s buffer under K8s's default 30s
+		// terminationGracePeriodSeconds.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			serverLog.Warn("graceful shutdown failed", "err", err)
+		}
 	}()
 
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {

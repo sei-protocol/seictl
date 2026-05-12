@@ -29,17 +29,25 @@ supplied header arrive first.
 
 ### Bypass paths
 
-Three paths skip the `X-Remote-User` check because their callers do
+Four paths skip the `X-Remote-User` check because their callers do
 not carry auth headers:
 
 | Path | Caller |
 |---|---|
 | `/v0/healthz` | kubelet readiness probe |
+| `/v0/startupz` | kubelet startup probe |
 | `/v0/livez` | kubelet liveness probe |
 | `/v0/metrics` | Prometheus scrape |
 
-The `kube-rbac-proxy` `--allow-paths` flag must include all three so
-probes and scrapes traverse the proxy without TokenReview.
+The `kube-rbac-proxy` `--allow-paths` flag must include all four so
+probes and scrapes traverse the proxy without TokenReview. The
+authoritative list is logged at sidecar startup in trusted-header
+mode and is exposed programmatically via `server.BypassPaths()`.
+
+Rejected requests are counted in the
+`seictl_sidecar_authn_rejections_total{reason}` metric — labels
+`missing_header`, `duplicate_header`, `empty_header` distinguish the
+common misconfigurations.
 
 ### Pod-level isolation requirements
 
@@ -66,9 +74,9 @@ The contract this sidecar exposes to `sei-k8s-controller`:
 
 - Env var: `SEI_SIDECAR_AUTHN_MODE=trusted-header`
 - Internal port: `7777`, bound to `127.0.0.1`
-- Probe path: `/v0/healthz` (readiness), `/v0/livez` (liveness)
+- Probe paths: `/v0/healthz` (readiness), `/v0/startupz` (startup), `/v0/livez` (liveness)
 - Prometheus path: `/v0/metrics`
-- `kube-rbac-proxy --allow-paths`: `/v0/healthz,/v0/livez,/v0/metrics`
+- `kube-rbac-proxy --allow-paths`: `/v0/healthz,/v0/startupz,/v0/livez,/v0/metrics`
 - Forwarded header: `X-Remote-User` — proxy MUST overwrite, not
   append
 - Pod isolation: `hostNetwork`/`hostPID`/`hostIPC` all false

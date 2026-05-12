@@ -16,15 +16,16 @@ info:
       API on TLS `:8443` and performs TokenReview + a single coarse
       `create seinodetasks.sei.io` SAR against the K8s API. The
       sidecar binds loopback only and requires `X-Remote-User` on
-      every request, except for three paths that bypass auth so
+      every request, except for four paths that bypass auth so
       probes and scrapes — none of which carry auth headers — keep
       working:
 
       - `/v0/healthz` — kubelet readiness probe
+      - `/v0/startupz` — kubelet startup probe
       - `/v0/livez` — kubelet liveness probe
       - `/v0/metrics` — Prometheus scrape
 
-      `kube-rbac-proxy` must include all three in its `--allow-paths`.
+      `kube-rbac-proxy` must include all four in its `--allow-paths`.
   version: 0.8.0
   license:
     name: Apache-2.0
@@ -36,7 +37,7 @@ paths:
   /v0/healthz:
     get:
       operationId: healthz
-      summary: Liveness probe
+      summary: Readiness probe
       description: Returns 200 after mark-ready has completed; 503 otherwise.
       responses:
         "200":

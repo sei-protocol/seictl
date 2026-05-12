@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // SECURITY POSTURE — trusted-header mode
@@ -39,17 +42,42 @@ const (
 	remoteUserHeader = "X-Remote-User"
 )
 
-// bypassPaths skip the X-Remote-User check in trusted-header mode:
-//   - /v0/healthz: kubelet readiness probe (no auth headers).
-//   - /v0/livez:   kubelet liveness probe (no auth headers).
-//   - /v0/metrics: Prometheus scrape (no SA token in the scrape job).
-//
-// kube-rbac-proxy must include all three in its --allow-paths so
-// probes and scrapes traverse the proxy without TokenReview.
+// bypassPaths skip the X-Remote-User check in trusted-header mode.
+// Each path's caller does not carry K8s auth headers, so requiring
+// X-Remote-User would break the corresponding probe / scrape.
+// kube-rbac-proxy must include every path here in its --allow-paths.
 var bypassPaths = map[string]struct{}{
-	"/v0/healthz": {},
-	"/v0/livez":   {},
-	"/v0/metrics": {},
+	"/v0/healthz":  {}, // kubelet readiness probe
+	"/v0/startupz": {}, // kubelet startup probe
+	"/v0/livez":    {}, // kubelet liveness probe
+	"/v0/metrics":  {}, // Prometheus scrape
+}
+
+// BypassPaths returns the set of paths exempt from the X-Remote-User
+// check, sorted, so serve.go can log them at startup and the
+// controller-side PR can keep --allow-paths in sync.
+func BypassPaths() []string {
+	out := make([]string, 0, len(bypassPaths))
+	for p := range bypassPaths {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// authnRejections counts 401s from the trust-header check. Tagged by
+// reason so a misconfigured proxy (duplicate-header) is grep-able
+// apart from genuine missing-header attempts.
+var authnRejections = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "seictl_sidecar_authn_rejections_total",
+		Help: "Count of 401 responses from the trusted-header middleware, by reason.",
+	},
+	[]string{"reason"},
+)
+
+func init() {
+	prometheus.MustRegister(authnRejections)
 }
 
 // AuthnMode reads SEI_SIDECAR_AUTHN_MODE and returns the canonical
@@ -90,11 +118,18 @@ func trustedHeaderMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		vals := r.Header.Values(remoteUserHeader)
-		if len(vals) != 1 || vals[0] == "" {
-			writeError(w, http.StatusUnauthorized, "expected exactly one non-empty "+remoteUserHeader+" header")
-			return
+		switch vals := r.Header.Values(remoteUserHeader); {
+		case len(vals) == 0:
+			authnRejections.WithLabelValues("missing_header").Inc()
+			writeError(w, http.StatusUnauthorized, "missing "+remoteUserHeader+" header")
+		case len(vals) > 1:
+			authnRejections.WithLabelValues("duplicate_header").Inc()
+			writeError(w, http.StatusUnauthorized, "expected exactly one "+remoteUserHeader+" header — proxy must overwrite, not append")
+		case vals[0] == "":
+			authnRejections.WithLabelValues("empty_header").Inc()
+			writeError(w, http.StatusUnauthorized, "empty "+remoteUserHeader+" header")
+		default:
+			next.ServeHTTP(w, r)
 		}
-		next.ServeHTTP(w, r)
 	})
 }

@@ -72,6 +72,7 @@ func TestTrustedHeaderMiddleware(t *testing.T) {
 		called  bool
 	}{
 		{"healthz bypasses (readiness probe)", "/v0/healthz", nil, http.StatusOK, true},
+		{"startupz bypasses (startup probe)", "/v0/startupz", nil, http.StatusOK, true},
 		{"livez bypasses (liveness probe)", "/v0/livez", nil, http.StatusOK, true},
 		{"metrics bypasses (Prometheus scrape)", "/v0/metrics", nil, http.StatusOK, true},
 		{"node-id requires auth", "/v0/node-id", nil, http.StatusUnauthorized, false},
@@ -127,5 +128,18 @@ func TestNewServerSkipsMiddlewareInUnauthenticatedMode(t *testing.T) {
 	s := NewServer(":0", nil, t.TempDir(), AuthnModeUnauthenticated)
 	if s.handler != s.mux {
 		t.Fatal("unauthenticated mode wrapped the mux in middleware")
+	}
+}
+
+func TestBypassPaths(t *testing.T) {
+	got := BypassPaths()
+	want := []string{"/v0/healthz", "/v0/livez", "/v0/metrics", "/v0/startupz"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d paths, want %d: %v", len(got), len(want), got)
+	}
+	for i, p := range want {
+		if got[i] != p {
+			t.Errorf("path %d: %q, want %q", i, got[i], p)
+		}
 	}
 }

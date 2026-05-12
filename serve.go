@@ -137,7 +137,11 @@ var serveCmd = cli.Command{
 			return err
 		}
 		bindAddr := server.BindAddress(port, authnMode)
-		serveLog.Info("sidecar HTTP", "authnMode", authnMode, "bind", bindAddr)
+		logArgs := []any{"authnMode", authnMode, "bind", bindAddr}
+		if authnMode == server.AuthnModeTrustedHeader {
+			logArgs = append(logArgs, "bypassPaths", server.BypassPaths())
+		}
+		serveLog.Info("sidecar HTTP", logArgs...)
 		srv := server.NewServer(bindAddr, eng, homeDir, authnMode)
 		srvErr := srv.ListenAndServe(ctx)
 
