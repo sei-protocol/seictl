@@ -358,3 +358,20 @@ func (c *SidecarClient) SubmitSetGenesisPeersTask(ctx context.Context, task SetG
 	}
 	return c.SubmitTask(ctx, task.ToTaskRequest())
 }
+
+// SubmitGovVoteTask submits a gov-vote sign-and-broadcast task. When
+// taskID is uuid.Nil the engine generates one; otherwise the
+// caller-supplied UUID becomes the canonical idempotency key. Pass
+// the same taskID on retries to short-circuit duplicate broadcasts.
+func (c *SidecarClient) SubmitGovVoteTask(ctx context.Context, taskID uuid.UUID, p GovVoteTaskParams) (uuid.UUID, error) {
+	t := GovVoteTask{Params: p}
+	if err := t.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	req := t.ToTaskRequest()
+	if taskID != uuid.Nil {
+		id := taskID
+		req.Id = &id
+	}
+	return c.SubmitTask(ctx, req)
+}

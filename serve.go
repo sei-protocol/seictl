@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 	"github.com/sei-protocol/seictl/sidecar/server"
 	"github.com/sei-protocol/seictl/sidecar/tasks"
 	"github.com/sei-protocol/seilog"
@@ -93,6 +94,12 @@ var serveCmd = cli.Command{
 			return fmt.Errorf("open result store: %w", err)
 		}
 
+		// Wire the sidecar-local CometBFT RPC client and checkpoint
+		// store into ExecutionConfig so sign-tx handlers (gov-vote,
+		// gov-submit-proposal, gov-deposit) have one shared dep set.
+		execCfg.RPC = rpc.NewClient(rpc.DefaultEndpoint, nil)
+		execCfg.Checkpoints = store
+
 		snapshotRestorer, err := tasks.NewSnapshotRestorer(homeDir, snapshotBucket, snapshotRegion, chainID, nil, nil)
 		if err != nil {
 			return fmt.Errorf("creating snapshot restorer: %w", err)
@@ -102,6 +109,12 @@ var serveCmd = cli.Command{
 		if err != nil {
 			return fmt.Errorf("creating snapshot uploader: %w", err)
 		}
+
+		// eng is captured below; the sign-tx handlers read
+		// ExecutionConfig at execute time (rather than construction)
+		// because eng.Config is set after this map is built.
+		var eng *engine.Engine
+		cfgAccessor := func() engine.ExecutionConfig { return eng.Config }
 
 		handlers := map[engine.TaskType]engine.TaskHandler{
 			engine.TaskSnapshotRestore:          snapshotRestorer.Handler(),
@@ -121,9 +134,10 @@ var serveCmd = cli.Command{
 			engine.TaskUploadGenesisArtifacts:   tasks.NewGenesisArtifactUploader(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
 			engine.TaskAssembleAndUploadGenesis: tasks.NewGenesisAssembler(homeDir, genesisBucket, genesisRegion, chainID, nil, nil).Handler(),
 			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
+			engine.TaskGovVote:                  tasks.GovVoteHandler(cfgAccessor),
 		}
 
-		eng := engine.NewEngine(ctx, handlers, store)
+		eng = engine.NewEngine(ctx, handlers, store)
 		eng.Config = execCfg
 		// Rehydrate AFTER Config is installed so any sign-tx tasks left
 		// in 'running' state see the full handler dependencies via the

@@ -90,5 +90,39 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	if version < 4 {
+		// sign_tx_checkpoints holds the pre-broadcast checkpoint written
+		// by SignAndBroadcast. It lives in its own table — not as a JSON
+		// blob on task_results — because the engine overwrites the
+		// task_results row on completion, and a checkpoint written before
+		// broadcast must survive that overwrite to support retry.
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		if _, err := tx.Exec(`
+			CREATE TABLE IF NOT EXISTS sign_tx_checkpoints (
+				task_id        TEXT PRIMARY KEY,
+				tx_hash        TEXT NOT NULL,
+				sequence       INTEGER NOT NULL,
+				account_number INTEGER NOT NULL,
+				chain_id       TEXT NOT NULL,
+				created_at     TEXT NOT NULL
+			);
+		`); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 4"); err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

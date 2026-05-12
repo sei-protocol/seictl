@@ -18,6 +18,22 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+const (
+	BearerAuthScopes = "bearerAuth.Scopes"
+)
+
+// Defines values for GovVoteParamsOption.
+const (
+	Abstain     GovVoteParamsOption = "abstain"
+	Abstain1    GovVoteParamsOption = "Abstain"
+	No          GovVoteParamsOption = "no"
+	No1         GovVoteParamsOption = "No"
+	NoWithVeto  GovVoteParamsOption = "no_with_veto"
+	NoWithVeto1 GovVoteParamsOption = "NoWithVeto"
+	Yes         GovVoteParamsOption = "yes"
+	Yes1        GovVoteParamsOption = "Yes"
+)
+
 // Defines values for StatusResponseStatus.
 const (
 	Initializing StatusResponseStatus = "Initializing"
@@ -36,6 +52,61 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// GovVoteParams defines model for GovVoteParams.
+type GovVoteParams struct {
+	// ChainId Must match both `SEI_CHAIN_ID` on the sidecar AND the local
+	// seid's `/status.node_info.network`. Mismatch is a Terminal
+	// error — the sidecar refuses to sign before opening the keyring.
+	ChainId string `json:"chainId"`
+
+	// Fees Coin string in usei (e.g. "4000usei"). Non-`usei` denoms are
+	// rejected. Default: "4000usei". Sei mainnet min-gas-prices
+	// is 0.01usei; we round up.
+	Fees *string `json:"fees,omitempty"`
+
+	// Gas Default 200000.
+	Gas *uint64 `json:"gas,omitempty"`
+
+	// KeyName Keyring entry name (e.g. "node_admin").
+	KeyName string `json:"keyName"`
+
+	// Memo Default "seictl-sidecar".
+	Memo       *string             `json:"memo,omitempty"`
+	Option     GovVoteParamsOption `json:"option"`
+	ProposalId uint64              `json:"proposalId"`
+}
+
+// GovVoteParamsOption defines model for GovVoteParams.Option.
+type GovVoteParamsOption string
+
+// SignAndBroadcastResult Shared result schema for every sign-tx task (gov-vote and, in
+// follow-up PRs, gov-submit-proposal and gov-deposit). Per-task
+// types extend this with type-specific fields (e.g., proposalId).
+type SignAndBroadcastResult struct {
+	AccountNumber *uint64    `json:"accountNumber,omitempty"`
+	BroadcastedAt *time.Time `json:"broadcastedAt,omitempty"`
+	ChainId       string     `json:"chainId"`
+
+	// Code ABCI response code; 0=success.
+	Code      uint32  `json:"code"`
+	Codespace *string `json:"codespace,omitempty"`
+	GasUsed   *int64  `json:"gasUsed,omitempty"`
+	GasWanted *int64  `json:"gasWanted,omitempty"`
+
+	// Height Block height at inclusion; 0 if broadcast OK but inclusion polling timed out.
+	Height int64 `json:"height"`
+
+	// IncludedAt Null when broadcast succeeded (CheckTx code=0) but inclusion
+	// polling timed out. Callers may re-submit with the same
+	// taskId to short-circuit onto the persisted checkpoint.
+	IncludedAt *time.Time `json:"includedAt,omitempty"`
+	RawLog     *string    `json:"rawLog,omitempty"`
+	Sequence   *uint64    `json:"sequence,omitempty"`
+
+	// TxHash Upper-case hex tx hash, 64 chars.
+	TxHash string `json:"txHash"`
+}
+
 // StatusResponse defines model for StatusResponse.
 type StatusResponse struct {
 	Status StatusResponseStatus `json:"status"`
@@ -46,11 +117,16 @@ type StatusResponseStatus string
 
 // TaskRequest defines model for TaskRequest.
 type TaskRequest struct {
-	// Id Caller-provided task identifier. When set, the engine uses this as the canonical ID (enabling deterministic IDs from the controller). If a task with this ID already exists, the request is idempotent and returns the existing ID. When omitted, a random UUID is generated.
-	Id     *openapi_types.UUID     `json:"id,omitempty"`
+	// Id Caller-provided task identifier. When set, the engine uses this as the canonical ID (enabling deterministic IDs from the controller). If a task with this ID already exists, the request is idempotent and returns the existing ID. When omitted, a random UUID is generated. For sign-tx tasks the same ID re-submitted after a crash short- circuits onto the persisted checkpoint rather than re-broadcasting.
+	Id *openapi_types.UUID `json:"id,omitempty"`
+
+	// Params Task-type-specific parameters. The shape is validated server-
+	// side against the per-type schema named by `type`.
 	Params *map[string]interface{} `json:"params,omitempty"`
 
-	// Type Task type identifier.
+	// Type Task type identifier. See per-type schema components for the
+	// expected `params` shape:
+	//   * `gov-vote` → `GovVoteParams`
 	Type string `json:"type"`
 }
 

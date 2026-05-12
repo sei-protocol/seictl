@@ -144,7 +144,11 @@ func (e *Engine) Submit(task Task) (string, error) {
 // runTask spawns a goroutine to run the handler and persist the result.
 func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
 	go func() {
-		err := e.execute(e.ctx, taskType, handler, params)
+		// Thread the task ID through context so handlers that need
+		// it (e.g., sign-tx idempotency checkpoints) can pull it
+		// without changing the TaskHandler signature.
+		ctx := WithTaskID(e.ctx, id)
+		err := e.execute(ctx, taskType, handler, params)
 
 		t := time.Now().UTC()
 		tr := &TaskResult{

@@ -199,3 +199,57 @@ func formatNullableTime(t *time.Time) any {
 	}
 	return t.UTC().Format(time.RFC3339Nano)
 }
+
+// SaveCheckpoint upserts a sign-tx checkpoint. Called by SignAndBroadcast
+// before the tx is broadcast so the post-broadcast lookup survives a
+// crash between sign and persist-result.
+func (s *SQLiteStore) SaveCheckpoint(c *SignTxCheckpoint) error {
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO sign_tx_checkpoints
+			(task_id, tx_hash, sequence, account_number, chain_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		c.TaskID,
+		c.TxHash,
+		int64(c.Sequence),
+		int64(c.AccountNumber),
+		c.ChainID,
+		c.CreatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	return err
+}
+
+// LoadCheckpoint returns (nil, nil) when no row exists.
+func (s *SQLiteStore) LoadCheckpoint(taskID string) (*SignTxCheckpoint, error) {
+	row := s.db.QueryRow(`
+		SELECT task_id, tx_hash, sequence, account_number, chain_id, created_at
+		FROM sign_tx_checkpoints WHERE task_id = ?`, taskID)
+
+	var (
+		c          SignTxCheckpoint
+		seq        int64
+		accNum     int64
+		createdRaw string
+	)
+	if err := row.Scan(&c.TaskID, &c.TxHash, &seq, &accNum, &c.ChainID, &createdRaw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	c.Sequence = uint64(seq)
+	c.AccountNumber = uint64(accNum)
+	t, err := time.Parse(time.RFC3339Nano, createdRaw)
+	if err != nil {
+		return nil, fmt.Errorf("parse created_at: %w", err)
+	}
+	c.CreatedAt = t
+	return &c, nil
+}
+
+// DeleteCheckpoint is a no-op when the row does not exist. We use it on
+// the "safe-to-retry" path after a chain query confirms the tx never
+// landed and the sequence has not advanced.
+func (s *SQLiteStore) DeleteCheckpoint(taskID string) error {
+	_, err := s.db.Exec("DELETE FROM sign_tx_checkpoints WHERE task_id = ?", taskID)
+	return err
+}
