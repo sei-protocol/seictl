@@ -115,6 +115,11 @@ func (g *GentxGenerator) Handler() engine.TaskHandler {
 
 // addValidatorKey creates a local key and returns its bech32 address.
 // Same path as: seid keys add validator --keyring-backend test
+//
+// Genesis ceremonies use throwaway keys; the production-keyring backend
+// configured via SEI_KEYRING_BACKEND is intentionally not consumed here.
+// Mixing the two would let a gentx run mutate an operator's production
+// keyring (or surface its passphrase prompt) — both unacceptable.
 func (g *GentxGenerator) addValidatorKey(cdc codec.Codec) (string, error) {
 	gentxLog.Info("creating validator key")
 

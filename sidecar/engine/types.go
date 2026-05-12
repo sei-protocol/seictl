@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/sei-protocol/sei-chain/sei-cosmos/crypto/keyring"
 )
 
 // TaskType identifies the kind of task to execute.
@@ -85,4 +87,17 @@ type TaskResult struct {
 // StatusResponse is the shape returned by the status endpoint.
 type StatusResponse struct {
 	Status string `json:"status"`
+}
+
+// ExecutionConfig carries process-wide dependencies that the engine
+// makes available to task handlers. Fields are nil-valued when the
+// corresponding subsystem is not configured (e.g. Keyring is nil when
+// SEI_KEYRING_BACKEND is unset and governance signing is disabled).
+//
+// Handlers that need a dependency declare it as a constructor argument
+// today; this struct is the hand-off point from serve.go bootstrap into
+// the engine, so future sign-tx handlers can be wired without growing
+// serve.go's argument list further.
+type ExecutionConfig struct {
+	Keyring keyring.Keyring
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/sei-protocol/seilog"
 	"github.com/urfave/cli/v3"
 )
+
+var serveLog = seilog.NewLogger("seictl", "serve")
 
 var serveCmd = cli.Command{
 	Name:  "serve",
@@ -76,6 +79,11 @@ var serveCmd = cli.Command{
 			snapshotUploadInterval = parsed
 		}
 
+		execCfg, err := buildExecutionConfig(homeDir)
+		if err != nil {
+			return err
+		}
+
 		if err := tasks.EnsureDefaultConfig(homeDir); err != nil {
 			return fmt.Errorf("home directory init failed: %w", err)
 		}
@@ -116,6 +124,7 @@ var serveCmd = cli.Command{
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)
+		eng.SetExecutionConfig(execCfg)
 
 		srv := server.NewServer(":"+port, eng, homeDir)
 		srvErr := srv.ListenAndServe(ctx)
@@ -129,4 +138,50 @@ var serveCmd = cli.Command{
 		}
 		return nil
 	},
+}
+
+// buildExecutionConfig reads the keyring-related envs, opens the keyring
+// (when configured), and wipes the passphrase from the process env so it
+// no longer appears in /proc/<pid>/environ. The keyring is left nil when
+// SEI_KEYRING_BACKEND is unset — governance signing is opt-in and the
+// sidecar boots normally without it; sign-tx tasks will reject calls
+// with a clear "keyring not configured" error.
+func buildExecutionConfig(homeDir string) (engine.ExecutionConfig, error) {
+	backend := os.Getenv("SEI_KEYRING_BACKEND")
+	if backend == "" {
+		return engine.ExecutionConfig{}, nil
+	}
+
+	if !slices.Contains(server.AllowedBackends, backend) {
+		return engine.ExecutionConfig{}, fmt.Errorf(
+			"unsupported SEI_KEYRING_BACKEND %q (allowed: test|file|os)", backend)
+	}
+
+	dir := os.Getenv("SEI_KEYRING_DIR")
+	if dir == "" {
+		dir = filepath.Join(homeDir, "keyring-file")
+	}
+
+	passphrase := os.Getenv("SEI_KEYRING_PASSPHRASE")
+	if backend == server.BackendFile && passphrase == "" {
+		return engine.ExecutionConfig{}, fmt.Errorf(
+			"SEI_KEYRING_PASSPHRASE required when SEI_KEYRING_BACKEND=file")
+	}
+
+	kr, err := server.OpenKeyring(backend, dir, passphrase)
+	// Wipe the passphrase from the process env before doing anything
+	// else with the error — the env-var is no longer needed regardless
+	// of outcome, and a deferred unset would leak it into any code path
+	// that exits early via a different return.
+	_ = os.Unsetenv("SEI_KEYRING_PASSPHRASE")
+	if err != nil {
+		return engine.ExecutionConfig{}, fmt.Errorf("keyring open: %w", err)
+	}
+
+	if err := server.SmokeTestKeyring(kr); err != nil {
+		return engine.ExecutionConfig{}, err
+	}
+
+	serveLog.Info("keyring opened", "backend", backend, "dir", dir)
+	return engine.ExecutionConfig{Keyring: kr}, nil
 }

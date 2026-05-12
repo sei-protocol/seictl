@@ -36,6 +36,7 @@ type Engine struct {
 	ctx      context.Context
 	ready    atomic.Bool
 	store    ResultStore
+	cfg      ExecutionConfig
 	mu       sync.Mutex
 }
 
@@ -223,6 +224,23 @@ func (e *Engine) GetResult(id string) *TaskResult {
 		return nil
 	}
 	return r
+}
+
+// SetExecutionConfig installs the process-wide handler dependencies.
+// Intended to be called once after NewEngine and before Submit; calling
+// it under load is permitted (fields are read-mostly) but unusual.
+func (e *Engine) SetExecutionConfig(cfg ExecutionConfig) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cfg = cfg
+}
+
+// ExecutionConfig returns the installed handler dependencies. Returns a
+// zero value before SetExecutionConfig has been called.
+func (e *Engine) ExecutionConfig() ExecutionConfig {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.cfg
 }
 
 // RemoveResult removes a task by ID. Returns true if found.
