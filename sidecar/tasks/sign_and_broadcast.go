@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 	"unicode"
 
@@ -78,8 +79,10 @@ type SignAndBroadcastResult struct {
 	AccountNumber uint64    `json:"accountNumber"`
 	ChainID       string    `json:"chainId"`
 	BroadcastedAt time.Time `json:"broadcastedAt"`
-	// IncludedAt is nil when broadcast succeeded but inclusion polling
-	// timed out. The tx may still land; callers may re-query the chain.
+	// IncludedAt is nil when inclusion polling timed out after a
+	// successful broadcast. nil means UNDETERMINED — the tx may still
+	// land later. It does NOT mean "not included". Callers must
+	// re-query the chain to determine final state.
 	IncludedAt *time.Time `json:"includedAt,omitempty"`
 }
 
@@ -93,7 +96,7 @@ type TerminalError struct {
 func (e *TerminalError) Error() string { return e.Err.Error() }
 func (e *TerminalError) Unwrap() error { return e.Err }
 
-// Terminal wraps err as TerminalError. Returns nil when err is nil.
+// Terminal wraps err as TerminalError, or returns nil when err is nil.
 func Terminal(err error) error {
 	if err == nil {
 		return nil
@@ -149,7 +152,12 @@ func SignAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, in SignAn
 // reach this through SignAndBroadcast which wires the production txClient;
 // tests call it directly with a fake.
 func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClient, in SignAndBroadcastInput, fromAddr sdk.AccAddress) (*SignAndBroadcastResult, error) {
-	// Append taskID to memo first so the byte cap is enforced against the
+	// Reject caller-supplied "taskID=" before appending so on-chain
+	// audit greps never see a forged tag preceding the genuine one.
+	if strings.Contains(in.Memo, taskIDMemoPrefix) {
+		return nil, Terminal(fmt.Errorf("memo must not contain %q (reserved for engine-supplied task tag)", taskIDMemoPrefix))
+	}
+	// Append taskID to memo so the byte cap is enforced against the
 	// effective on-chain memo.
 	in.Memo = appendTaskIDToMemo(in.Memo, in.TaskID)
 	if err := validateInput(in); err != nil {
@@ -168,7 +176,7 @@ func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClie
 	}
 
 	// WithFees panics on parse error; checkFeesDenom already ran.
-	_, txCfg := makeSignTxCodec()
+	_, _, txCfg := makeSignTxCodec()
 	factory := tx.Factory{}.
 		WithChainID(in.ChainID).
 		WithKeybase(cfg.Keyring).
@@ -220,13 +228,18 @@ func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClie
 	return out, nil
 }
 
+// taskIDMemoPrefix is the literal tag prefix written into the on-chain
+// memo by appendTaskIDToMemo. Caller-supplied memos containing this
+// substring are rejected so audit greps see exactly one tag per tx.
+const taskIDMemoPrefix = "taskID="
+
 // appendTaskIDToMemo tags the memo with the task ID so operators can grep
 // the chain by memo. taskID="" leaves base unchanged.
 func appendTaskIDToMemo(base, taskID string) string {
 	if taskID == "" {
 		return base
 	}
-	tag := "taskID=" + taskID
+	tag := taskIDMemoPrefix + taskID
 	if base == "" {
 		return tag
 	}

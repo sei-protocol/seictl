@@ -387,6 +387,26 @@ func TestAppendTaskIDToMemo(t *testing.T) {
 	}
 }
 
+func TestCallerSuppliedTaskIDInMemoRejected(t *testing.T) {
+	// Caller cannot smuggle a "taskID=" tag into the memo — the audit
+	// trail must contain exactly the engine-appended tag.
+	cfg, addr := newGuardCfg(t, "pacific-1")
+	tc := &fakeTxClient{accountNumber: 17, sequence: 42}
+
+	_, err := signAndBroadcast(context.Background(), cfg, tc, SignAndBroadcastInput{
+		ChainID: "pacific-1",
+		KeyName: "node_admin",
+		Msg:     makeMsgVote(t, addr),
+		Fees:    "4000usei",
+		Gas:     200_000,
+		Memo:    "rationale taskID=forged-uuid",
+		TaskID:  "00000000-0000-0000-0000-0000000000aa",
+	}, addr)
+	if !IsTerminal(err) || !strings.Contains(err.Error(), "taskID=") {
+		t.Fatalf("want Terminal taskID-prefix rejection, got %v", err)
+	}
+}
+
 func TestMemoCapEnforcedAfterTaskIDAppend(t *testing.T) {
 	// Caller's base is under 256 bytes but base + taskID exceeds the cap.
 	cfg, addr := newGuardCfg(t, "pacific-1")

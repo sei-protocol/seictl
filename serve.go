@@ -94,10 +94,6 @@ var serveCmd = cli.Command{
 			return fmt.Errorf("open result store: %w", err)
 		}
 
-		// Sign-tx handlers (added in follow-on PRs) read cfg.RPC for the
-		// chain-confusion guard and inclusion polling.
-		execCfg.RPC = rpc.NewClient(rpc.DefaultEndpoint, nil)
-
 		snapshotRestorer, err := tasks.NewSnapshotRestorer(homeDir, snapshotBucket, snapshotRegion, chainID, nil, nil)
 		if err != nil {
 			return fmt.Errorf("creating snapshot restorer: %w", err)
@@ -148,18 +144,21 @@ var serveCmd = cli.Command{
 	},
 }
 
-// buildExecutionConfig opens the keyring (when configured) and wipes the
-// passphrase from /proc/<pid>/environ. Keyring is nil when SEI_KEYRING_BACKEND
-// is unset; sign-tx tasks then reject with "keyring not configured".
+// buildExecutionConfig assembles the engine's runtime dependencies:
+// keyring (opened from SEI_KEYRING_BACKEND, or nil) and RPC client
+// (pointed at the local seid). Sign-tx tasks consume both; tasks that
+// don't need them ignore the fields.
 func buildExecutionConfig(homeDir string) (engine.ExecutionConfig, error) {
 	// Wipe passphrase before any branching so every return path leaves
 	// /proc/<pid>/environ clean.
 	passphrase := os.Getenv("SEI_KEYRING_PASSPHRASE")
 	_ = os.Unsetenv("SEI_KEYRING_PASSPHRASE")
 
+	rpcClient := rpc.NewClient(rpc.DefaultEndpoint, nil)
+
 	backend := os.Getenv("SEI_KEYRING_BACKEND")
 	if backend == "" {
-		return engine.ExecutionConfig{}, nil
+		return engine.ExecutionConfig{RPC: rpcClient}, nil
 	}
 
 	if !slices.Contains(server.AllowedBackends, backend) {
@@ -189,5 +188,5 @@ func buildExecutionConfig(homeDir string) (engine.ExecutionConfig, error) {
 	}
 
 	serveLog.Info("keyring opened", "backend", backend, "dir", dir)
-	return engine.ExecutionConfig{Keyring: kr}, nil
+	return engine.ExecutionConfig{Keyring: kr, RPC: rpcClient}, nil
 }

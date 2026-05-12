@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	rpchttp "github.com/sei-protocol/sei-chain/sei-tendermint/rpc/client/http"
 
@@ -25,19 +26,23 @@ import (
 	"github.com/sei-protocol/seictl/sidecar/rpc"
 )
 
+// tmRPCTimeout bounds the underlying HTTP client so a wedged seid does
+// not pin goroutines/conns indefinitely (the ctx-cancel select in
+// AccountNumberSequence returns the task but leaves the inflight call
+// behind until transport completes).
+const tmRPCTimeout = 30 * time.Second
+
 // newSDKTxClient wires the production txClient against the local seid RPC.
 func newSDKTxClient(cfg engine.ExecutionConfig, in SignAndBroadcastInput, fromAddr sdk.AccAddress) (txClient, error) {
 	rpcURL := rpc.DefaultEndpoint
 	if cfg.RPC != nil && cfg.RPC.Endpoint() != "" {
 		rpcURL = cfg.RPC.Endpoint()
 	}
-	tmClient, err := rpchttp.New(rpcURL)
+	tmClient, err := rpchttp.NewWithTimeout(rpcURL, tmRPCTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("tendermint RPC client at %s: %w", rpcURL, err)
 	}
-	registry := newSignTxInterfaceRegistry()
-	cdc := codec.NewProtoCodec(registry)
-	txCfg := authtx.NewTxConfig(cdc, authtx.DefaultSignModes)
+	registry, cdc, txCfg := makeSignTxCodec()
 	clientCtx := client.Context{}.
 		WithChainID(in.ChainID).
 		WithCodec(cdc).
@@ -135,9 +140,13 @@ func newSignTxInterfaceRegistry() codectypes.InterfaceRegistry {
 	return registry
 }
 
-func makeSignTxCodec() (codec.Codec, client.TxConfig) {
+// makeSignTxCodec is the single source of truth for the proto registry,
+// codec, and TxConfig used by both production sdkTxClient wiring and the
+// sign path. If interfaces ever diverge between the two, sign/encode
+// breaks in confusing ways; sharing here is load-bearing.
+func makeSignTxCodec() (codectypes.InterfaceRegistry, codec.Codec, client.TxConfig) {
 	registry := newSignTxInterfaceRegistry()
 	cdc := codec.NewProtoCodec(registry)
 	txCfg := authtx.NewTxConfig(cdc, authtx.DefaultSignModes)
-	return cdc, txCfg
+	return registry, cdc, txCfg
 }
