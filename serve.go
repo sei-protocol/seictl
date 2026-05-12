@@ -125,6 +125,10 @@ var serveCmd = cli.Command{
 
 		eng := engine.NewEngine(ctx, handlers, store)
 		eng.Config = execCfg
+		// Rehydrate AFTER Config is installed so any sign-tx tasks left
+		// in 'running' state see the full handler dependencies via the
+		// goroutine-spawn happens-before edge.
+		eng.RehydrateStaleTasks()
 
 		srv := server.NewServer(":"+port, eng, homeDir)
 		srvErr := srv.ListenAndServe(ctx)

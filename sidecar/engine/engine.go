@@ -45,23 +45,22 @@ type Engine struct {
 }
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
-// On startup, any tasks left in "running" state from a previous process
-// are re-executed.
+// Pure constructor — spawns no goroutines. Callers MUST install any
+// handler dependencies on e.Config before calling RehydrateStaleTasks,
+// otherwise a rehydrated sign-tx task would race with the config write.
 func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store ResultStore) *Engine {
-	eng := &Engine{
+	return &Engine{
 		handlers: handlers,
 		ctx:      ctx,
 		store:    store,
 	}
-	eng.rehydrateStaleTasks()
-	return eng
 }
 
-// rehydrateStaleTasks re-executes tasks that were left in "running"
-// state by a previous process that exited before completing them.
-// Run count is NOT incremented — rehydration is crash recovery of an
-// incomplete run, not a new run.
-func (e *Engine) rehydrateStaleTasks() {
+// RehydrateStaleTasks re-executes tasks left in "running" state by a
+// previous process that exited before completing them. Run count is
+// NOT incremented — rehydration is crash recovery of an incomplete
+// run, not a new run. Must be called only after Config is installed.
+func (e *Engine) RehydrateStaleTasks() {
 	stale, err := e.store.ListStaleTasks()
 	if err != nil {
 		log.Error("failed to list stale tasks", "err", err)

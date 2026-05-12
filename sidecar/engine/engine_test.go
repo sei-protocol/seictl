@@ -628,6 +628,7 @@ func TestSubmitDoesNotIncrementRunOnRehydration(t *testing.T) {
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	}, store)
+	eng.RehydrateStaleTasks()
 
 	r := waitForResult(t, eng, "ffffffff-1111-2222-3333-444444444444")
 	if r.Run != 1 {
