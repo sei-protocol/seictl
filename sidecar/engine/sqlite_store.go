@@ -203,8 +203,34 @@ func formatNullableTime(t *time.Time) any {
 // SaveCheckpoint upserts a sign-tx checkpoint. Called by SignAndBroadcast
 // before the tx is broadcast so the post-broadcast lookup survives a
 // crash between sign and persist-result.
+//
+// Atomicity: wrapped in BEGIN IMMEDIATE so two concurrent writers
+// serialize. Refuses to overwrite a row whose chain_id differs from the
+// incoming one — that scenario is a cross-chain TaskID collision and
+// silent clobber would confuse the audit trail.
 func (s *SQLiteStore) SaveCheckpoint(c *SignTxCheckpoint) error {
-	_, err := s.db.Exec(`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var existingChainID string
+	err = tx.QueryRow(
+		"SELECT chain_id FROM sign_tx_checkpoints WHERE task_id = ?",
+		c.TaskID,
+	).Scan(&existingChainID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// fresh insert; fall through
+	case err != nil:
+		return fmt.Errorf("lookup existing checkpoint: %w", err)
+	case existingChainID != c.ChainID:
+		return fmt.Errorf("checkpoint chain mismatch for task %q: existing=%q new=%q",
+			c.TaskID, existingChainID, c.ChainID)
+	}
+
+	if _, err := tx.Exec(`
 		INSERT OR REPLACE INTO sign_tx_checkpoints
 			(task_id, tx_hash, sequence, account_number, chain_id, created_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
@@ -214,8 +240,10 @@ func (s *SQLiteStore) SaveCheckpoint(c *SignTxCheckpoint) error {
 		int64(c.AccountNumber),
 		c.ChainID,
 		c.CreatedAt.UTC().Format(time.RFC3339Nano),
-	)
-	return err
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // LoadCheckpoint returns (nil, nil) when no row exists.

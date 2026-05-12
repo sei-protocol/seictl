@@ -33,6 +33,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	rpchttp "github.com/sei-protocol/sei-chain/sei-tendermint/rpc/client/http"
 	"github.com/sei-protocol/sei-chain/sei-tendermint/crypto/tmhash"
@@ -69,13 +70,14 @@ const feeDenom = "usei"
 // a block-included response after BroadcastTxSync returns code=0.
 // Beyond this the helper returns a non-Terminal result with IncludedAt
 // nil; the caller may re-submit the same TaskID later to short-circuit
-// onto the existing checkpoint and re-poll.
-const inclusionPollTimeout = 60 * time.Second
+// onto the existing checkpoint and re-poll. Var (not const) so tests
+// can shorten it without injecting a deadline-bearing context.
+var inclusionPollTimeout = 60 * time.Second
 
 // inclusionPollInterval is the gap between /tx?hash=... polls. The
 // local seid is on loopback so this is cheap; we keep it lower than
 // block time so first-included tx is reported promptly.
-const inclusionPollInterval = 500 * time.Millisecond
+var inclusionPollInterval = 500 * time.Millisecond
 
 // SignAndBroadcastInput is the shared input contract for every sign-tx
 // handler. Msg is the typed cosmos-sdk message — e.g., *govtypes.MsgVote
@@ -270,18 +272,21 @@ func SignAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, in SignAn
 		return nil, err // already Terminal-wrapped where appropriate
 	}
 
+	// Validate the engine wiring BEFORE touching the keyring — opening
+	// the keyring on the file backend can prompt for the passphrase, and
+	// a misconfigured checkpoint store should never reach that path.
 	if cfg.Keyring == nil {
 		return nil, Terminal(errors.New("keyring not configured: set SEI_KEYRING_BACKEND/SEI_KEYRING_PASSPHRASE on the sidecar"))
 	}
+	if cfg.Checkpoints == nil {
+		return nil, errors.New("checkpoint store not configured")
+	}
+
 	info, err := cfg.Keyring.Key(in.KeyName)
 	if err != nil {
 		return nil, Terminal(fmt.Errorf("keyring entry %q: %w", in.KeyName, err))
 	}
 	fromAddr := info.GetAddress()
-
-	if cfg.Checkpoints == nil {
-		return nil, errors.New("checkpoint store not configured")
-	}
 
 	tc, err := signTxClientFactory(cfg, in, fromAddr)
 	if err != nil {
@@ -401,17 +406,28 @@ func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClie
 		return nil, fmt.Errorf("broadcast: %w", err)
 	}
 	if resp.Code != 0 {
-		// CheckTx-level rejection. The tx never entered the mempool;
-		// there is nothing to recover. We do NOT delete the checkpoint
-		// here — a duplicate submission with the same TaskID should
-		// still short-circuit through the prior-tx path above (which
-		// will find the tx absent and fall through to re-sign at the
-		// unchanged sequence).
+		// CheckTx-level rejection. The tx never entered the mempool, so
+		// the checkpoint we just persisted advertises a tx hash that
+		// will never appear on-chain — an audit-confusing dangling
+		// record. Delete it; an operator who fixes the config and
+		// resubmits gets a fresh signing path at the unchanged sequence
+		// (LoadCheckpoint returns nil, fall through to re-sign).
+		if derr := cfg.Checkpoints.DeleteCheckpoint(in.TaskID); derr != nil {
+			signTxLog.Warn("failed to delete checkpoint after CheckTx rejection",
+				"taskId", in.TaskID, "err", derr)
+		}
 		return nil, Terminal(fmt.Errorf("checkTx rejected: code=%d codespace=%q log=%s",
 			resp.Code, resp.Codespace, resp.RawLog))
 	}
 
-	included := pollForInclusion(ctx, tc, txHash, inclusionPollTimeout, inclusionPollInterval)
+	included, perr := pollForInclusion(ctx, tc, txHash, inclusionPollTimeout, inclusionPollInterval)
+	if perr != nil {
+		// Caller-driven cancellation: don't synthesize a "completed"
+		// result on the truncated task. Engine records this as failed;
+		// next Submit with the same TaskID short-circuits via the
+		// persisted checkpoint to the chain-query path.
+		return nil, perr
+	}
 	out := resultFromTxResponse(resp, accNum, seq, in.ChainID, broadcastedAt, nil)
 	if included != nil {
 		now := time.Now().UTC()
@@ -442,8 +458,36 @@ func validateInput(in SignAndBroadcastInput) error {
 	if in.Fees == "" {
 		return errors.New("fees required")
 	}
+	if err := validateMemo(in.Memo); err != nil {
+		return err
+	}
 	if err := in.Msg.ValidateBasic(); err != nil {
 		return fmt.Errorf("msg.ValidateBasic: %w", err)
+	}
+	return nil
+}
+
+// maxMemoBytes matches Cosmos SDK's MaxMemoCharacters consensus cap.
+// Memos that exceed this size would be rejected at CheckTx but only after
+// the sidecar persisted a checkpoint and signed the tx — refuse at the
+// admission boundary to avoid wasted state.
+const maxMemoBytes = 256
+
+// validateMemo rejects oversize memos and memos containing non-printable
+// or control characters. The memo travels into on-chain event logs and
+// the sidecar's task result; an attacker who controls it can otherwise
+// inject ANSI sequences into audit pipelines or forge fake audit lines.
+func validateMemo(memo string) error {
+	if len(memo) > maxMemoBytes {
+		return fmt.Errorf("memo length %d exceeds %d bytes", len(memo), maxMemoBytes)
+	}
+	for _, r := range memo {
+		if r == '\t' || r == ' ' {
+			continue
+		}
+		if !unicode.IsPrint(r) {
+			return fmt.Errorf("memo contains non-printable character %U", r)
+		}
 	}
 	return nil
 }
@@ -456,6 +500,16 @@ func checkFeesDenom(fees string) error {
 	coins, err := sdk.ParseCoinsNormalized(fees)
 	if err != nil {
 		return fmt.Errorf("parse fees %q: %w", fees, err)
+	}
+	// ParseCoinsNormalized filters zero-amount entries, so "0usei" and
+	// non-positive sums normalize to empty Coins. Reject both — a tx
+	// with zero fee bypasses any min-gas-price contract the operator
+	// thought they were paying.
+	if len(coins) == 0 {
+		return fmt.Errorf("fees %q resolves to zero or empty coins", fees)
+	}
+	if !coins.IsAllPositive() {
+		return fmt.Errorf("fees %q contains non-positive amounts", fees)
 	}
 	for _, c := range coins {
 		if c.Denom != feeDenom {
@@ -513,21 +567,32 @@ func guardChainID(ctx context.Context, rpcClient *rpc.Client, chainID string) er
 
 // pollForInclusion polls the local seid /tx?hash=... until the tx is
 // reported as included, the context is cancelled, or timeout elapses.
-// Returns nil on timeout — caller treats that as "broadcast OK,
-// inclusion-confirmation deferred" and emits a non-Terminal result.
-func pollForInclusion(ctx context.Context, tc txClient, txHash string, timeout, interval time.Duration) *sdk.TxResponse {
+// Distinguishes three outcomes:
+//   - tx found on chain: (resp, nil)
+//   - timeout elapsed:   (nil,  nil)   — caller treats as "broadcast OK,
+//                                         inclusion-confirmation deferred"
+//   - ctx cancelled:     (nil,  ctx.Err()) — caller surfaces as failure so
+//                                            the engine doesn't record a
+//                                            truncated task as completed
+func pollForInclusion(ctx context.Context, tc txClient, txHash string, timeout, interval time.Duration) (*sdk.TxResponse, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		resp, found, err := tc.QueryTx(ctx, txHash)
-		if err == nil && found {
-			return resp
+		// Check cancellation + deadline BEFORE each network call so a
+		// CLI-driven --timeout actually bounds the wait — the QueryTx
+		// transport can itself stall on a hung seid.
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		if time.Now().After(deadline) {
-			return nil
+			return nil, nil
+		}
+		resp, found, err := tc.QueryTx(ctx, txHash)
+		if err == nil && found {
+			return resp, nil
 		}
 		select {
 		case <-ctx.Done():
-			return nil
+			return nil, ctx.Err()
 		case <-time.After(interval):
 		}
 	}

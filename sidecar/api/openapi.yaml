@@ -101,6 +101,8 @@ paths:
       operationId: listTasks
       summary: List recent task results
       description: Returns the most recent task results.
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: Task results.
@@ -115,6 +117,8 @@ paths:
     get:
       operationId: getTask
       summary: Get a task result
+      security:
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -139,6 +143,8 @@ paths:
       operationId: deleteTask
       summary: Remove a task
       description: Removes a task result or cancels an active task.
+      security:
+        - bearerAuth: []
       parameters:
         - name: id
           in: path

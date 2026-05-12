@@ -520,24 +520,24 @@ func TestIdempotency_UnchangedSequence_AbsentTxRecovers(t *testing.T) {
 	}
 }
 
-func TestInclusionPollingTimeout_ReturnsNonTerminalWithNilIncludedAt(t *testing.T) {
+func TestInclusionPollingCtxCancel_ReturnsCtxErr(t *testing.T) {
+	// Ctx cancellation during inclusion poll MUST surface as an error
+	// so the engine records the task as failed rather than synthesizing
+	// a "completed" record on a truncated run. Next Submit with the
+	// same TaskID short-circuits via the persisted checkpoint.
 	cfg, addr := newGuardCfg(t, "pacific-1")
 	tc := &fakeTxClient{
 		accountNumber: 17,
 		sequence:      42,
 		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h", Height: 0},
-		// queryTx empty → /tx?hash returns not-found forever.
 	}
 	installFactory(t, tc)
 
-	// Shorten timeouts so the test runs fast. We accomplish this by
-	// using a context with deadline shorter than inclusionPollTimeout.
-	// pollForInclusion respects ctx.Done().
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
 	start := time.Now()
-	res, err := SignAndBroadcast(ctx, cfg, SignAndBroadcastInput{
+	_, err := SignAndBroadcast(ctx, cfg, SignAndBroadcastInput{
 		ChainID: "pacific-1",
 		KeyName: "node_admin",
 		Msg:     makeMsgVote(t, addr),
@@ -545,14 +545,49 @@ func TestInclusionPollingTimeout_ReturnsNonTerminalWithNilIncludedAt(t *testing.
 		Gas:     200_000,
 		TaskID:  "00000000-0000-0000-0000-00000000000c",
 	})
-	if err != nil {
-		t.Fatalf("polling timeout should NOT be an error: %v", err)
-	}
-	if res.IncludedAt != nil {
-		t.Fatal("IncludedAt must be nil when polling timed out")
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected ctx-cancellation error, got: %v", err)
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("test ran too long: %v (polling should bail on ctx.Done)", time.Since(start))
+	}
+}
+
+func TestInclusionPollingDeadline_ReturnsNonTerminalWithNilIncludedAt(t *testing.T) {
+	// Poll-deadline exceeded (without ctx cancellation) is the "broadcast
+	// OK, inclusion-confirmation deferred" case — non-Terminal success
+	// with IncludedAt=nil. Operator can re-submit the same TaskID to
+	// re-poll via the persisted checkpoint.
+	cfg, addr := newGuardCfg(t, "pacific-1")
+	tc := &fakeTxClient{
+		accountNumber: 17,
+		sequence:      42,
+		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h", Height: 0},
+	}
+	installFactory(t, tc)
+
+	// Shorten the poll budget so the test runs fast; restore on cleanup.
+	prevTimeout, prevInterval := inclusionPollTimeout, inclusionPollInterval
+	inclusionPollTimeout = 50 * time.Millisecond
+	inclusionPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		inclusionPollTimeout = prevTimeout
+		inclusionPollInterval = prevInterval
+	})
+
+	res, err := SignAndBroadcast(context.Background(), cfg, SignAndBroadcastInput{
+		ChainID: "pacific-1",
+		KeyName: "node_admin",
+		Msg:     makeMsgVote(t, addr),
+		Fees:    "4000usei",
+		Gas:     200_000,
+		TaskID:  "00000000-0000-0000-0000-00000000000d",
+	})
+	if err != nil {
+		t.Fatalf("poll-deadline (no ctx cancel) should NOT be an error: %v", err)
+	}
+	if res.IncludedAt != nil {
+		t.Fatal("IncludedAt must be nil when poll deadline elapsed without inclusion")
 	}
 }
 
