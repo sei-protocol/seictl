@@ -65,7 +65,7 @@ func waitForTaskResult(eng *engine.Engine, id string) *engine.TaskResult {
 
 func TestLivezReturns200WhenStoreHealthy(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 	rec := serveHTTP(srv, http.MethodGet, "/v0/livez", "")
 
 	if rec.Code != http.StatusOK {
@@ -76,7 +76,7 @@ func TestLivezReturns200WhenStoreHealthy(t *testing.T) {
 func TestLivezReturns200BeforeReady(t *testing.T) {
 	// Livez should pass even before mark-ready (healthz would return 503).
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	if eng.Healthz() {
 		t.Fatal("expected healthz=false before mark-ready")
@@ -95,7 +95,7 @@ func TestLivezReturns503WhenStoreDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	eng := engine.NewEngine(ctx, nil, store)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	// Close the backing store to simulate SQLite failure.
 	store.Close()
@@ -108,7 +108,7 @@ func TestLivezReturns503WhenStoreDown(t *testing.T) {
 
 func TestHealthzReturns503BeforeReady(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 	rec := serveHTTP(srv, http.MethodGet, "/v0/healthz", "")
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -120,7 +120,7 @@ func TestHealthzReturns200AfterMarkReady(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	_, _ = eng.Submit(engine.Task{Type: engine.TaskMarkReady})
 	waitForReady(eng)
@@ -135,7 +135,7 @@ func TestStatusResponse(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	rec := serveHTTP(srv, http.MethodGet, "/v0/status", "")
 	if rec.Code != http.StatusOK {
@@ -166,7 +166,7 @@ func TestPostTaskReturnsID(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	body := `{"type":"config-patch","params":{"peers":["a@1.2.3.4:26656"]}}`
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
@@ -187,7 +187,7 @@ func TestPostTaskWithCallerID(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	body := `{"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","type":"config-patch"}`
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
@@ -218,7 +218,7 @@ func TestPostTaskDedupReturnsExistingID(t *testing.T) {
 			return nil
 		},
 	}, store)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	body := `{"id":"ffffffff-1111-2222-3333-444444444444","type":"config-patch"}`
 	rec1 := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
@@ -251,7 +251,7 @@ func TestPostTaskInvalidIDReturns400(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	body := `{"id":"not-a-valid-uuid","type":"config-patch"}`
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", body)
@@ -270,7 +270,7 @@ func TestPostTaskInvalidIDReturns400(t *testing.T) {
 
 func TestPostTaskInvalidJSON(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{not json}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -279,7 +279,7 @@ func TestPostTaskInvalidJSON(t *testing.T) {
 
 func TestPostTaskMissingType(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"params":{}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -288,7 +288,7 @@ func TestPostTaskMissingType(t *testing.T) {
 
 func TestPostTaskUnknownType(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"nonexistent"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -297,7 +297,7 @@ func TestPostTaskUnknownType(t *testing.T) {
 
 func TestListTasksEmpty(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 	rec := serveHTTP(srv, http.MethodGet, "/v0/tasks", "")
 
 	var results []engine.TaskResult
@@ -313,7 +313,7 @@ func TestListTasksAfterSubmit(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	var resp map[string]string
@@ -334,7 +334,7 @@ func TestGetTask(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	var resp map[string]string
@@ -368,7 +368,7 @@ func TestGetTaskInProgress(t *testing.T) {
 			return nil
 		},
 	}, store)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	if rec.Code != http.StatusCreated {
@@ -413,7 +413,7 @@ func TestGetTaskInProgress(t *testing.T) {
 
 func TestGetTaskNotFound(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 	rec := serveHTTP(srv, http.MethodGet, "/v0/tasks/nonexistent", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rec.Code)
@@ -424,7 +424,7 @@ func TestDeleteTask(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
 		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
 	})
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	rec := serveHTTP(srv, http.MethodPost, "/v0/tasks", `{"type":"config-patch"}`)
 	var resp map[string]string
@@ -490,7 +490,7 @@ func TestNodeID_ReturnsCorrectID(t *testing.T) {
 	want := writeTestNodeKey(t, homeDir)
 
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng, homeDir)
+	srv := NewServer(":0", eng, homeDir, AuthnModeUnauthenticated)
 
 	rec := serveHTTP(srv, http.MethodGet, "/v0/node-id", "")
 	if rec.Code != http.StatusOK {
@@ -510,7 +510,7 @@ func TestNodeID_ReturnsCorrectID(t *testing.T) {
 
 func TestNodeID_MissingKeyFile(t *testing.T) {
 	eng := newTestEngine(t, nil)
-	srv := NewServer(":0", eng, t.TempDir())
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
 	rec := serveHTTP(srv, http.MethodGet, "/v0/node-id", "")
 	if rec.Code != http.StatusInternalServerError {

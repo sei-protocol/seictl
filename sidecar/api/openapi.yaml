@@ -6,11 +6,25 @@ info:
 
     ## Authentication
 
-    Sign-tx tasks ship UNAUTHENTICATED in Phase 1-3 of the
-    governance-flow workstream — see sei-protocol/seictl#163 and #165.
-    From Phase 4 a `kube-rbac-proxy` sidecar fronts this API on `:8443`
-    (TokenReview + a single coarse `create seinodetasks.sei.io` SAR)
-    and the sidecar rebinds to 127.0.0.1:7777, trusting `X-Remote-User`.
+    Controlled by the `SEI_SIDECAR_AUTHN_MODE` environment variable:
+
+    - **Unset (default):** API is unauthenticated. The sidecar binds
+      all interfaces. Any actor with network reach to the listen port
+      can submit txs as the validator's operator account. Acceptable
+      only on validator-only pod networks.
+    - **`trusted-header`:** A `kube-rbac-proxy` container fronts this
+      API on TLS `:8443` and performs TokenReview + a single coarse
+      `create seinodetasks.sei.io` SAR against the K8s API. The
+      sidecar binds loopback only and requires `X-Remote-User` on
+      every request, except for three paths that bypass auth so
+      probes and scrapes — none of which carry auth headers — keep
+      working:
+
+      - `/v0/healthz` — kubelet readiness probe
+      - `/v0/livez` — kubelet liveness probe
+      - `/v0/metrics` — Prometheus scrape
+
+      `kube-rbac-proxy` must include all three in its `--allow-paths`.
   version: 0.8.0
   license:
     name: Apache-2.0
@@ -54,7 +68,7 @@ paths:
         task type — per-task narrowing is additive via `resourceNames`
         on the ClusterRole.
       security:
-        - bearerAuth: []
+        - remoteUserHeader: []
       requestBody:
         required: true
         content:
@@ -85,7 +99,7 @@ paths:
       summary: List recent task results
       description: Returns the most recent task results.
       security:
-        - bearerAuth: []
+        - remoteUserHeader: []
       responses:
         "200":
           description: Task results.
@@ -101,7 +115,7 @@ paths:
       operationId: getTask
       summary: Get a task result
       security:
-        - bearerAuth: []
+        - remoteUserHeader: []
       parameters:
         - name: id
           in: path
@@ -127,7 +141,7 @@ paths:
       summary: Remove a task
       description: Removes a task result or cancels an active task.
       security:
-        - bearerAuth: []
+        - remoteUserHeader: []
       parameters:
         - name: id
           in: path
@@ -147,14 +161,21 @@ paths:
 
 components:
   securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
+    remoteUserHeader:
+      type: apiKey
+      in: header
+      name: X-Remote-User
       description: |
-        Enforced by the upstream `kube-rbac-proxy` in Phase 4+ (#165).
-        In Phase 1-3 the sidecar is unauthenticated; tooling MUST NOT
-        rely on this scheme for its own access control.
+        Trusted-header model: the sidecar trusts the value of
+        `X-Remote-User` because it binds loopback and a co-located
+        `kube-rbac-proxy` is the sole reachable client. The proxy
+        performs TokenReview + SAR against the K8s API and forwards
+        the authenticated identity in this header. Tooling MUST NOT
+        send this header directly — it is set by the proxy.
+
+        Only applies when `SEI_SIDECAR_AUTHN_MODE=trusted-header`. With
+        the env var unset the API is unauthenticated and this scheme
+        is not enforced.
 
   schemas:
     TaskRequest:

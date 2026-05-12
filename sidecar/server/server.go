@@ -29,6 +29,7 @@ type Server struct {
 	homeDir string
 	engine  *engine.Engine
 	mux     *http.ServeMux
+	handler http.Handler // mux, possibly wrapped by trustedHeaderMiddleware
 }
 
 // TaskRequest is the JSON body for POST /v0/tasks. When ID is provided,
@@ -45,9 +46,9 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// NewServer creates a Server wired to the given engine.
-// homeDir is the seid home directory (e.g. /sei) used by the node-id endpoint.
-func NewServer(addr string, eng *engine.Engine, homeDir string) *Server {
+// NewServer wires a Server to the engine. authnMode must come from
+// AuthnMode() so the env read and validation happen once at startup.
+func NewServer(addr string, eng *engine.Engine, homeDir, authnMode string) *Server {
 	s := &Server{
 		addr:    addr,
 		homeDir: homeDir,
@@ -63,6 +64,11 @@ func NewServer(addr string, eng *engine.Engine, homeDir string) *Server {
 	s.mux.HandleFunc("GET /v0/tasks", s.handleListTasks)
 	s.mux.HandleFunc("GET /v0/tasks/{id}", s.handleGetTask)
 	s.mux.HandleFunc("DELETE /v0/tasks/{id}", s.handleDeleteTask)
+
+	s.handler = s.mux
+	if authnMode == AuthnModeTrustedHeader {
+		s.handler = trustedHeaderMiddleware(s.mux)
+	}
 	return s
 }
 
@@ -191,7 +197,7 @@ func (s *Server) handleNodeID(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:              s.addr,
-		Handler:           s.mux,
+		Handler:           s.handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,

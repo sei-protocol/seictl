@@ -1,11 +1,8 @@
 // Package tasks — gov-vote handler.
 //
-// SECURITY POSTURE NOTE — sei-protocol/seictl#163 / #165
-//
-// Reached via the sidecar's HTTP API. In Phase 1-3 the API is
-// unauthenticated; anyone with network reach can submit votes as the
-// validator's operator account. Phase 4 (#165) fronts the sidecar
-// with kube-rbac-proxy. REMOVE THIS NOTICE when #165 lands.
+// This handler signs votes as the validator's operator account.
+// API authentication is controlled by SEI_SIDECAR_AUTHN_MODE; see
+// sidecar/server/auth.go for the deployment guidance.
 
 package tasks
 
