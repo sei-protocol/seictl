@@ -4,7 +4,7 @@
 **Scope:** Replace SSH+CLI governance signing (`slanders/seienv`) with in-pod sidecar-based signing for K8s-hosted Sei validators
 **Authors:** Brandon Chatham (platform engineer); coral round dispatched kubernetes-specialist, blockchain-developer, platform-engineer
 **Last updated:** 2026-05-12
-**Revision:** rev2 — kube-rbac-proxy adoption (supersedes rev1's in-process TokenReview middleware design)
+**Revision:** rev3 — coarse-CRUD task API authorization (supersedes rev2's per-class /v0/tasks/<class>/<type> model)
 **Issues:** sei-protocol/sei-k8s-controller#219 (CRD), sei-protocol/seictl#162 (keyring backend), #163 (sign-tx tasks), #164 (CLI), #165 (authn)
 **Workstream:** governance flow migration — replace `seienv` (EC2 + SSH + `seid tx` shell-out) with `seictl` + sidecar
 
@@ -35,7 +35,7 @@ The work is decomposed into 5 issues. Phase 1 (#219 + #162) is independent and r
 - **Non-governance transactions.** Staking (`MsgDelegate`, `MsgUndelegate`), distribution (`MsgWithdrawDelegatorReward`), bank (`MsgSend`), IBC — same pattern, future issues if needed.
 - **Remote signers.** TMKMS, Horcrux, Vault, AWS KMS, HSM — `OperatorKeyringSource` is a discriminated union with `Secret` as the only initial variant; siblings are reserved as comments only.
 - **EVM-side operator transactions.** Sei's Cosmos-EVM address pairing is out of scope. EVM key material, contract ownership, EVM tx submission — not addressed here.
-- **Per-SeiNode authz granularity.** Phase 4 ships standard ClusterRoles binding caller identities to verbs on the `seinodes/tasks` virtual subresource. "This SA can vote but not submit-proposal" is deferred.
+- **Per-task-type authz granularity.** Phase 4 ships a single coarse `seinodetasks` virtual resource: identities are granted CRUD verbs (`create`, `get`, `list`) on `seinodetasks.sei.io` as a whole. "This SA can vote but not submit-proposal" is deferred — the escape hatch when it becomes a real requirement is per-`resourceNames` narrowing or splitting `seinodetasks` into multiple virtual resources, not adding a path-routed authz surface.
 - **Hot keyring rotation.** Passphrase change requires pod restart in v1. `POST /v0/admin/reload-keyring` is a v1.1 conversation.
 - **Multi-tenant cluster deployment.** Phase 1-3 ship without authn; deployment posture is single-tenant operator-controlled. Multi-tenant deployment requires Phase 4 to land first.
 - **CRD-managed operator-keyring Secret lifecycle.** The controller never creates, mutates, or deletes the Secret — operators ship it via SOPS / ESO / kubectl, same model as today's `signingKey` and `nodeKey`.
@@ -104,7 +104,7 @@ The work is decomposed into 5 issues. Phase 1 (#219 + #162) is independent and r
 | **B.** Sidecar keyring backend (envs, smoke test, factory) | seictl | #162 |
 | **C.** Sign-tx task family (gov-vote, gov-submit-proposal, gov-deposit) | seictl | #163 |
 | **D.** seictl `gov` CLI subcommands | seictl | #164 |
-| **E.** Sidecar authn + authz via kube-rbac-proxy (seictl + sei-k8s-controller) | seictl + sei-k8s-controller | #165 |
+| **E.** Sidecar authn + coarse-CRUD authz via kube-rbac-proxy (seictl + sei-k8s-controller) | seictl + sei-k8s-controller | #165 |
 
 ### Trust boundary
 
@@ -134,12 +134,12 @@ sequenceDiagram
     Op->>Op: resolve sidecar URL<br/>(headless Service DNS, https://...:8443)
     Op->>K8s: TokenRequest (Phase 4)
     K8s-->>Op: bearer token
-    Op->>Proxy: POST /v0/tasks/gov/vote<br/>{params, taskId:UUID}<br/>Authorization: Bearer ...
+    Op->>Proxy: POST /v0/tasks<br/>{type:gov-vote, params, taskId:UUID}<br/>Authorization: Bearer ...
     Proxy->>K8s: TokenReview
     K8s-->>Proxy: authenticated identity
-    Proxy->>K8s: SubjectAccessReview<br/>{verb:create, resource:seinodes/tasks, subresource:gov.vote}
+    Proxy->>K8s: SubjectAccessReview<br/>{verb:create, resource:seinodetasks, apiGroup:sei.io}
     K8s-->>Proxy: allowed
-    Proxy->>SC: POST /v0/tasks/gov/vote<br/>X-Remote-User: <caller><br/>(loopback HTTP)
+    Proxy->>SC: POST /v0/tasks<br/>X-Remote-User: <caller><br/>(loopback HTTP)
     SC->>SC: dedupe by UUID;<br/>dispatch handler;<br/>record caller on task
     SC->>SD: GET /status
     SD-->>SC: node_info.network
@@ -788,26 +788,19 @@ const (
     TaskTypeGovDeposit         TaskType = "gov-deposit"
 )
 
-// TaskClass groups task types for URL routing and authz. The class is the
-// second URL segment after /v0/tasks; the type is the third. Authz lives
-// at the class level (one ClusterRole verb per class).
-type TaskClass string
-
-const (
-    TaskClassGov TaskClass = "gov"
-)
-
-// TaskRegistration binds a (class, type) pair to its handler factory.
+// TaskRegistration binds a task type to its handler factory. Authz lives at
+// the API boundary (kube-rbac-proxy gates `create seinodetasks.sei.io` for
+// all mutating task submissions, regardless of body-typed `type`) rather
+// than at registration time.
 type TaskRegistration struct {
-    Class   TaskClass
     Type    TaskType
     Factory HandlerFactory
 }
 
 var taskRegistry = []TaskRegistration{
-    {TaskClassGov, TaskTypeGovVote, newGovVoteExecution},
-    {TaskClassGov, TaskTypeGovSubmitProposal, newGovSubmitProposalExecution},
-    {TaskClassGov, TaskTypeGovDeposit, newGovDepositExecution},
+    {TaskTypeGovVote, newGovVoteExecution},
+    {TaskTypeGovSubmitProposal, newGovSubmitProposalExecution},
+    {TaskTypeGovDeposit, newGovDepositExecution},
     // ... existing registrations migrated to this shape ...
 }
 ```
@@ -852,33 +845,40 @@ type GovDepositParams struct {
 }
 ```
 
-### API path shape (one-way door)
+### API path shape
 
-The sidecar's task API moves from a single `POST /v0/tasks` endpoint with the task type embedded in the body to a path-routed shape with the (class, type) pair in the URL. This is necessary for kube-rbac-proxy to enforce per-class authz against the K8s API server's SubjectAccessReview — the proxy's `resourceAttributes` config selects the verb/resource from URL segments, not from the request body.
+The sidecar's task API retains the body-typed shape: a single mutating endpoint `POST /v0/tasks` accepts `{type, params, taskId}` in the JSON body. kube-rbac-proxy gates the endpoint against `create seinodetasks.sei.io` as a single coarse SAR — the verb/resource pair is constant across all task types, so the proxy's `resourceAttributes` config does not need to inspect the request body or do per-class URL rewriting.
 
-| | rev1 (one path) | rev2 (class/type in path) |
+| | rev1 / rev3 (body-typed) | rev2 (path-routed, withdrawn) |
 |---|---|---|
 | Submit | `POST /v0/tasks` (type in body) | `POST /v0/tasks/<class>/<type>` |
-| Read | `GET /v0/tasks/<id>` | `GET /v0/tasks/<id>` (unchanged) |
-| List | `GET /v0/tasks` | `GET /v0/tasks` (unchanged) |
-| Examples | `POST /v0/tasks` `{type:gov-vote, ...}` | `POST /v0/tasks/gov/vote` `{...}` |
+| Read | `GET /v0/tasks/<id>` | `GET /v0/tasks/<id>` |
+| List | `GET /v0/tasks` | `GET /v0/tasks` |
+| Example body | `{type:"gov-vote", params:{...}}` | (type in path) |
 
 Routing sketch (`sidecar/server/server.go`):
 
 ```go
-mux.HandleFunc("POST /v0/tasks/{class}/{type}", func(w http.ResponseWriter, r *http.Request) {
-    class := TaskClass(r.PathValue("class"))
-    typ   := TaskType(r.PathValue("type"))
-    reg, ok := lookupRegistration(class, typ)
-    if !ok {
-        writeError(w, http.StatusNotFound, "unknown task class/type")
+mux.HandleFunc("POST /v0/tasks", func(w http.ResponseWriter, r *http.Request) {
+    var env struct {
+        Type   TaskType        `json:"type"`
+        Params json.RawMessage `json:"params"`
+        TaskID string          `json:"taskId"`
+    }
+    if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+        writeError(w, http.StatusBadRequest, err.Error())
         return
     }
-    // ... decode params, submit to engine ...
+    reg, ok := lookupRegistration(env.Type)
+    if !ok {
+        writeError(w, http.StatusNotFound, "unknown task type")
+        return
+    }
+    // ... validate params against the registration's schema, submit to engine ...
 })
 ```
 
-This shape is a **one-way door**: once shipped, third-party operator tooling will encode URL patterns. Reverting to a body-routed shape would break authz at the proxy boundary. A future need for `<verb>` (e.g. `gov-vote/dry-run`) is handled additively via query param `?action=dry-run`, not by extending the path.
+Body-typed routing keeps URL-encoded operator tooling stable (existing rev1 callers continue to work) and concentrates the authz contract in one place: a single `seinodetasks.sei.io` SAR per mutating request. Per-task-type narrowing, if it ever materializes as a real requirement, is additive via `resourceNames` on the ClusterRole or via splitting the virtual resource — neither path requires URL-shape changes.
 
 ### Caller attribution on the task record
 
@@ -1127,9 +1127,9 @@ Minimum required: `{txHash, code, height, rawLog}`. The rest are operator-debug-
 ### OpenAPI schema update
 
 Update `sidecar/api/openapi.yaml`:
-- Replace the single `POST /v0/tasks` endpoint with the path-routed shape: `POST /v0/tasks/gov/vote`, `POST /v0/tasks/gov/submit-proposal`, `POST /v0/tasks/gov/deposit`. Per-type param schema components.
+- Retain the single `POST /v0/tasks` endpoint; extend its request body discriminator to enumerate `gov-vote`, `gov-submit-proposal`, `gov-deposit` alongside any existing task types. Per-type param schema components keyed by `type`.
 - Add the result schema under the task result component, including `createdBy`.
-- Add `securitySchemes: bearerAuth` and apply to all mutating operations; document that authn is enforced by kube-rbac-proxy at the cluster boundary, not in-process.
+- Add `securitySchemes: bearerAuth` and apply to all mutating operations; document that authn is enforced by kube-rbac-proxy at the cluster boundary, not in-process, and that authz is a single coarse `create seinodetasks.sei.io` SAR independent of task `type`.
 - Add a top-level note: "Sign-tx tasks ship unauthenticated in Phase 1-3; see issue #165 for the kube-rbac-proxy enablement plan."
 - Drop any rev1 references to in-process TokenReview / `SEI_AUTHZ_*` env vars.
 
@@ -1143,7 +1143,7 @@ func (c *SidecarClient) SubmitGovSubmitProposalTask(ctx context.Context, taskID 
 func (c *SidecarClient) SubmitGovDepositTask(ctx context.Context, taskID string, p GovDepositParams) (*Task, error)
 ```
 
-Each thin wrapper around the right `POST /v0/tasks/<class>/<type>` endpoint.
+Each helper marshals the per-Msg param struct into the standard envelope (`{type: "gov-vote", params: <p>, taskId}`) and POSTs to `/v0/tasks`. No class-aware path construction; the underlying transport call is uniform across task types.
 
 ### Pre-authn warning notice
 
@@ -1155,13 +1155,15 @@ Until Phase 4 authn lands, each new handler file carries a top-of-file comment:
 // This handler accepts sign-and-broadcast requests over the sidecar's HTTP
 // API, which is unauthenticated in Phase 1-3 of the governance-flow workstream.
 // The sidecar binds 0.0.0.0:7777 in Phase 1-3; any caller with network reach
-// to that port can submit governance txs as the validator's operator account.
-// This is comparable to the seienv+SSH status-quo trust scope (anyone with
-// the SSH key has equivalent power) but the K8s network blast radius is wider.
+// to that port can submit governance txs as the validator's operator account
+// by POSTing {type, params} to /v0/tasks. This is comparable to the
+// seienv+SSH status-quo trust scope (anyone with the SSH key has equivalent
+// power) but the K8s network blast radius is wider.
 //
 // Phase 4 (#165) fronts the sidecar with a kube-rbac-proxy sidecar container
-// that terminates TLS on 0.0.0.0:8443, runs TokenReview + SubjectAccessReview
-// against the cluster API server, and proxies to the sidecar bound on
+// that terminates TLS on 0.0.0.0:8443, runs TokenReview + a single coarse
+// SubjectAccessReview (create seinodetasks.sei.io) against the cluster API
+// server regardless of task type, and proxies to the sidecar bound on
 // 127.0.0.1:7777. The sidecar then trusts X-Remote-User on the loopback ingress.
 // REMOVE THIS NOTICE when #165 lands.
 ```
@@ -1220,6 +1222,8 @@ func resolveSidecarURL(ctx context.Context, dyn dynamic.Interface, name, ns stri
 ```
 
 Operators running seictl from outside the cluster override via `--sidecar-url`, or use `kubectl port-forward` separately. The default in-cluster pattern is the recommended path.
+
+In all phases, the CLI submits tasks via body-typed `POST /v0/tasks` with `{type, params, taskId}` — the URL is invariant across `gov-vote`, `gov-submit-proposal`, and `gov-deposit`. The CLI never URL-encodes the task type; that lives in the JSON body.
 
 ### Authentication (Phase 4)
 
@@ -1329,10 +1333,14 @@ The rev1 design landed authn + a static-allowlist authz layer inside the seictl 
 │  ┌──────────────────────────┐                │                          │
 │  │ kube-rbac-proxy          │ ◄────────  HTTPS :8443 (TLS, cert-manager)│
 │  │                          │ ───────────────┘                          │
-│  │  /v0/* → SAR config      │                                           │
-│  │   verb=create/get/list   │                                           │
-│  │   resource=seinodes/tasks│                                           │
-│  │   subresource=gov.vote   │                                           │
+│  │  POST /v0/tasks →        │                                           │
+│  │   single coarse SAR:     │                                           │
+│  │   verb=create            │                                           │
+│  │   apiGroup=sei.io        │                                           │
+│  │   resource=seinodetasks  │                                           │
+│  │                          │                                           │
+│  │  GET /v0/tasks*          │                                           │
+│  │   → bypass (read paths)  │                                           │
 │  │                          │                                           │
 │  │  passes X-Remote-User    │                                           │
 │  │  passes X-Remote-Group   │ ───► HTTP loopback                        │
@@ -1344,32 +1352,32 @@ The rev1 design landed authn + a static-allowlist authz layer inside the seictl 
 │  │  binds 127.0.0.1 only    │                                           │
 │  │  trusts X-Remote-User    │                                           │
 │  │  on loopback ingress     │                                           │
+│  │  body-typed dispatch     │                                           │
+│  │   on {type, params}      │                                           │
 │  └──────────────────────────┘                                           │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Auth flow
 
-1. CLI presents `Authorization: Bearer <token>` to `https://<pod>:8443/v0/tasks/gov/vote`.
+1. CLI presents `Authorization: Bearer <token>` to `https://<pod>:8443/v0/tasks` with `{type: "gov-vote", params, taskId}` in the body.
 2. kube-rbac-proxy strips and validates via `POST /apis/authentication.k8s.io/v1/tokenreviews`.
-3. On authenticated success, the proxy maps the URL path to `(group, resource, subresource, verb)` via its `resourceAttributes` config, runs `POST /apis/authorization.k8s.io/v1/subjectaccessreviews`, and proceeds only if `status.allowed=true`.
+3. On authenticated success, the proxy runs a single coarse `POST /apis/authorization.k8s.io/v1/subjectaccessreviews` against constant `resourceAttributes` (`apiGroup=sei.io`, `resource=seinodetasks`, `verb=create`) — independent of body-typed task `type` — and proceeds only if `status.allowed=true`.
 4. The proxy adds `X-Remote-User`, `X-Remote-Group` (multi-valued), and `X-Remote-Extra-*` headers to the proxied request.
 5. The proxy forwards to `http://127.0.0.1:7777` over loopback. The sidecar reads `X-Remote-User`, records it on the task, and serves the request.
 6. Read-only endpoints (`GET /v0/tasks*`, `/v0/healthz`, `/v0/livez`) are configured `--allow-paths` / `--ignore-paths` in the proxy so they bypass SAR.
 
 ### URL convention
 
-`POST /v0/tasks/<class>/<type>` (defined in Component C). Class drives the SAR `subresource`:
+`POST /v0/tasks` (defined in Component C). All mutating task submissions route through one URL with `{type, params, taskId}` in the body. The proxy's `resourceAttributes` are constant per HTTP method, not derived from URL segments:
 
-| Path | SAR verb | SAR resource | SAR subresource |
+| Path | SAR verb | SAR apiGroup | SAR resource |
 |---|---|---|---|
-| `POST /v0/tasks/gov/vote` | `create` | `seinodes/tasks` | `gov.vote` |
-| `POST /v0/tasks/gov/submit-proposal` | `create` | `seinodes/tasks` | `gov.submitproposal` |
-| `POST /v0/tasks/gov/deposit` | `create` | `seinodes/tasks` | `gov.deposit` |
-| `GET /v0/tasks` | (bypass) | — | — |
-| `GET /v0/tasks/{id}` | (bypass) | — | — |
+| `POST /v0/tasks` | `create` | `sei.io` | `seinodetasks` |
+| `GET /v0/tasks` | `list` | `sei.io` | `seinodetasks` |
+| `GET /v0/tasks/{id}` | `get` | `sei.io` | `seinodetasks` |
 
-The `seinodes/tasks` "resource" is a virtual subresource — there's no real K8s resource by that name. SAR doesn't require one to exist; it's a label that ClusterRoles can grant. Using `seinodes/tasks` (rather than something CRD-specific) keeps the authz surface stable across SeiNode kind extensions.
+The `seinodetasks` "resource" is a virtual K8s resource — there's no real CRD by that name. SAR doesn't require one to exist; it's a label that ClusterRoles can grant. Using a flat `seinodetasks.sei.io` resource (rather than a `seinodes/tasks` subresource shape) keeps the authz surface aligned with the actual sidecar API contract (one endpoint per CRUD verb) and avoids implying a parent–subresource semantic that the sidecar doesn't enforce.
 
 ### resourceAttributes config
 
@@ -1384,25 +1392,22 @@ metadata:
 data:
   config.yaml: |
     authorization:
-      rewrites:
-        byHTTPPath:
-          path: "/v0/tasks/{class}/{type}"
       resourceAttributes:
-        apiGroup: "sei.network"
-        resource: "seinodes/tasks"
-        subresource: "{class}.{type}"
+        apiGroup: "sei.io"
+        resource: "seinodetasks"
         namespace: "sei-validators"
         name: "my-validator"
-        verb: "create"
+        # verb is derived from HTTP method by the proxy:
+        #   POST → create, GET (list path) → list, GET (item path) → get
       allowedPaths:
         - "/v0/healthz"
         - "/v0/livez"
         - "/v0/metrics"
-        - "/v0/tasks"           # GET list bypass
-        - "/v0/tasks/*"         # GET by-id bypass; mutating POST handled by resourceAttributes above
 ```
 
-(The exact `allowedPaths` vs. `ignorePaths` mechanics depend on kube-rbac-proxy version — pin a recent release and verify the read-bypass path during Phase 4 implementation.)
+The proxy does NOT do URL-segment-driven authz rewrites in rev3 — there is no `byHTTPPath` block, no `{class}`/`{type}` substitution. Every `POST /v0/tasks` resolves to the same SAR: `create seinodetasks.sei.io` scoped to the SeiNode's namespace and name.
+
+(The exact `allowedPaths` vs. `ignorePaths` mechanics depend on kube-rbac-proxy version — pin a recent release and verify the read-bypass and method-to-verb mapping during Phase 4 implementation. If the chosen kube-rbac-proxy release does not derive verb from HTTP method automatically, the ConfigMap above gains a `byHTTPVerb` rewrite that maps `POST→create`, `GET→get/list` — the resource/apiGroup remain constant.)
 
 ### TLS cert source
 
@@ -1514,33 +1519,24 @@ func CallerFromRequest(r *http.Request) string {
 
 ### RBAC manifests
 
-Two standard ClusterRoles ship with the controller chart. Operators bind them to identities via ClusterRoleBinding manifests.
+One standard ClusterRole ships with the controller chart. Operators bind it to identities (controller SA, operator humans, fleet automation) via ClusterRoleBinding manifests. The coarse grant is intentional — see Security posture / Coarse-CRUD authz trade-off.
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: sei-validator-governance-operator
+  name: sei-validator-task-submitter
 rules:
-  - apiGroups: ["sei.network"]
-    resources: ["seinodes/tasks"]
-    resourceNames: []   # unrestricted in v1; per-validator narrowing is operator-driven
-    verbs: ["create", "get", "list"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: sei-validator-lifecycle-controller
-rules:
-  - apiGroups: ["sei.network"]
-    resources: ["seinodes/tasks"]
+  - apiGroups: ["sei.io"]
+    resources: ["seinodetasks"]
+    resourceNames: []   # unrestricted in v1; per-validator narrowing is operator-driven via additional bindings
     verbs: ["create", "get", "list"]
 ```
 
 Example bindings:
 
 ```yaml
-# Bind the sei-k8s-controller's own SA so it can submit non-gov lifecycle tasks.
+# Bind the sei-k8s-controller's own SA so it can submit lifecycle tasks (validate-keyring, etc).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -1551,23 +1547,25 @@ subjects:
     namespace: sei-k8s-controller-system
 roleRef:
   kind: ClusterRole
-  name: sei-validator-lifecycle-controller
+  name: sei-validator-task-submitter
   apiGroup: rbac.authorization.k8s.io
 ---
 # Bind an SSO-derived group for human operators.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: governance-operators-binding
+  name: validator-operators-binding
 subjects:
   - kind: Group
-    name: validator-governance-operators
+    name: validator-operators
     apiGroup: rbac.authorization.k8s.io
 roleRef:
   kind: ClusterRole
-  name: sei-validator-governance-operator
+  name: sei-validator-task-submitter
   apiGroup: rbac.authorization.k8s.io
 ```
+
+A bound identity gains the ability to submit any task type — governance, lifecycle, or future families — against any SeiNode (or, with `resourceNames` narrowing, against an enumerated subset). Per-task-type segregation is not represented in RBAC; it is enforced (when needed) by humans choosing which SeiNodes to bind, and by the audit trail surfacing what each caller did.
 
 ### AWS IAM Identity Center → EKS integration (Path A: EKS access entries)
 
@@ -1581,10 +1579,10 @@ Setup:
    aws eks create-access-entry \
      --cluster-name <cluster> \
      --principal-arn arn:aws:iam::<acct>:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_ValidatorOperator_<hash> \
-     --kubernetes-groups validator-governance-operators \
+     --kubernetes-groups validator-operators \
      --type STANDARD
    ```
-3. **ClusterRoleBinding** (above) binds the `validator-governance-operators` group to the `sei-validator-governance-operator` ClusterRole.
+3. **ClusterRoleBinding** (above) binds the `validator-operators` group to the `sei-validator-task-submitter` ClusterRole.
 
 The flow at request time:
 
@@ -1597,7 +1595,7 @@ client-go presents the token to kube-rbac-proxy
   → kube-rbac-proxy → API server TokenReview
     → API server resolves the access entry → username + groups
   → kube-rbac-proxy → API server SubjectAccessReview
-    → groups match validator-governance-operators → ClusterRole allows
+    → groups match validator-operators → ClusterRole allows
   → proxy forwards to sidecar with X-Remote-User + X-Remote-Group set
 ```
 
@@ -1608,7 +1606,7 @@ The username surfaced as `X-Remote-User` is the full assumed-role ARN; this is w
 | Phase | sidecar bind | proxy installed? | TLS | Authn | Authz | Caller attribution |
 |---|---|---|---|---|---|---|
 | 1-3 (today) | `0.0.0.0:7777` plain HTTP | no | none | none | none | none |
-| 4 (#165) | `127.0.0.1:7777` plain HTTP | yes (sidecar container) | cert-manager `:8443` | TokenReview at proxy | SubjectAccessReview at proxy | `X-Remote-User` recorded on task |
+| 4 (#165) | `127.0.0.1:7777` plain HTTP | yes (sidecar container) | cert-manager `:8443` | TokenReview at proxy | Single coarse `create seinodetasks.sei.io` SAR at proxy | `X-Remote-User` recorded on task |
 
 The Phase 4 transition is per-SeiNode and opt-in: setting `spec.sidecar.tls` flips the bind, adds the proxy container, and emits the Certificate + ConfigMap. SeiNodes without `spec.sidecar.tls` continue on the Phase 1-3 posture until operators migrate them. There is no hidden defaulting; the operator chooses by adding the field.
 
@@ -1622,6 +1620,16 @@ When Phase 4 lands, the following rev1 surfaces are deleted (not deprecated):
 - Pre-authn warning notices in Component C handler files and the README
 
 The controller's `+kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create` marker also goes away — the controller's own SA no longer needs `tokenreviews:create`. That permission moves to the proxy's own SA.
+
+rev3 additionally drops the rev2-only surfaces that the path-routed authz model dragged in but the coarse-CRUD model does not need:
+
+- The per-class `byHTTPPath` rewrite block in the kube-rbac-proxy ConfigMap.
+- The `seinodes/tasks` subresource-shaped SAR and the matching `subresource: {class}.{type}` template — replaced by a flat `seinodetasks.sei.io` resource with verb derived from HTTP method.
+- The two per-class ClusterRoles (`sei-validator-governance-operator`, `sei-validator-lifecycle-controller`) — replaced by a single `sei-validator-task-submitter` ClusterRole.
+- The `TaskClass` Go type and the `(class, type)` registration tuple in `sidecar/engine/types.go` — replaced by a flat `TaskType`-only registry.
+- The path-routed `POST /v0/tasks/<class>/<type>` URL family — reverted to body-typed `POST /v0/tasks` (rev1 shape, retained).
+
+None of these rev2 surfaces shipped in a released chart; this is design-only churn.
 
 ### RBAC for the proxy's own SA
 
@@ -1654,7 +1662,7 @@ A `ClusterRoleBinding` from this role to the proxy's SA ships with the controlle
 | Operator laptop | No (Phase 4: bearer token from kubeconfig exec credential) | No | No | No (uses kubeconfig identity) | n/a (client) |
 | seid main container | **Yes** (consensus) | **Yes** (P2P) | No | Yes (kubelet default) | n/a (no exposed mgmt API) |
 | seictl sidecar | No | No | **Yes** (governance) | Yes (kubelet default; unused in Phase 4) | No (trusts `X-Remote-User` from loopback) |
-| kube-rbac-proxy | No | No | No | Yes (used for TokenReview / SAR) | **Yes** (authoritative authn/authz front door) |
+| kube-rbac-proxy | No | No | No | Yes (used for TokenReview / SAR) | **Yes** (authoritative authn + single coarse `create seinodetasks.sei.io` SAR) |
 | Bootstrap pod | No | No | No | Yes (kubelet default) | n/a (no exposed mgmt API) |
 
 Key separation rationale:
@@ -1676,20 +1684,42 @@ Mitigations:
 1. **Bind check at startup.** The sidecar reads its own listen address and refuses to start if `SEI_SIDECAR_LOOPBACK_ONLY=true` resolved to a non-loopback bind (e.g., due to a malformed override). The check is an assertion, not a config hint.
 2. **No `hostNetwork`.** The pod-spec builder hard-codes `hostNetwork: false` (it's not configurable). With `hostNetwork: true`, `127.0.0.1:7777` would be node-loopback and reachable from any other pod scheduled on that node — catastrophic.
 3. **shareProcessNamespace stays false** for separate reasons (see "Deferred" subsection below).
-4. **E2E test.** Phase 4 includes a regression test that: (a) starts the pod, (b) curls `https://<pod>:8443/v0/tasks/gov/vote` with a forged `X-Remote-User: kubernetes-admin` header and no bearer token, (c) asserts 401 from the proxy, (d) curls `http://<pod>:7777` from outside the pod and asserts connection refused.
+4. **E2E test.** Phase 4 includes a regression test that: (a) starts the pod, (b) curls `https://<pod>:8443/v0/tasks` with body `{"type":"gov-vote",...}` and a forged `X-Remote-User: kubernetes-admin` header and no bearer token, (c) asserts 401 from the proxy, (d) curls `http://<pod>:7777` from outside the pod and asserts connection refused.
+
+### Coarse-CRUD authz trade-off
+
+rev3 collapses the rev2 per-class authz surface (`subresource: gov.vote`, `gov.submitproposal`, `gov.deposit`, plus separate ClusterRoles per class) into a single coarse virtual resource: `create seinodetasks.sei.io`. A bound identity that can submit any sign-tx task can submit every sign-tx task. This is a deliberate YAGNI simplification with the following trade-off profile:
+
+**What we lose:**
+- No RBAC-level segregation between governance task types. An identity with `create seinodetasks.sei.io` can vote, submit proposals, and deposit; the rev2 path-routed model could grant vote-only without submit-proposal-only.
+- No RBAC-level segregation between governance and future non-governance task families. When `staking-delegate` or `withdraw-rewards` task types land, the same coarse ClusterRole grants them too, unless we split the virtual resource at that point.
+- The audit trail (sidecar log + `createdBy` on task record) becomes the primary mechanism for detecting "this caller used vote authority when their role was supposed to be propose-only" — RBAC won't catch it.
+
+**What we gain:**
+- One ClusterRole, one ClusterRoleBinding pattern, one SAR per request — the operator UX for granting access is `kubectl apply` against one role binding, not a per-task-type matrix.
+- The kube-rbac-proxy ConfigMap has no URL-path-driven rewrites; the SAR template is constant. This eliminates a class of configuration bugs (typo in `byHTTPPath`, mismatch between sidecar URL and proxy rewrite, escape-hatch URL shapes bypassing authz) that the rev2 model was structurally exposed to.
+- The sidecar API contract is one body-typed endpoint, not a path-routed family. Third-party operator tooling encodes one URL, not N.
+- Task-type addition is a sidecar-only change (new handler factory in the registry); RBAC doesn't move.
+
+**Escape hatches if per-task-type authz becomes real:**
+1. **Per-`resourceNames` narrowing.** A future ClusterRole can grant `seinodetasks.sei.io` only against named SeiNodes — useful for "this SA can only operate on dev-validators" but not for "this SA can vote but not propose."
+2. **Split the virtual resource.** Introduce `seinodegovtasks.sei.io` and `seinodelifecycletasks.sei.io` as distinct virtual resources; the sidecar examines the body-typed `type` and routes to the appropriate SAR. Requires reverting to per-request SAR rewriting (closer to the rev2 model, but with cleaner shape).
+3. **External admission-style policy.** A Kyverno or OPA layer at the kube-rbac-proxy admission point inspects the request body and rejects per-policy. Heavyweight; only worth it if the policy language gives us something RBAC fundamentally can't.
+
+The expected trigger for revisiting this trade-off is the first concrete operational requirement that "identity X must be able to do task type A but not task type B against the same SeiNode." That requirement does not exist today, hasn't existed in seienv's operational history, and is not blocking any planned workstream. rev3 ships coarse; if it's wrong, escape hatch 2 is the cleanest path forward.
 
 ### SSH-to-K8s trust scope comparison
 
-| Aspect | seienv (today) | sidecar (Phase 1-3) | sidecar (Phase 4) |
+| Aspect | seienv (today) | sidecar (Phase 1-3) | sidecar (Phase 4, rev3) |
 |---|---|---|---|
-| Who can sign | Anyone with the SSH key | Anyone with network reach to pod:7777 | Anyone whose `aws sso login` → EKS access entry → ClusterRoleBinding chain authorizes `create seinodes/tasks/gov.*` |
+| Who can sign | Anyone with the SSH key | Anyone with network reach to pod:7777 | Anyone whose `aws sso login` → EKS access entry → ClusterRoleBinding chain authorizes `create seinodetasks.sei.io` on the target SeiNode's namespace/name |
 | Network blast radius | Reachable from operator subnet | Reachable from any in-cluster pod | TLS terminator at `:8443` requires valid bearer token + SAR-allowed identity; cluster network reach is necessary but far from sufficient |
 | Key custody | Operator laptop SSH key + EC2 host keyring | Pod-mounted Secret only | Same (pod-mounted Secret only); operator-side credential is the AWS SSO session, never long-lived |
-| Caller attribution | SSH user (`ubuntu`); shared key | None (anonymous) | Full assumed-role ARN from EKS access entry; persisted on the task record and emitted in structured audit logs |
-| Audit trail | EC2 `auth.log` + `seid` stdout on host | sidecar engine task store (no caller) | kube-rbac-proxy access log (per request) + sidecar audit log (per mutation) + task store `createdBy` |
-| Authz revocation | Rotate the SSH key | n/a | `kubectl delete clusterrolebinding ...` or revoke the SSO permission-set assignment in IAM Identity Center |
+| Caller attribution | SSH user (`ubuntu`); shared key | None (anonymous) | Full assumed-role ARN from EKS access entry; persisted on the task record (with body-typed `type`) and emitted in structured audit logs — RBAC grants `seinodetasks.sei.io` coarsely, but the audit trail preserves per-call task-type granularity |
+| Audit trail | EC2 `auth.log` + `seid` stdout on host | sidecar engine task store (no caller) | kube-rbac-proxy access log (per request) + sidecar audit log including `{caller, taskType, params-summary}` per mutation + task store `createdBy` |
+| Authz revocation | Rotate the SSH key | n/a | `kubectl delete clusterrolebinding ...` (per identity) or revoke the SSO permission-set assignment in IAM Identity Center (per principal); revocation is identity-scoped — there is no per-task-type revocation in rev3 (see Coarse-CRUD authz trade-off) |
 
-**Phase 1-3 ships with comparable trust scope to today** (cluster network reach instead of SSH key). Phase 4 materially improves on every row — most notably revocation, which moves from "rotate the key and redeploy seienv config" to a single `kubectl` command or an SSO console click.
+**Phase 1-3 ships with comparable trust scope to today** (cluster network reach instead of SSH key). Phase 4 materially improves on every row — most notably revocation, which moves from "rotate the key and redeploy seienv config" to a single `kubectl` command or an SSO console click. The one dimension where rev3's coarse-CRUD model is strictly weaker than a per-task-type model is "revoke vote authority without revoking submit-proposal authority for the same identity" — see the next subsection.
 
 ### What kube-rbac-proxy does NOT protect
 
@@ -1708,6 +1738,8 @@ If an operator exposes any of these off-pod (custom Service, NodePort, etc.), ku
 
 Boundary statement: the proxy exists to gate the management API surface that the sidecar adds to a SeiNode pod — the `/v0/tasks/...` endpoints that submit signed transactions or mutate task state. The chain's own protocols (P2P, RPC, JSON-RPC, gRPC) have their own trust models and are explicitly out of scope for this design. Hardening those surfaces is independent and tracked separately if/when the platform exposes them.
 
+Additionally: the proxy does NOT inspect the request body. The coarse-CRUD authz check (`create seinodetasks.sei.io`) is decided before the JSON body is parsed; per-task-type policy (e.g., "block all `gov-submit-proposal` from non-emergency callers during a maintenance window") is not enforceable at the proxy layer and would have to be implemented either in the sidecar handler logic or via a body-aware admission tier in front of the proxy. Neither is in scope for Phase 4.
+
 ### AWS IAM Identity Center threat model
 
 Phase 4 introduces AWS SSO as the operator-credential issuance path on EKS clusters. Compromise scenarios:
@@ -1718,7 +1750,7 @@ Phase 4 introduces AWS SSO as the operator-credential issuance path on EKS clust
 | Compromised IAM Identity Center directory user | The user's permission-set assignments, until directory account is disabled. | Standard IAM Identity Center directory hygiene; out of scope here |
 | Compromised AWS root in the cluster account | Total. Attacker can rewrite access entries, mint EKS tokens, edit ClusterRoleBindings. | Out of scope — AWS account compromise is a per-account incident-response problem |
 | Compromised K8s admin (`system:masters`) | Total within the cluster. Can sign anything via direct kubectl exec on the sidecar pod. | This is the standard K8s admin trust assumption; Phase 4 doesn't try to defend against it |
-| Compromised `kube-rbac-proxy` container image | Per-pod: attacker can fabricate `X-Remote-User` for any incoming request, but is still bound by the sidecar's chain-confusion guard, idempotency dedupe, and keyring presence. Cannot exfiltrate the operator keyring (no mount). | Pin proxy image digest; supply-chain provenance; cosign / sigstore verification at admission time (cluster-level concern) |
+| Compromised `kube-rbac-proxy` container image | Per-pod: attacker can fabricate `X-Remote-User` for any incoming request and submit any task type — the coarse-CRUD authz boundary does not distinguish vote from submit-proposal — but is still bound by the sidecar's chain-confusion guard, idempotency dedupe, and keyring presence. Cannot exfiltrate the operator keyring (no mount). Cannot mint new on-chain identities (no keys). | Pin proxy image digest; supply-chain provenance; cosign / sigstore verification at admission time (cluster-level concern) |
 | Stolen SSO refresh token (in browser/cookie) | Allows fresh SSO logins until revoked. Same as "compromised laptop with active session" effectively. | Short SSO session TTL; immediate revocation via IAM Identity Center on incident |
 
 The single most important defensive property: **revocation is a single `kubectl delete` or SSO console click**, not a key rotation. This is the structural argument for moving off seienv-style shared SSH keys.
@@ -1739,7 +1771,11 @@ The kube-rbac-proxy container ships with the same security context (Component E)
 
 ### Slashing risk
 
-Governance-tx signing is **not** double-sign-able in the consensus sense — voting twice on the same proposal is rejected by the chain (proposer-vote uniqueness), not slashed. The chain-confusion guard prevents cross-chain signature exposure. The chief remaining operational risk is "submit-proposal with wrong upgrade height" which is a manual-input bug, not a protocol-level slashing event. Phase 4's caller attribution makes such operator errors investigable after the fact — the audit log records which SSO-derived identity submitted the bad proposal, so the operator team can triage without guessing.
+Governance-tx signing is **not** double-sign-able in the consensus sense — voting twice on the same proposal is rejected by the chain (proposer-vote uniqueness), not slashed. The chain-confusion guard prevents cross-chain signature exposure. The chief remaining operational risk is "submit-proposal with wrong upgrade height" which is a manual-input bug, not a protocol-level slashing event.
+
+The rev3 coarse-CRUD authz model marginally widens the operational-error blast radius compared to a per-task-type model: an identity intended to vote (a frequent, low-stakes action) is RBAC-equivalent to an identity intended to submit upgrade proposals (a rare, high-stakes action). The defensive surface is layered: (1) operators bind the `sei-validator-task-submitter` ClusterRole only to identities trusted with the full task surface; (2) `submit-proposal` requires explicit non-default CLI flags (`--upgrade-name`, `--upgrade-height`, etc.) so the typo footgun is shaped — operators don't accidentally submit proposals when they meant to vote; (3) the audit trail records `{caller, taskType, params-summary}` per mutation so post-hoc detection of "this identity used the wrong authority" is fast.
+
+Phase 4's caller attribution makes such operator errors investigable after the fact — the audit log records which SSO-derived identity submitted the bad proposal, so the operator team can triage without guessing. If the coarse-CRUD model produces a "near miss" in practice (a propose-capable identity casts a wrong vote, or vice versa) and the per-task-type-segregation argument starts paying its rent, the escape hatches documented in *Coarse-CRUD authz trade-off* are the path forward.
 
 ### Deferred: shareProcessNamespace / sidecar-seid UID separation
 
@@ -1866,8 +1902,8 @@ Phase 3 (depends on #163, ~1 week):
 
 Phase 4 (final hardening, ~1-2 weeks; work spans both repos):
 - **#165** (seictl + sei-k8s-controller):
-  - seictl side: URL path refactor `POST /v0/tasks/<class>/<type>`; sidecar binds `127.0.0.1:7777` when `SEI_SIDECAR_LOOPBACK_ONLY=true`; reads `X-Remote-User` from loopback ingress and records caller attribution on the task; CLI honors HTTPS sidecar URL + bearer token from kubeconfig; removal of pre-authn warning notices.
-  - sei-k8s-controller side: `SidecarTLSSpec` CRD field; pod-spec emits the kube-rbac-proxy container with cert-manager-issued TLS; emits the Certificate resource and the rbac-proxy ConfigMap; Service grows the `:8443` port; standard ClusterRoles (`sei-validator-governance-operator`, `sei-validator-lifecycle-controller`) ship in the chart; AWS IAM Identity Center → EKS access entries integration documented.
+  - seictl side: retain body-typed `POST /v0/tasks` (no URL path refactor — rev2's per-class shape was rejected in favor of coarse-CRUD authz); sidecar binds `127.0.0.1:7777` when `SEI_SIDECAR_LOOPBACK_ONLY=true`; reads `X-Remote-User` from loopback ingress and records caller attribution on the task alongside body-typed `type`; CLI honors HTTPS sidecar URL + bearer token from kubeconfig; removal of pre-authn warning notices.
+  - sei-k8s-controller side: `SidecarTLSSpec` CRD field; pod-spec emits the kube-rbac-proxy container with cert-manager-issued TLS; emits the Certificate resource and the rbac-proxy ConfigMap with constant `resourceAttributes` (`apiGroup: sei.io`, `resource: seinodetasks`, verb derived from HTTP method, no `byHTTPPath` rewrites); Service grows the `:8443` port; one standard ClusterRole (`sei-validator-task-submitter`) ships in the chart; AWS IAM Identity Center → EKS access entries integration documented.
 
 ---
 
@@ -1977,13 +2013,28 @@ Considered: one Secret with `keyring-file/*.info`, `keyring-file/*.address`, and
 
 Two separate Secrets is operationally a small cost; architecturally it preserves the directory-vs-env projection contract cleanly.
 
+### Per-class authz at the task API
+
+The rev2 design landed a path-routed sidecar API (`POST /v0/tasks/<class>/<type>`) with per-class SAR subresources (`seinodes/tasks` + `subresource: gov.vote`/`gov.submitproposal`/`gov.deposit`) and two ClusterRoles (`sei-validator-governance-operator`, `sei-validator-lifecycle-controller`). The kube-rbac-proxy ConfigMap carried a `byHTTPPath` rewrite that extracted `{class}`/`{type}` segments from the URL and templated them into the SAR call. The motivating premise: RBAC should be able to express "this SA can vote but not submit-proposal."
+
+The Go type system gained a `TaskClass` type alongside `TaskType`; the engine registry became a `[]TaskRegistration{Class, Type, Factory}` tuple. Authn was the same as rev3 (TokenReview at the proxy); authz fanned out across one ClusterRole per class.
+
+**Rejected** in favor of the rev3 coarse-CRUD model because:
+
+- **No driver.** No concrete operational requirement existed for per-task-type RBAC segregation. seienv had no such segregation in its operational history; no escalation, no postmortem, no compliance hook pointed at it. The premise was "we might want it eventually," which is the YAGNI shape.
+- **One-way door cost.** Path-routed URLs are a one-way door (the rev2 doc explicitly called this out). Once shipped, third-party operator tooling encodes patterns and the URL contract becomes load-bearing. Coarse-CRUD body-typed routing is a no-way-door — adding per-task-type authz later only requires changes to the proxy's SAR template (or the sidecar's policy logic), not URL surgery.
+- **ConfigMap-rewrite fragility.** The rev2 model required `byHTTPPath: /v0/tasks/{class}/{type}` templating in the proxy config. Mistakes there are silent — a typo causes SAR queries against `seinodes/tasks` + the wrong `subresource`, which the API server happily reports as "not allowed," indistinguishable from a legitimate deny. The coarse model has no template at all; the SAR is constant per HTTP method.
+- **RBAC opacity.** "Can this SA vote?" in the rev2 model resolved to "does the SA have `create seinodes/tasks` with `subresource: gov.vote`?" — `kubectl auth can-i create seinodes/tasks --subresource=gov.vote -n <ns> -as <sa>` works but is not the shape operators reach for. Coarse-CRUD resolves to a familiar `kubectl auth can-i create seinodetasks.sei.io`.
+- **TaskClass extension drag.** Each new task family (lifecycle, staking, IBC, future EVM operator txs) required a new ClusterRole, a new entry in the registration tuple, a new chart deliverable, and a new operator binding decision. Coarse-CRUD treats them all as `seinodetasks.sei.io` and lets the bound identity submit them.
+
+The escape hatches for per-task-type authz (per-`resourceNames` narrowing, splitting the virtual resource, external admission policy — see *Coarse-CRUD authz trade-off* in Security posture) are available later if a concrete requirement materializes. None is more expensive to introduce additively than rev2's path-routed model was to ship preemptively.
+
 ---
 
 ## Open questions
 
 - **cert-manager mandate vs. self-signed fallback.** Phase 4 currently refuses to enable TLS without a cert-manager `Issuer`. Revisit if airgapped or single-node operator deployments surface as a real use case; the cleanest extension is an `Issuer` of `kind: SelfSignedIssuer` from cert-manager itself, but that still requires cert-manager.
 - **IAM Identity Center OIDC integration path.** An alternative to EKS access entries is configuring the cluster to trust IAM Identity Center's OIDC issuer directly. Defer until a concrete cluster setup requires it; current recommendation is Path A (access entries) only.
-- **URL path third segment shape.** The current rev2 shape is `/v0/tasks/<class>/<type>` with no per-type verb segment. If a future task family needs `<verb>` (e.g. `gov-vote/dry-run`), the additive escape hatch is a query param `?action=dry-run`, not a fourth path segment — extending the path would require revisiting kube-rbac-proxy's `resourceAttributes` rewrites.
 - **AWS IAM Identity Center session TTL recommendation.** IAM Identity Center's default permission-set session is 8 hours. Should the validator-operator permission set cap at 4 hours? Tradeoff is operator UX (re-login frequency) vs. blast-radius window on a compromised laptop. Open for review with the security team.
 - **Test backend allowlist.** Should `SEI_KEYRING_BACKEND=test` be allowed in production? Recommendation: refuse if `SEI_CHAIN_ID` matches a known mainnet pattern (e.g., `pacific-1`, `arctic-1`). Implementation detail for #162 reviewers.
 - **`UpgradeInfo` semantics for binary handoff.** Sei-specific: does the chain consume `Plan.Info` to download new binaries (e.g., via cosmovisor)? Confirm and document the expected format (URL? structured JSON?) in `docs/gov.md`.
@@ -1994,7 +2045,7 @@ Two separate Secrets is operationally a small cost; architecturally it preserves
 ## References
 
 ### Coral session
-This design synthesizes a coral round (2026-05-11) with kubernetes-specialist, blockchain-developer, and platform-engineer specialists; rev2 incorporates a follow-up coral round (2026-05-12) with kubernetes-specialist and security-specialist on the Phase 4 authn architecture.
+This design synthesizes a coral round (2026-05-11) with kubernetes-specialist, blockchain-developer, and platform-engineer specialists; rev2 incorporates a follow-up coral round (2026-05-12) with kubernetes-specialist and security-specialist on the Phase 4 authn architecture; rev3 incorporates a further pass with the same two specialists collapsing the Phase 4 authz surface to coarse CRUD and reverting the URL contract to body-typed (and correcting the virtual-resource apiGroup to match the actual production CRDs).
 
 ### GitHub issues
 - sei-protocol/sei-k8s-controller#219 — CRD `validator.operatorKeyring`
@@ -2052,3 +2103,4 @@ This design synthesizes a coral round (2026-05-11) with kubernetes-specialist, b
 
 - 2026-05-11 — Initial draft (coral synthesis)
 - 2026-05-12 — rev2: replace in-process TokenReview middleware (Component E) with kube-rbac-proxy sidecar pattern. URL path refactor (`/v0/tasks/<class>/<type>`). Sidecar binds 127.0.0.1; rbac-proxy fronts on 0.0.0.0:8443 with cert-manager-issued TLS. Caller attribution via X-Remote-User headers. AWS IAM Identity Center → EKS access entries → K8s RBAC. shareProcessNamespace gap remains in #221, reasserted in Security posture. SEI_AUTHZ_ENABLED/SEI_AUTHZ_ALLOWED_CALLERS env vars deleted (not deprecated).
+- 2026-05-12 — rev3: YAGNI simplification of the rev2 authz surface. Collapse per-class authz to coarse CRUD on a single virtual resource (`seinodetasks.sei.io`). Revert the URL contract from `POST /v0/tasks/<class>/<type>` back to body-typed `POST /v0/tasks` with `{type, params}`. Drop the `TaskClass` Go type and the (class, type) registration tuple. Replace the two per-class ClusterRoles (`sei-validator-governance-operator`, `sei-validator-lifecycle-controller`) with a single `sei-validator-task-submitter` role. Drop the kube-rbac-proxy `byHTTPPath` rewrite; SAR `resourceAttributes` are constant per HTTP method. Trade-off documented in Security posture → *Coarse-CRUD authz trade-off*; rejection rationale captured in Alternatives → *Per-class authz at the task API*. Open question on URL-path third-segment shape resolved (eliminated by adoption). Correctness fix: globally rename the K8s API group on the virtual resource from the rev2 placeholder `sei.network` to the actual production apiGroup `sei.io` to match `api/v1alpha1/groupversion_info.go:3` (`+groupName=sei.io`) — rev2's `sei.network` would have caused every Phase 4 SAR to deny silently.
