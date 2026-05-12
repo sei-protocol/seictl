@@ -28,10 +28,10 @@ type fakeTxClient struct {
 	sequence      uint64
 	accountErr    error
 
-	broadcastResp  *sdk.TxResponse
-	broadcastErr   error
-	broadcasts     int
-	lastTxBytes    []byte
+	broadcastResp *sdk.TxResponse
+	broadcastErr  error
+	broadcasts    int
+	lastTxBytes   []byte
 
 	// queryDefault returns canned data for any hash (mirroring production
 	// QueryTx). Nil returns not-found.
