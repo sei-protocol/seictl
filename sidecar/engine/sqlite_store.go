@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -204,12 +205,18 @@ func formatNullableTime(t *time.Time) any {
 // before the tx is broadcast so the post-broadcast lookup survives a
 // crash between sign and persist-result.
 //
-// Atomicity: wrapped in BEGIN IMMEDIATE so two concurrent writers
-// serialize. Refuses to overwrite a row whose chain_id differs from the
-// incoming one — that scenario is a cross-chain TaskID collision and
-// silent clobber would confuse the audit trail.
+// Atomicity: opened with serializable isolation, which the modernc/sqlite
+// driver maps to BEGIN IMMEDIATE (acquires a write lock at txn start).
+// Refuses to overwrite a row whose chain_id differs from the incoming
+// one — that scenario is a cross-chain TaskID collision and silent
+// clobber would confuse the audit trail.
+//
+// Note: in-process, db.SetMaxOpenConns(1) already serializes all writes
+// on the single connection, so this guard is belt-and-suspenders for
+// any future relaxation of that invariant or cross-process DB sharing
+// (which the WAL mode comment treats as out-of-scope today).
 func (s *SQLiteStore) SaveCheckpoint(c *SignTxCheckpoint) error {
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return err
 	}

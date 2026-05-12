@@ -482,9 +482,10 @@ func validateMemo(memo string) error {
 		return fmt.Errorf("memo length %d exceeds %d bytes", len(memo), maxMemoBytes)
 	}
 	for _, r := range memo {
-		if r == '\t' || r == ' ' {
-			continue
-		}
+		// IsPrint accepts ASCII space + printable Unicode but rejects all
+		// other control characters (tabs, newlines, ANSI escapes). The
+		// memo travels into on-chain events and audit pipelines; tab and
+		// newline are well-known injection vectors for log/CSV consumers.
 		if !unicode.IsPrint(r) {
 			return fmt.Errorf("memo contains non-printable character %U", r)
 		}
