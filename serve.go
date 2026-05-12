@@ -94,11 +94,9 @@ var serveCmd = cli.Command{
 			return fmt.Errorf("open result store: %w", err)
 		}
 
-		// Wire the sidecar-local CometBFT RPC client and checkpoint
-		// store into ExecutionConfig so sign-tx handlers (gov-vote,
-		// gov-submit-proposal, gov-deposit) have one shared dep set.
+		// Sign-tx handlers (added in follow-on PRs) read cfg.RPC for the
+		// chain-confusion guard and inclusion polling.
 		execCfg.RPC = rpc.NewClient(rpc.DefaultEndpoint, nil)
-		execCfg.Checkpoints = store
 
 		snapshotRestorer, err := tasks.NewSnapshotRestorer(homeDir, snapshotBucket, snapshotRegion, chainID, nil, nil)
 		if err != nil {
@@ -109,12 +107,6 @@ var serveCmd = cli.Command{
 		if err != nil {
 			return fmt.Errorf("creating snapshot uploader: %w", err)
 		}
-
-		// eng is captured below; the sign-tx handlers read
-		// ExecutionConfig at execute time (rather than construction)
-		// because eng.Config is set after this map is built.
-		var eng *engine.Engine
-		cfgAccessor := func() engine.ExecutionConfig { return eng.Config }
 
 		handlers := map[engine.TaskType]engine.TaskHandler{
 			engine.TaskSnapshotRestore:          snapshotRestorer.Handler(),
@@ -134,14 +126,12 @@ var serveCmd = cli.Command{
 			engine.TaskUploadGenesisArtifacts:   tasks.NewGenesisArtifactUploader(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
 			engine.TaskAssembleAndUploadGenesis: tasks.NewGenesisAssembler(homeDir, genesisBucket, genesisRegion, chainID, nil, nil).Handler(),
 			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
-			engine.TaskGovVote:                  tasks.GovVoteHandler(cfgAccessor),
 		}
 
-		eng = engine.NewEngine(ctx, handlers, store)
+		eng := engine.NewEngine(ctx, handlers, store)
 		eng.Config = execCfg
-		// Rehydrate AFTER Config is installed so any sign-tx tasks left
-		// in 'running' state see the full handler dependencies via the
-		// goroutine-spawn happens-before edge.
+		// Rehydrate after Config is installed so sign-tx handlers see
+		// the full dep set via the goroutine-spawn happens-before edge.
 		eng.RehydrateStaleTasks()
 
 		srv := server.NewServer(":"+port, eng, homeDir)
@@ -158,16 +148,12 @@ var serveCmd = cli.Command{
 	},
 }
 
-// buildExecutionConfig reads the keyring-related envs, opens the keyring
-// (when configured), and wipes the passphrase from the process env so it
-// no longer appears in /proc/<pid>/environ. The keyring is left nil when
-// SEI_KEYRING_BACKEND is unset — governance signing is opt-in and the
-// sidecar boots normally without it; sign-tx tasks will reject calls
-// with a clear "keyring not configured" error.
+// buildExecutionConfig opens the keyring (when configured) and wipes the
+// passphrase from /proc/<pid>/environ. Keyring is nil when SEI_KEYRING_BACKEND
+// is unset; sign-tx tasks then reject with "keyring not configured".
 func buildExecutionConfig(homeDir string) (engine.ExecutionConfig, error) {
-	// Read and wipe the passphrase before any other logic so every return
-	// path leaves /proc/<pid>/environ clean — including early returns for
-	// unset/unsupported backend and missing-passphrase checks.
+	// Wipe passphrase before any branching so every return path leaves
+	// /proc/<pid>/environ clean.
 	passphrase := os.Getenv("SEI_KEYRING_PASSPHRASE")
 	_ = os.Unsetenv("SEI_KEYRING_PASSPHRASE")
 
@@ -193,9 +179,8 @@ func buildExecutionConfig(homeDir string) (engine.ExecutionConfig, error) {
 
 	kr, err := server.OpenKeyring(backend, dir, passphrase)
 	if err != nil {
-		// OpenKeyring already redacted the passphrase from err.Error();
-		// don't %w-wrap because that re-exposes any typed-field contents
-		// of the underlying SDK error chain.
+		// Don't %w-wrap: OpenKeyring redacted err.Error(), but a typed
+		// field in the underlying SDK chain could resurface the secret.
 		return engine.ExecutionConfig{}, err
 	}
 

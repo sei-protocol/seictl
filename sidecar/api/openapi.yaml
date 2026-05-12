@@ -6,14 +6,11 @@ info:
 
     ## Authentication
 
-    Sign-tx tasks (`gov-vote`, and in subsequent PRs `gov-submit-proposal`
-    and `gov-deposit`) ship UNAUTHENTICATED in Phase 1-3 of the
+    Sign-tx tasks ship UNAUTHENTICATED in Phase 1-3 of the
     governance-flow workstream — see sei-protocol/seictl#163 and #165.
-    From Phase 4 onward a `kube-rbac-proxy` sidecar container fronts this
-    API on `:8443` and enforces a single coarse SubjectAccessReview
-    (`create seinodetasks.sei.io`) against the cluster API server for
-    every mutating request. The sidecar itself binds 127.0.0.1:7777 in
-    Phase 4 and trusts the proxied `X-Remote-User` header.
+    From Phase 4 a `kube-rbac-proxy` sidecar fronts this API on `:8443`
+    (TokenReview + a single coarse `create seinodetasks.sei.io` SAR)
+    and the sidecar rebinds to 127.0.0.1:7777, trusting `X-Remote-User`.
   version: 0.8.0
   license:
     name: Apache-2.0
@@ -50,15 +47,12 @@ paths:
       operationId: submitTask
       summary: Submit a task
       description: |
-        Submit a task for one-time execution (201).
-
-        The task type is carried in the body (`type` field). For sign-tx
-        tasks (`gov-vote`, etc.) the `params` object must match the
-        per-type schema component referenced from the request body
-        examples below. The endpoint authorizes a SINGLE coarse SAR
-        (`create seinodetasks.sei.io`) regardless of task type; per-task
-        narrowing is additive via `resourceNames` on the ClusterRole and
-        does not require URL-shape changes.
+        Submit a task for one-time execution (201). The task type is
+        carried in the body (`type` field); `params` is task-type-
+        specific and validated server-side. The endpoint authorizes a
+        single coarse SAR (`create seinodetasks.sei.io`) regardless of
+        task type — per-task narrowing is additive via `resourceNames`
+        on the ClusterRole.
       security:
         - bearerAuth: []
       requestBody:
@@ -67,17 +61,6 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/TaskRequest"
-            examples:
-              govVote:
-                summary: Cast a yes vote on proposal 42
-                value:
-                  type: gov-vote
-                  taskId: 11111111-2222-3333-4444-555555555555
-                  params:
-                    chainId: pacific-1
-                    keyName: node_admin
-                    proposalId: 42
-                    option: yes
       responses:
         "201":
           description: Task created.
@@ -169,13 +152,9 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        Bearer token authentication enforced by the upstream
-        `kube-rbac-proxy` sidecar container in Phase 4+ (issue #165).
-        The proxy runs TokenReview against the cluster API server and
-        proxies authorized requests to the sidecar bound on 127.0.0.1.
+        Enforced by the upstream `kube-rbac-proxy` in Phase 4+ (#165).
         In Phase 1-3 the sidecar is unauthenticated; tooling MUST NOT
-        rely on the presence of this scheme to enforce its own access
-        controls.
+        rely on this scheme for its own access control.
 
   schemas:
     TaskRequest:
@@ -185,107 +164,19 @@ components:
         id:
           type: string
           format: uuid
-          description: >
-            Caller-provided task identifier. When set, the engine uses this
-            as the canonical ID (enabling deterministic IDs from the controller).
-            If a task with this ID already exists, the request is idempotent
-            and returns the existing ID. When omitted, a random UUID is generated.
-            For sign-tx tasks the same ID re-submitted after a crash short-
-            circuits onto the persisted checkpoint rather than re-broadcasting.
+          description: |
+            Caller-provided task identifier. When set, the engine uses
+            this as the canonical ID (enabling deterministic IDs from
+            the controller); if a task with this ID exists, the request
+            is idempotent and returns the existing ID. When omitted, a
+            random UUID is generated.
         type:
           type: string
-          description: |
-            Task type identifier. See per-type schema components for the
-            expected `params` shape:
-              * `gov-vote` → `GovVoteParams`
+          description: Task type identifier.
         params:
           type: object
           additionalProperties: true
-          description: |
-            Task-type-specific parameters. The shape is validated server-
-            side against the per-type schema named by `type`.
-
-    GovVoteParams:
-      type: object
-      required: [chainId, keyName, proposalId, option]
-      properties:
-        chainId:
-          type: string
-          description: |
-            Must match both `SEI_CHAIN_ID` on the sidecar AND the local
-            seid's `/status.node_info.network`. Mismatch is a Terminal
-            error — the sidecar refuses to sign before opening the keyring.
-        keyName:
-          type: string
-          description: Keyring entry name (e.g. "node_admin").
-        proposalId:
-          type: integer
-          format: uint64
-          minimum: 1
-        option:
-          type: string
-          enum: [yes, no, abstain, no_with_veto, Yes, No, Abstain, NoWithVeto]
-        fees:
-          type: string
-          description: |
-            Coin string in usei (e.g. "4000usei"). Non-`usei` denoms are
-            rejected. Default: "4000usei". Sei mainnet min-gas-prices
-            is 0.01usei; we round up.
-        gas:
-          type: integer
-          format: uint64
-          description: Default 200000.
-        memo:
-          type: string
-          description: Default "seictl-sidecar".
-
-    SignAndBroadcastResult:
-      type: object
-      description: |
-        Shared result schema for every sign-tx task (gov-vote and, in
-        follow-up PRs, gov-submit-proposal and gov-deposit). Per-task
-        types extend this with type-specific fields (e.g., proposalId).
-      required: [txHash, code, height, chainId]
-      properties:
-        txHash:
-          type: string
-          description: Upper-case hex tx hash, 64 chars.
-        height:
-          type: integer
-          format: int64
-          description: Block height at inclusion; 0 if broadcast OK but inclusion polling timed out.
-        code:
-          type: integer
-          format: uint32
-          description: ABCI response code; 0=success.
-        codespace:
-          type: string
-        rawLog:
-          type: string
-        gasWanted:
-          type: integer
-          format: int64
-        gasUsed:
-          type: integer
-          format: int64
-        sequence:
-          type: integer
-          format: uint64
-        accountNumber:
-          type: integer
-          format: uint64
-        chainId:
-          type: string
-        broadcastedAt:
-          type: string
-          format: date-time
-        includedAt:
-          type: string
-          format: date-time
-          description: |
-            Null when broadcast succeeded (CheckTx code=0) but inclusion
-            polling timed out. Callers may re-submit with the same
-            taskId to short-circuit onto the persisted checkpoint.
+          description: Task-type-specific parameters; validated server-side.
 
     StatusResponse:
       type: object

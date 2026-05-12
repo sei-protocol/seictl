@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -199,92 +198,4 @@ func formatNullableTime(t *time.Time) any {
 		return nil
 	}
 	return t.UTC().Format(time.RFC3339Nano)
-}
-
-// SaveCheckpoint upserts a sign-tx checkpoint. Called by SignAndBroadcast
-// before the tx is broadcast so the post-broadcast lookup survives a
-// crash between sign and persist-result.
-//
-// Atomicity: opened with serializable isolation, which the modernc/sqlite
-// driver maps to BEGIN IMMEDIATE (acquires a write lock at txn start).
-// Refuses to overwrite a row whose chain_id differs from the incoming
-// one — that scenario is a cross-chain TaskID collision and silent
-// clobber would confuse the audit trail.
-//
-// Note: in-process, db.SetMaxOpenConns(1) already serializes all writes
-// on the single connection, so this guard is belt-and-suspenders for
-// any future relaxation of that invariant or cross-process DB sharing
-// (which the WAL mode comment treats as out-of-scope today).
-func (s *SQLiteStore) SaveCheckpoint(c *SignTxCheckpoint) error {
-	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{Isolation: sql.LevelSerializable})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var existingChainID string
-	err = tx.QueryRow(
-		"SELECT chain_id FROM sign_tx_checkpoints WHERE task_id = ?",
-		c.TaskID,
-	).Scan(&existingChainID)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		// fresh insert; fall through
-	case err != nil:
-		return fmt.Errorf("lookup existing checkpoint: %w", err)
-	case existingChainID != c.ChainID:
-		return fmt.Errorf("checkpoint chain mismatch for task %q: existing=%q new=%q",
-			c.TaskID, existingChainID, c.ChainID)
-	}
-
-	if _, err := tx.Exec(`
-		INSERT OR REPLACE INTO sign_tx_checkpoints
-			(task_id, tx_hash, sequence, account_number, chain_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		c.TaskID,
-		c.TxHash,
-		int64(c.Sequence),
-		int64(c.AccountNumber),
-		c.ChainID,
-		c.CreatedAt.UTC().Format(time.RFC3339Nano),
-	); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-// LoadCheckpoint returns (nil, nil) when no row exists.
-func (s *SQLiteStore) LoadCheckpoint(taskID string) (*SignTxCheckpoint, error) {
-	row := s.db.QueryRow(`
-		SELECT task_id, tx_hash, sequence, account_number, chain_id, created_at
-		FROM sign_tx_checkpoints WHERE task_id = ?`, taskID)
-
-	var (
-		c          SignTxCheckpoint
-		seq        int64
-		accNum     int64
-		createdRaw string
-	)
-	if err := row.Scan(&c.TaskID, &c.TxHash, &seq, &accNum, &c.ChainID, &createdRaw); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	c.Sequence = uint64(seq)
-	c.AccountNumber = uint64(accNum)
-	t, err := time.Parse(time.RFC3339Nano, createdRaw)
-	if err != nil {
-		return nil, fmt.Errorf("parse created_at: %w", err)
-	}
-	c.CreatedAt = t
-	return &c, nil
-}
-
-// DeleteCheckpoint is a no-op when the row does not exist. We use it on
-// the "safe-to-retry" path after a chain query confirms the tx never
-// landed and the sequence has not advanced.
-func (s *SQLiteStore) DeleteCheckpoint(taskID string) error {
-	_, err := s.db.Exec("DELETE FROM sign_tx_checkpoints WHERE task_id = ?", taskID)
-	return err
 }

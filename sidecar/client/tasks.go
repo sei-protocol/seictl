@@ -53,12 +53,6 @@ const (
 	TaskTypeUploadGenesisArtifacts = string(engine.TaskUploadGenesisArtifacts)
 	TaskTypeAssembleGenesis        = string(engine.TaskAssembleAndUploadGenesis)
 	TaskTypeSetGenesisPeers        = string(engine.TaskSetGenesisPeers)
-
-	// TaskTypeGovVote is the sign-and-broadcast task for cosmos-sdk gov
-	// v1beta1 MsgVote. PR-A foundation; gov-submit-proposal and gov-
-	// deposit ship in #163-B and #163-C against the same SignAndBroadcast
-	// helper on the sidecar.
-	TaskTypeGovVote = string(engine.TaskGovVote)
 )
 
 // Known condition and action values for AwaitConditionTask.
@@ -730,73 +724,4 @@ func (t AwaitConditionTask) ToTaskRequest() TaskRequest {
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
-}
-
-// GovVoteTaskParams is the wire-format parameters the sidecar expects
-// for a gov-vote task. Fees, Gas, and Memo are optional — the sidecar
-// applies defaults (4000usei, 200_000, "seictl-sidecar") when zero.
-//
-// Hand-rolled (rather than reusing the oapi-codegen-generated
-// `GovVoteParams`) so the public client API exposes plain value types
-// instead of pointer-laden optional fields. Both shapes serialize
-// identically on the wire.
-type GovVoteTaskParams struct {
-	ChainID    string `json:"chainId"`
-	KeyName    string `json:"keyName"`
-	ProposalID uint64 `json:"proposalId"`
-	Option     string `json:"option"` // "yes" | "no" | "abstain" | "no_with_veto"
-	Fees       string `json:"fees,omitempty"`
-	Gas        uint64 `json:"gas,omitempty"`
-	Memo       string `json:"memo,omitempty"`
-}
-
-// GovVoteTask is the typed task wrapper for gov-vote submission. The
-// taskId field is set by the higher-level SubmitGovVoteTask helper —
-// see client.go.
-type GovVoteTask struct {
-	Params GovVoteTaskParams
-}
-
-func (t GovVoteTask) TaskType() string { return TaskTypeGovVote }
-
-// Validate is intentionally cheap; the sidecar re-validates with the
-// SDK and rejects non-usei denoms in fees. Failing fast here is a
-// nicety for the CLI, not a security check.
-func (t GovVoteTask) Validate() error {
-	if t.Params.ChainID == "" {
-		return fmt.Errorf("gov-vote: missing required field ChainID")
-	}
-	if t.Params.KeyName == "" {
-		return fmt.Errorf("gov-vote: missing required field KeyName")
-	}
-	if t.Params.ProposalID == 0 {
-		return fmt.Errorf("gov-vote: ProposalID must be > 0")
-	}
-	switch t.Params.Option {
-	case "yes", "no", "abstain", "no_with_veto", "Yes", "No", "Abstain", "NoWithVeto":
-	case "":
-		return fmt.Errorf("gov-vote: missing required field Option")
-	default:
-		return fmt.Errorf("gov-vote: unknown vote option %q", t.Params.Option)
-	}
-	return nil
-}
-
-func (t GovVoteTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
-		"chainId":    t.Params.ChainID,
-		"keyName":    t.Params.KeyName,
-		"proposalId": t.Params.ProposalID,
-		"option":     t.Params.Option,
-	}
-	if t.Params.Fees != "" {
-		p["fees"] = t.Params.Fees
-	}
-	if t.Params.Gas != 0 {
-		p["gas"] = t.Params.Gas
-	}
-	if t.Params.Memo != "" {
-		p["memo"] = t.Params.Memo
-	}
-	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
