@@ -9,6 +9,7 @@ import (
 	"time"
 
 	rpchttp "github.com/sei-protocol/sei-chain/sei-tendermint/rpc/client/http"
+	rpctypes "github.com/sei-protocol/sei-chain/sei-tendermint/rpc/jsonrpc/types"
 
 	"github.com/sei-protocol/sei-chain/sei-cosmos/client"
 	"github.com/sei-protocol/sei-chain/sei-cosmos/codec"
@@ -103,11 +104,14 @@ func (c *sdkTxClient) QueryTx(ctx context.Context, txHashHex string) (*sdk.TxRes
 	if err != nil {
 		return nil, false, fmt.Errorf("decode tx hash %q: %w", txHashHex, err)
 	}
+	// ctx is plumbed through to the underlying http.Request via
+	// NewRequestWithContext in sei-tendermint's jsonrpc HTTP client
+	// (sei-tendermint/rpc/jsonrpc/client/http_json_client.go) —
+	// cancellation aborts the in-flight call, so the 30s tmRPCTimeout
+	// is a redundant upper bound, not the only guardrail.
 	res, err := c.clientCtx.Client.Tx(ctx, hashBytes, false)
 	if err != nil {
-		// CometBFT returns "tx not found" when the node has no record;
-		// treat any "not found" substring as found=false.
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+		if isTxNotFound(err) {
 			return nil, false, nil
 		}
 		return nil, false, fmt.Errorf("query /tx?hash=%s: %w", txHashHex, err)
@@ -124,6 +128,21 @@ func (c *sdkTxClient) QueryTx(ctx context.Context, txHashHex string) (*sdk.TxRes
 		GasUsed:   res.TxResult.GasUsed,
 	}
 	return resp, true, nil
+}
+
+// isTxNotFound discriminates "the node has no record of this tx" from
+// every other failure mode of /tx?hash=. Server-side, all handler
+// errors come back as JSON-RPC CodeInternalError (sei-tendermint's
+// MakeError, types.go:171); the "tx not found" message lands in the
+// Data field. Transport errors (DNS, connection-refused, timeout) are
+// NOT *rpctypes.RPCError, so the type assertion fences them out — a
+// DNS "host not found" cannot be confused with a missing tx.
+func isTxNotFound(err error) bool {
+	var rpcErr *rpctypes.RPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	return strings.Contains(rpcErr.Data, "not found")
 }
 
 // newSignTxInterfaceRegistry registers only the proto interfaces sign-tx
