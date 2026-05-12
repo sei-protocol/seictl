@@ -132,7 +132,17 @@ var serveCmd = cli.Command{
 		// the full dep set via the goroutine-spawn happens-before edge.
 		eng.RehydrateStaleTasks()
 
-		srv := server.NewServer(":"+port, eng, homeDir)
+		authnMode, err := server.AuthnMode()
+		if err != nil {
+			return err
+		}
+		bindAddr := server.BindAddress(port, authnMode)
+		logArgs := []any{"authnMode", authnMode, "bind", bindAddr}
+		if authnMode == server.AuthnModeTrustedHeader {
+			logArgs = append(logArgs, "bypassPaths", server.BypassPaths())
+		}
+		serveLog.Info("sidecar HTTP", logArgs...)
+		srv := server.NewServer(bindAddr, eng, homeDir, authnMode)
 		srvErr := srv.ListenAndServe(ctx)
 
 		if closeErr := store.Close(); closeErr != nil {

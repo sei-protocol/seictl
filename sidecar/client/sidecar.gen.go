@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	BearerAuthScopes = "bearerAuth.Scopes"
+	RemoteUserHeaderScopes = "remoteUserHeader.Scopes"
 )
 
 // Defines values for StatusResponseStatus.

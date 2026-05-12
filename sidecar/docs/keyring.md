@@ -19,7 +19,7 @@ in the pod — lives in `docs/design/in-pod-governance-signing.md`.
 
 For the `file` backend, a trailing `/keyring-file` path segment is stripped before handoff to the SDK — the Cosmos SDK keyring re-appends `keyring-file/` internally, so callers passing `/sei/keyring-file` and `/sei` both end up at `/sei/keyring-file/*`. This matches both operator mental models.
 
-Unset `SEI_KEYRING_BACKEND` is the Phase-1 default: the sidecar starts normally
+Unset `SEI_KEYRING_BACKEND` is the default: the sidecar starts normally
 and rejects sign-tx submissions with `keyring not configured`. The node's
 genesis-ceremony tasks (e.g. `generate-gentx`) continue to function — those
 use a separate, in-process test backend that is intentionally isolated from

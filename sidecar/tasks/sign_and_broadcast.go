@@ -1,14 +1,11 @@
 // Package tasks — sign-tx family helper.
 //
-// SECURITY POSTURE NOTE — sei-protocol/seictl#163 / #165
-//
-// SignAndBroadcast is reached via the sidecar's HTTP API. In Phase 1-3
-// the API is unauthenticated and bound on 0.0.0.0:7777: any caller with
-// network reach can submit txs as the validator's operator account.
-// Phase 4 (#165) fronts the sidecar with kube-rbac-proxy on :8443
-// (TokenReview + a single coarse `create seinodetasks.sei.io` SAR) and
-// rebinds the sidecar to 127.0.0.1:7777. REMOVE THIS NOTICE when #165
-// lands.
+// SignAndBroadcast signs txs as the validator's operator account.
+// API-level authentication is controlled by SEI_SIDECAR_AUTHN_MODE:
+// trusted-header mode pairs the sidecar with a kube-rbac-proxy
+// container that gates every request via TokenReview + SAR. When the
+// env var is unset, the API is unauthenticated and any actor with
+// network reach to the listen port can reach this code path.
 
 package tasks
 
