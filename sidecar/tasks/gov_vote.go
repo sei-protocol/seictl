@@ -23,10 +23,9 @@ import (
 
 var govVoteLog = seilog.NewLogger("seictl", "task", "gov-vote")
 
-// GovVoteRequest is the typed parameter shape for the gov-vote task.
-// Idempotency is intentionally NOT handled here — the chain itself
-// overwrites duplicate votes (last-write-wins on the (proposalID,
-// voter) storage key), so the caller's request is authoritative.
+// GovVoteRequest holds gov-vote params. Idempotency is handled by the
+// chain — last-write-wins on (proposalID, voter); no pre-broadcast
+// chain query.
 type GovVoteRequest struct {
 	ChainID    string `json:"chainId"`
 	KeyName    string `json:"keyName"`
@@ -37,36 +36,28 @@ type GovVoteRequest struct {
 	Gas        uint64 `json:"gas"`
 }
 
-// GovVoter handles gov-vote tasks. It captures the ExecutionConfig at
-// construction so the handler closure can reach the keyring and RPC
-// client without going through engine.Engine.
+// GovVoter captures cfg by value at construction; engine.Config is
+// documented read-only after startup, so the copy is safe.
 type GovVoter struct {
 	cfg engine.ExecutionConfig
 }
 
-// NewGovVoter creates a GovVoter bound to the given config.
 func NewGovVoter(cfg engine.ExecutionConfig) *GovVoter {
 	return &GovVoter{cfg: cfg}
 }
 
-// Handler returns the engine TaskHandler for gov-vote.
+// Handler delegates to SignAndBroadcast after MsgVote construction.
 //
-// Rehydration semantics: if the sidecar crashes after BroadcastSync
-// succeeds but before the engine persists the task result, the
-// rehydration path re-runs this handler. A second tx will sign at
-// sequence+1 and broadcast; the chain's last-write-wins on
-// (proposalID, voter) keeps governance state correct, and the operator
-// pays fees twice. This is acceptable specifically because MsgVote is
-// chain-idempotent. Future sign-tx handlers MUST evaluate per-Msg
-// idempotency before copying this pattern — non-idempotent Msg types
-// (MsgSend, MsgWithdrawDelegatorReward, etc.) would double-spend.
-// Tracked in #174 for the next non-idempotent sign-tx PR.
+// Rehydration: a crash after BroadcastSync but before result persist
+// re-runs this handler. The rehydrated run signs at sequence+1 and
+// broadcasts a second tx; chain last-write-wins on (proposalID, voter)
+// keeps governance state correct and the operator pays fees twice.
+// Safe ONLY because MsgVote is chain-idempotent — non-idempotent Msg
+// types (MsgSend, MsgWithdraw…) would double-spend. Future sign-tx
+// handlers must evaluate per-Msg idempotency before reusing this shape.
 //
-// Stale-proposal handling: when params.ProposalID does not exist or is
-// in a final state, CheckTx rejects with a non-zero code and we surface
-// a Terminal error. We do NOT pre-check via chain query — that would
-// add a TOCTOU window (proposal transitions between check and
-// broadcast) and duplicate the chain's authoritative decision.
+// Stale proposals are rejected by CheckTx and surface as Terminal. We
+// do not pre-check via chain query — that opens a TOCTOU window.
 func (g *GovVoter) Handler() engine.TaskHandler {
 	return engine.TypedHandler(func(ctx context.Context, params GovVoteRequest) error {
 		msg, err := buildVoteMsg(g.cfg, params)
@@ -103,10 +94,6 @@ func (g *GovVoter) Handler() engine.TaskHandler {
 	})
 }
 
-// buildVoteMsg validates the request, resolves the voter address from
-// the keyring, and constructs the MsgVote. Split out so tests can
-// exercise the param-to-Msg translation without going through the full
-// SignAndBroadcast path.
 func buildVoteMsg(cfg engine.ExecutionConfig, params GovVoteRequest) (*govtypes.MsgVote, error) {
 	if params.ProposalID == 0 {
 		return nil, Terminal(errors.New("proposalId required (must be > 0)"))
@@ -128,11 +115,8 @@ func buildVoteMsg(cfg engine.ExecutionConfig, params GovVoteRequest) (*govtypes.
 	return govtypes.NewMsgVote(info.GetAddress(), params.ProposalID, option), nil
 }
 
-// ParseVoteOption maps the wire-format option string onto the Cosmos
-// gov v1beta1 VoteOption enum. Accepts both "no_with_veto" (canonical
-// SDK form) and "no-with-veto" (kebab-case for operator ergonomics).
-// Exported so the client SDK can reuse the same accepted set — keeping
-// client-side fast-fail and server-side authority in lockstep.
+// ParseVoteOption (gov v1beta1) is exported so client and server
+// share one accepted-option set; otherwise the two lists drift.
 func ParseVoteOption(s string) (govtypes.VoteOption, error) {
 	switch strings.ToLower(s) {
 	case "yes":

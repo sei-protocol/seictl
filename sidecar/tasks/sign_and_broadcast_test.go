@@ -275,12 +275,10 @@ func TestAccountRetrieverFailure_Propagates(t *testing.T) {
 	}
 }
 
-// TestSignedTxHasNoFeePayerOrGranter asserts the signed tx's AuthInfo
-// leaves fee_payer and fee_granter empty (closes seictl#172 item 3).
-// The signer-pays-its-own-fees invariant is implicit today — tx.Factory
-// never plumbs WithFeePayer — but if a future contributor wires those
-// fields, the denom whitelist tells us nothing about who's paying.
-// This test locks the invariant at the signed-bytes level.
+// TestSignedTxHasNoFeePayerOrGranter locks the signer-pays-its-own-fees
+// invariant at the signed-bytes level. Without it a future contributor
+// wiring WithFeePayer slips past the denom whitelist — the whitelist
+// proves what denom is used, not who's paying.
 func TestSignedTxHasNoFeePayerOrGranter(t *testing.T) {
 	cfg, addr := newGuardCfg(t, "pacific-1")
 	tc := &fakeTxClient{
@@ -307,11 +305,9 @@ func TestSignedTxHasNoFeePayerOrGranter(t *testing.T) {
 		t.Fatal("no tx bytes captured")
 	}
 
-	// Decode the proto Tx directly and assert the raw AuthInfo.Fee
-	// fields. sdk.FeeTx.FeePayer() falls back to GetSigners()[0] when
-	// Fee.Payer is empty, so checking the interface method alone would
-	// silently accept a future `WithFeePayer(signer)` plumbing — the
-	// invariant we want is no fee-grant lookup, i.e. proto fields blank.
+	// Assert raw proto fields, not sdk.FeeTx.FeePayer() — the interface
+	// method falls back to GetSigners()[0] when Fee.Payer is empty, so
+	// a future WithFeePayer(signer) plumbing would silently pass.
 	var pbTx txtypes.Tx
 	if err := pbTx.Unmarshal(tc.lastTxBytes); err != nil {
 		t.Fatalf("proto unmarshal tx: %v", err)

@@ -730,10 +730,7 @@ func (t AwaitConditionTask) ToTaskRequest() TaskRequest {
 	return req
 }
 
-// GovVoteTask casts a Cosmos gov v1beta1 vote on behalf of the
-// validator's operator account. The chain's last-write-wins semantics
-// on (proposalID, voter) make repeated submissions safe at the chain
-// layer; the caller's request is treated as authoritative.
+// GovVoteTask submits a gov v1beta1 vote.
 type GovVoteTask struct {
 	ChainID    string
 	KeyName    string
