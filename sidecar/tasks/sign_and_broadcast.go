@@ -201,7 +201,7 @@ func newSDKTxClient(cfg engine.ExecutionConfig, in SignAndBroadcastInput, fromAd
 		WithFromName(in.KeyName).
 		WithAccountRetriever(authtypes.AccountRetriever{}).
 		WithBroadcastMode("sync")
-	return &sdkTxClient{clientCtx: clientCtx, txCfg: txCfg}, nil
+	return &sdkTxClient{clientCtx: clientCtx}, nil
 }
 
 // sdkTxClient is the production txClient — a thin shim over the
@@ -209,15 +209,44 @@ func newSDKTxClient(cfg engine.ExecutionConfig, in SignAndBroadcastInput, fromAd
 // the interface.
 type sdkTxClient struct {
 	clientCtx client.Context
-	txCfg     client.TxConfig
 }
 
-func (c *sdkTxClient) AccountNumberSequence(_ context.Context, fromAddr sdk.AccAddress) (uint64, uint64, error) {
-	return authtypes.AccountRetriever{}.GetAccountNumberSequence(c.clientCtx, fromAddr)
+func (c *sdkTxClient) AccountNumberSequence(ctx context.Context, fromAddr sdk.AccAddress) (uint64, uint64, error) {
+	// AccountRetriever does not accept context.Context — it derives its
+	// query context internally from clientCtx. Wrap the call in a
+	// goroutine + select so a hung seid does not outlive the engine's
+	// cancellation. The goroutine drains into a buffered channel; it
+	// exits naturally when the underlying ABCI query returns.
+	type res struct {
+		accNum, seq uint64
+		err         error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		a, s, err := authtypes.AccountRetriever{}.GetAccountNumberSequence(c.clientCtx, fromAddr)
+		ch <- res{a, s, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return 0, 0, ctx.Err()
+	case r := <-ch:
+		return r.accNum, r.seq, r.err
+	}
 }
 
-func (c *sdkTxClient) BroadcastSync(_ context.Context, txBytes []byte) (*sdk.TxResponse, error) {
-	return c.clientCtx.BroadcastTxSync(txBytes)
+func (c *sdkTxClient) BroadcastSync(ctx context.Context, txBytes []byte) (*sdk.TxResponse, error) {
+	// Bypass clientCtx.BroadcastTxSync (which hardcodes context.Background)
+	// and call the underlying CometBFT RPC client directly so the engine's
+	// cancellation propagates into the broadcast HTTP call.
+	node, err := c.clientCtx.GetNode()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := node.BroadcastTxSync(ctx, txBytes)
+	if err != nil {
+		return nil, err
+	}
+	return sdk.NewResponseFormatBroadcastTx(resp), nil
 }
 
 func (c *sdkTxClient) QueryTx(ctx context.Context, txHashHex string) (*sdk.TxResponse, bool, error) {
@@ -279,7 +308,7 @@ func SignAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, in SignAn
 		return nil, Terminal(errors.New("keyring not configured: set SEI_KEYRING_BACKEND/SEI_KEYRING_PASSPHRASE on the sidecar"))
 	}
 	if cfg.Checkpoints == nil {
-		return nil, errors.New("checkpoint store not configured")
+		return nil, Terminal(errors.New("checkpoint store not configured"))
 	}
 
 	info, err := cfg.Keyring.Key(in.KeyName)
