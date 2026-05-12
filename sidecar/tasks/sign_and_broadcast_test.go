@@ -108,15 +108,6 @@ func makeMsgVote(t *testing.T, voter sdk.AccAddress) sdk.Msg {
 	return govtypes.NewMsgVote(voter, 7, govtypes.OptionYes)
 }
 
-func installFactory(t *testing.T, tc txClient) {
-	t.Helper()
-	prev := signTxClientFactory
-	signTxClientFactory = func(_ engine.ExecutionConfig, _ SignAndBroadcastInput, _ sdk.AccAddress) (txClient, error) {
-		return tc, nil
-	}
-	t.Cleanup(func() { signTxClientFactory = prev })
-}
-
 func newGuardCfg(t *testing.T, chainID string) (engine.ExecutionConfig, sdk.AccAddress) {
 	t.Helper()
 	t.Setenv("SEI_CHAIN_ID", chainID)
@@ -133,16 +124,15 @@ func newGuardCfg(t *testing.T, chainID string) (engine.ExecutionConfig, sdk.AccA
 func TestChainConfusionGuard_EnvMismatch(t *testing.T) {
 	cfg, addr := newGuardCfg(t, "pacific-1")
 	tc := &fakeTxClient{}
-	installFactory(t, tc)
 
-	_, err := SignAndBroadcast(context.Background(), cfg, SignAndBroadcastInput{
+	_, err := signAndBroadcast(context.Background(), cfg, tc, SignAndBroadcastInput{
 		ChainID: "wrong-chain",
 		KeyName: "node_admin",
 		Msg:     makeMsgVote(t, addr),
 		Fees:    "4000usei",
 		Gas:     200_000,
 		TaskID:  "00000000-0000-0000-0000-000000000001",
-	})
+	}, addr)
 	if !IsTerminal(err) {
 		t.Fatalf("want Terminal env-mismatch error, got %v", err)
 	}
@@ -162,16 +152,15 @@ func TestChainConfusionGuard_StatusMismatch(t *testing.T) {
 		Keyring: kb,
 		RPC:     rpc.NewClient(srv.URL, nil),
 	}
-	installFactory(t, &fakeTxClient{})
 
-	_, err := SignAndBroadcast(context.Background(), cfg, SignAndBroadcastInput{
+	_, err := signAndBroadcast(context.Background(), cfg, &fakeTxClient{}, SignAndBroadcastInput{
 		ChainID: "pacific-1",
 		KeyName: "node_admin",
 		Msg:     makeMsgVote(t, addr),
 		Fees:    "4000usei",
 		Gas:     200_000,
 		TaskID:  "00000000-0000-0000-0000-000000000002",
-	})
+	}, addr)
 	if !IsTerminal(err) {
 		t.Fatalf("want Terminal status-mismatch error, got %v", err)
 	}
@@ -189,16 +178,15 @@ func TestChainConfusionGuard_MissingEnv(t *testing.T) {
 		Keyring: kb,
 		RPC:     rpc.NewClient(srv.URL, nil),
 	}
-	installFactory(t, &fakeTxClient{})
 
-	_, err := SignAndBroadcast(context.Background(), cfg, SignAndBroadcastInput{
+	_, err := signAndBroadcast(context.Background(), cfg, &fakeTxClient{}, SignAndBroadcastInput{
 		ChainID: "pacific-1",
 		KeyName: "node_admin",
 		Msg:     makeMsgVote(t, addr),
 		Fees:    "4000usei",
 		Gas:     200_000,
 		TaskID:  "00000000-0000-0000-0000-000000000003",
-	})
+	}, addr)
 	if !IsTerminal(err) {
 		t.Fatalf("want Terminal env-not-set error, got %v", err)
 	}
@@ -206,16 +194,15 @@ func TestChainConfusionGuard_MissingEnv(t *testing.T) {
 
 func TestFeesDenomGuard_RejectsNonUSei(t *testing.T) {
 	cfg, addr := newGuardCfg(t, "pacific-1")
-	installFactory(t, &fakeTxClient{})
 
-	_, err := SignAndBroadcast(context.Background(), cfg, SignAndBroadcastInput{
+	_, err := signAndBroadcast(context.Background(), cfg, &fakeTxClient{}, SignAndBroadcastInput{
 		ChainID: "pacific-1",
 		KeyName: "node_admin",
 		Msg:     makeMsgVote(t, addr),
 		Fees:    "20sei", // the seienv vote.go:15 latent bug
 		Gas:     200_000,
 		TaskID:  "00000000-0000-0000-0000-000000000004",
-	})
+	}, addr)
 	if !IsTerminal(err) {
 		t.Fatalf("want Terminal denom error, got %v", err)
 	}
@@ -231,7 +218,6 @@ func TestMissingKeyring_ReturnsTerminal(t *testing.T) {
 		Keyring: nil, // sidecar started without SEI_KEYRING_BACKEND
 		RPC:     rpc.NewClient(srv.URL, nil),
 	}
-	installFactory(t, &fakeTxClient{})
 
 	_, err := SignAndBroadcast(context.Background(), cfg, SignAndBroadcastInput{
 		ChainID: "pacific-1",
@@ -247,13 +233,12 @@ func TestMissingKeyring_ReturnsTerminal(t *testing.T) {
 }
 
 func TestMissingKeyEntry_ReturnsTerminal(t *testing.T) {
-	cfg, addr := newGuardCfg(t, "pacific-1")
-	installFactory(t, &fakeTxClient{})
+	cfg, _ := newGuardCfg(t, "pacific-1")
 
 	_, err := SignAndBroadcast(context.Background(), cfg, SignAndBroadcastInput{
 		ChainID: "pacific-1",
 		KeyName: "ghost", // not in the keyring
-		Msg:     makeMsgVote(t, addr),
+		Msg:     govtypes.NewMsgVote(makeAddr(t), 7, govtypes.OptionYes),
 		Fees:    "4000usei",
 		Gas:     200_000,
 		TaskID:  "00000000-0000-0000-0000-000000000006",
@@ -267,16 +252,15 @@ func TestAccountRetrieverFailure_Propagates(t *testing.T) {
 	// Account-retrieve failure is NOT Terminal — may be a transient seid restart.
 	cfg, addr := newGuardCfg(t, "pacific-1")
 	tc := &fakeTxClient{accountErr: errors.New("rpc dial: connection refused")}
-	installFactory(t, tc)
 
-	_, err := SignAndBroadcast(context.Background(), cfg, SignAndBroadcastInput{
+	_, err := signAndBroadcast(context.Background(), cfg, tc, SignAndBroadcastInput{
 		ChainID: "pacific-1",
 		KeyName: "node_admin",
 		Msg:     makeMsgVote(t, addr),
 		Fees:    "4000usei",
 		Gas:     200_000,
 		TaskID:  "00000000-0000-0000-0000-000000000007",
-	})
+	}, addr)
 	if err == nil {
 		t.Fatal("expected error from account retrieve")
 	}
@@ -299,16 +283,15 @@ func TestBroadcastCheckTxFailure_ReturnsTerminal(t *testing.T) {
 			RawLog:    "insufficient fees",
 		},
 	}
-	installFactory(t, tc)
 
-	_, err := SignAndBroadcast(context.Background(), cfg, SignAndBroadcastInput{
+	_, err := signAndBroadcast(context.Background(), cfg, tc, SignAndBroadcastInput{
 		ChainID: "pacific-1",
 		KeyName: "node_admin",
 		Msg:     makeMsgVote(t, addr),
 		Fees:    "4000usei",
 		Gas:     200_000,
 		TaskID:  "00000000-0000-0000-0000-000000000008",
-	})
+	}, addr)
 	if !IsTerminal(err) {
 		t.Fatalf("want Terminal checkTx error, got %v", err)
 	}
@@ -329,20 +312,19 @@ func TestInclusionPollingCtxCancel_ReturnsCtxErr(t *testing.T) {
 		sequence:      42,
 		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h", Height: 0},
 	}
-	installFactory(t, tc)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
 	start := time.Now()
-	_, err := SignAndBroadcast(ctx, cfg, SignAndBroadcastInput{
+	_, err := signAndBroadcast(ctx, cfg, tc, SignAndBroadcastInput{
 		ChainID: "pacific-1",
 		KeyName: "node_admin",
 		Msg:     makeMsgVote(t, addr),
 		Fees:    "4000usei",
 		Gas:     200_000,
 		TaskID:  "00000000-0000-0000-0000-00000000000c",
-	})
+	}, addr)
 	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected ctx-cancellation error, got: %v", err)
 	}
@@ -360,7 +342,6 @@ func TestInclusionPollingDeadline_ReturnsNonTerminalWithNilIncludedAt(t *testing
 		sequence:      42,
 		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h", Height: 0},
 	}
-	installFactory(t, tc)
 
 	prevTimeout, prevInterval := inclusionPollTimeout, inclusionPollInterval
 	inclusionPollTimeout = 50 * time.Millisecond
@@ -370,14 +351,14 @@ func TestInclusionPollingDeadline_ReturnsNonTerminalWithNilIncludedAt(t *testing
 		inclusionPollInterval = prevInterval
 	})
 
-	res, err := SignAndBroadcast(context.Background(), cfg, SignAndBroadcastInput{
+	res, err := signAndBroadcast(context.Background(), cfg, tc, SignAndBroadcastInput{
 		ChainID: "pacific-1",
 		KeyName: "node_admin",
 		Msg:     makeMsgVote(t, addr),
 		Fees:    "4000usei",
 		Gas:     200_000,
 		TaskID:  "00000000-0000-0000-0000-00000000000d",
-	})
+	}, addr)
 	if err != nil {
 		t.Fatalf("poll-deadline (no ctx cancel) should NOT be an error: %v", err)
 	}
@@ -409,10 +390,10 @@ func TestAppendTaskIDToMemo(t *testing.T) {
 func TestMemoCapEnforcedAfterTaskIDAppend(t *testing.T) {
 	// Caller's base is under 256 bytes but base + taskID exceeds the cap.
 	cfg, addr := newGuardCfg(t, "pacific-1")
-	installFactory(t, &fakeTxClient{accountNumber: 17, sequence: 42})
+	tc := &fakeTxClient{accountNumber: 17, sequence: 42}
 
 	base := strings.Repeat("a", 240) // leaves 16 bytes; "taskID=<uuid>" is 7+36=43
-	_, err := SignAndBroadcast(context.Background(), cfg, SignAndBroadcastInput{
+	_, err := signAndBroadcast(context.Background(), cfg, tc, SignAndBroadcastInput{
 		ChainID: "pacific-1",
 		KeyName: "node_admin",
 		Msg:     makeMsgVote(t, addr),
@@ -420,7 +401,7 @@ func TestMemoCapEnforcedAfterTaskIDAppend(t *testing.T) {
 		Gas:     200_000,
 		Memo:    base,
 		TaskID:  "00000000-0000-0000-0000-000000000099",
-	})
+	}, addr)
 	if !IsTerminal(err) || !strings.Contains(err.Error(), "memo length") {
 		t.Fatalf("want Terminal memo-length error, got %v", err)
 	}

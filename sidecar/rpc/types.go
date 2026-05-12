@@ -12,9 +12,9 @@ type StatusResult struct {
 // NodeInfo identifies a CometBFT node.
 type NodeInfo struct {
 	ID string `json:"id"`
-	// Network is the chain ID the node is configured for. We compare it
-	// against task params.chainId to catch chain-confusion before opening
-	// the keyring — see sidecar/tasks/sign_and_broadcast.go.
+	// Network is the chain ID the node is configured for; CometBFT's
+	// protocol term. Compared against task params.chainId for the
+	// chain-confusion guard in sidecar/tasks/sign_and_broadcast.go.
 	Network string `json:"network"`
 }
 

@@ -14,29 +14,16 @@ package tasks
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 	"unicode"
 
-	rpchttp "github.com/sei-protocol/sei-chain/sei-tendermint/rpc/client/http"
-
-	"github.com/sei-protocol/sei-chain/sei-cosmos/client"
 	"github.com/sei-protocol/sei-chain/sei-cosmos/client/tx"
-	"github.com/sei-protocol/sei-chain/sei-cosmos/codec"
-	codectypes "github.com/sei-protocol/sei-chain/sei-cosmos/codec/types"
-	cryptocodec "github.com/sei-protocol/sei-chain/sei-cosmos/crypto/codec"
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
-	authtx "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/tx"
 	authtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/types"
-	banktypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/bank/types"
-	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
-	stakingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/staking/types"
-	upgradetypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/upgrade/types"
 
 	signingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/types/tx/signing"
 
@@ -137,113 +124,34 @@ type txClient interface {
 	QueryTx(ctx context.Context, txHashHex string) (*sdk.TxResponse, bool, error)
 }
 
-// signTxClientFactory builds the production txClient. Var so tests swap it.
-var signTxClientFactory = newSDKTxClient
-
-func newSDKTxClient(cfg engine.ExecutionConfig, in SignAndBroadcastInput, fromAddr sdk.AccAddress) (txClient, error) {
-	rpcURL := rpc.DefaultEndpoint
-	if cfg.RPC != nil && cfg.RPC.Endpoint() != "" {
-		rpcURL = cfg.RPC.Endpoint()
-	}
-	tmClient, err := rpchttp.New(rpcURL)
-	if err != nil {
-		return nil, fmt.Errorf("tendermint RPC client at %s: %w", rpcURL, err)
-	}
-	registry := newSignTxInterfaceRegistry()
-	cdc := codec.NewProtoCodec(registry)
-	txCfg := authtx.NewTxConfig(cdc, authtx.DefaultSignModes)
-	clientCtx := client.Context{}.
-		WithChainID(in.ChainID).
-		WithCodec(cdc).
-		WithInterfaceRegistry(registry).
-		WithTxConfig(txCfg).
-		WithKeyring(cfg.Keyring).
-		WithClient(tmClient).
-		WithFromAddress(fromAddr).
-		WithFromName(in.KeyName).
-		WithAccountRetriever(authtypes.AccountRetriever{}).
-		WithBroadcastMode("sync")
-	return &sdkTxClient{clientCtx: clientCtx}, nil
-}
-
-type sdkTxClient struct {
-	clientCtx client.Context
-}
-
-func (c *sdkTxClient) AccountNumberSequence(ctx context.Context, fromAddr sdk.AccAddress) (uint64, uint64, error) {
-	// AccountRetriever ignores context.Context; wrap in a goroutine so
-	// a hung seid does not outlive the engine's cancellation.
-	type res struct {
-		accNum, seq uint64
-		err         error
-	}
-	ch := make(chan res, 1)
-	go func() {
-		a, s, err := authtypes.AccountRetriever{}.GetAccountNumberSequence(c.clientCtx, fromAddr)
-		ch <- res{a, s, err}
-	}()
-	select {
-	case <-ctx.Done():
-		return 0, 0, ctx.Err()
-	case r := <-ch:
-		return r.accNum, r.seq, r.err
-	}
-}
-
-func (c *sdkTxClient) BroadcastSync(ctx context.Context, txBytes []byte) (*sdk.TxResponse, error) {
-	// Bypass clientCtx.BroadcastTxSync (hardcodes context.Background) so
-	// the engine's cancellation propagates into the broadcast HTTP call.
-	node, err := c.clientCtx.GetNode()
-	if err != nil {
-		return nil, err
-	}
-	resp, err := node.BroadcastTxSync(ctx, txBytes)
-	if err != nil {
-		return nil, err
-	}
-	return sdk.NewResponseFormatBroadcastTx(resp), nil
-}
-
-func (c *sdkTxClient) QueryTx(ctx context.Context, txHashHex string) (*sdk.TxResponse, bool, error) {
-	if c.clientCtx.Client == nil {
-		return nil, false, errors.New("tx client has no Tendermint RPC client")
-	}
-	hashBytes, err := hex.DecodeString(txHashHex)
-	if err != nil {
-		return nil, false, fmt.Errorf("decode tx hash %q: %w", txHashHex, err)
-	}
-	res, err := c.clientCtx.Client.Tx(ctx, hashBytes, false)
-	if err != nil {
-		// CometBFT returns "tx not found" when the node has no record;
-		// treat any "not found" substring as found=false.
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("query /tx?hash=%s: %w", txHashHex, err)
-	}
-	resp := &sdk.TxResponse{
-		Height:    res.Height,
-		TxHash:    txHashHex,
-		Code:      res.TxResult.Code,
-		Codespace: res.TxResult.Codespace,
-		Data:      string(res.TxResult.Data),
-		RawLog:    res.TxResult.Log,
-		Info:      res.TxResult.Info,
-		GasWanted: res.TxResult.GasWanted,
-		GasUsed:   res.TxResult.GasUsed,
-	}
-	return resp, true, nil
-}
-
-// SignAndBroadcast is the entry point each sign-tx handler calls.
-// Input validation, denom guard, and chain-confusion guard all run
-// BEFORE the keyring is opened — a stale passphrase prompt or hardware
-// tap on the wrong chain is the failure we are protecting against.
+// SignAndBroadcast is the entry point each sign-tx handler calls. It
+// resolves the signer from the in-memory keyring, wires the production
+// txClient, and delegates to signAndBroadcast for the full validate +
+// guard + sign + broadcast + poll cycle.
 func SignAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, in SignAndBroadcastInput) (*SignAndBroadcastResult, error) {
-	// Append taskID to memo before validation so the byte-cap is enforced
-	// against the effective on-chain memo.
-	in.Memo = appendTaskIDToMemo(in.Memo, in.TaskID)
+	if cfg.Keyring == nil {
+		return nil, Terminal(errors.New("keyring not configured: set SEI_KEYRING_BACKEND/SEI_KEYRING_PASSPHRASE on the sidecar"))
+	}
+	info, err := cfg.Keyring.Key(in.KeyName)
+	if err != nil {
+		return nil, Terminal(fmt.Errorf("keyring entry %q: %w", in.KeyName, err))
+	}
+	fromAddr := info.GetAddress()
 
+	tc, err := newSDKTxClient(cfg, in, fromAddr)
+	if err != nil {
+		return nil, err
+	}
+	return signAndBroadcast(ctx, cfg, tc, in, fromAddr)
+}
+
+// signAndBroadcast does the full sign+broadcast+poll cycle. Public callers
+// reach this through SignAndBroadcast which wires the production txClient;
+// tests call it directly with a fake.
+func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClient, in SignAndBroadcastInput, fromAddr sdk.AccAddress) (*SignAndBroadcastResult, error) {
+	// Append taskID to memo first so the byte cap is enforced against the
+	// effective on-chain memo.
+	in.Memo = appendTaskIDToMemo(in.Memo, in.TaskID)
 	if err := validateInput(in); err != nil {
 		return nil, Terminal(err)
 	}
@@ -254,26 +162,6 @@ func SignAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, in SignAn
 		return nil, err
 	}
 
-	if cfg.Keyring == nil {
-		return nil, Terminal(errors.New("keyring not configured: set SEI_KEYRING_BACKEND/SEI_KEYRING_PASSPHRASE on the sidecar"))
-	}
-
-	info, err := cfg.Keyring.Key(in.KeyName)
-	if err != nil {
-		return nil, Terminal(fmt.Errorf("keyring entry %q: %w", in.KeyName, err))
-	}
-	fromAddr := info.GetAddress()
-
-	tc, err := signTxClientFactory(cfg, in, fromAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	return signAndBroadcast(ctx, cfg, tc, in, fromAddr)
-}
-
-// signAndBroadcast is the testable inner loop; tests inject the txClient.
-func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClient, in SignAndBroadcastInput, fromAddr sdk.AccAddress) (*SignAndBroadcastResult, error) {
 	accNum, seq, err := tc.AccountNumberSequence(ctx, fromAddr)
 	if err != nil {
 		return nil, fmt.Errorf("account retrieve %s: %w", fromAddr.String(), err)
@@ -416,8 +304,7 @@ func checkFeesDenom(fees string) error {
 }
 
 // guardChainID rejects sign requests whose ChainID does not match BOTH
-// SEI_CHAIN_ID AND the local seid's /status.NodeInfo.Network. Both checks
-// must pass BEFORE the keyring is opened.
+// SEI_CHAIN_ID AND the chain the local seid reports via /status.
 func guardChainID(ctx context.Context, rpcClient *rpc.Client, chainID string) error {
 	envChain := os.Getenv("SEI_CHAIN_ID")
 	if envChain == "" {
@@ -427,7 +314,7 @@ func guardChainID(ctx context.Context, rpcClient *rpc.Client, chainID string) er
 		return Terminal(fmt.Errorf("chain mismatch: params.chainId=%q sidecar.SEI_CHAIN_ID=%q", chainID, envChain))
 	}
 	if rpcClient == nil {
-		return Terminal(errors.New("RPC client not configured; cannot verify /status.NodeInfo.Network"))
+		return Terminal(errors.New("RPC client not configured; cannot verify chain identity via /status"))
 	}
 	raw, err := rpcClient.Get(ctx, "/status")
 	if err != nil {
@@ -489,27 +376,4 @@ func resultFromTxResponse(resp *sdk.TxResponse, accNum, seq uint64, chainID stri
 		BroadcastedAt: broadcastedAt,
 		IncludedAt:    includedAt,
 	}
-}
-
-// newSignTxInterfaceRegistry registers only the proto interfaces sign-tx
-// needs (gov v1beta1 + auth + bank + staking + crypto + upgrade). Adding
-// more pulls in transitive deps (notably x/wasm via x/evm) that break
-// CGO_ENABLED=0 builds. Upgrade is registered for #163-B's
-// MsgSubmitProposal-wrapping-SoftwareUpgradeProposal handler.
-func newSignTxInterfaceRegistry() codectypes.InterfaceRegistry {
-	registry := codectypes.NewInterfaceRegistry()
-	cryptocodec.RegisterInterfaces(registry)
-	authtypes.RegisterInterfaces(registry)
-	banktypes.RegisterInterfaces(registry)
-	stakingtypes.RegisterInterfaces(registry)
-	govtypes.RegisterInterfaces(registry)
-	upgradetypes.RegisterInterfaces(registry)
-	return registry
-}
-
-func makeSignTxCodec() (codec.Codec, client.TxConfig) {
-	registry := newSignTxInterfaceRegistry()
-	cdc := codec.NewProtoCodec(registry)
-	txCfg := authtx.NewTxConfig(cdc, authtx.DefaultSignModes)
-	return cdc, txCfg
 }
