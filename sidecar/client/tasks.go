@@ -56,7 +56,8 @@ const (
 	TaskTypeAssembleGenesis        = string(engine.TaskAssembleAndUploadGenesis)
 	TaskTypeSetGenesisPeers        = string(engine.TaskSetGenesisPeers)
 
-	TaskTypeGovVote = string(engine.TaskGovVote)
+	TaskTypeGovVote           = string(engine.TaskGovVote)
+	TaskTypeGovSubmitProposal = string(engine.TaskGovSubmitProposal)
 )
 
 // Known condition and action values for AwaitConditionTask.
@@ -773,6 +774,98 @@ func (t GovVoteTask) ToTaskRequest() TaskRequest {
 		"option":     t.Option,
 		"fees":       t.Fees,
 		"gas":        t.Gas,
+	}
+	if t.Memo != "" {
+		p["memo"] = t.Memo
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// GovSubmitProposalTask submits a gov v1beta1 proposal. MVP supports
+// only Type="software-upgrade"; the chain auto-assigns proposalID
+// (returned via the chain, not the task result).
+//
+// REHYDRATION WARNING: MsgSubmitProposal is NOT chain-idempotent. See
+// the handler doc in sidecar/tasks/gov_submit_proposal.go and #174.
+type GovSubmitProposalTask struct {
+	ChainID string
+	KeyName string
+
+	Type string // software-upgrade
+
+	Title       string
+	Description string
+
+	UpgradeName   string
+	UpgradeHeight int64
+	UpgradeInfo   string
+
+	InitialDeposit string
+
+	Memo string
+	Fees string
+	Gas  uint64
+}
+
+func (t GovSubmitProposalTask) TaskType() string { return TaskTypeGovSubmitProposal }
+
+func (t GovSubmitProposalTask) Validate() error {
+	if t.ChainID == "" {
+		return errors.New("gov-submit-proposal: chainId required")
+	}
+	if t.KeyName == "" {
+		return errors.New("gov-submit-proposal: keyName required")
+	}
+	if t.Title == "" {
+		return errors.New("gov-submit-proposal: title required")
+	}
+	if t.Description == "" {
+		return errors.New("gov-submit-proposal: description required")
+	}
+	switch t.Type {
+	case tasks.ProposalTypeSoftwareUpgrade:
+		if t.UpgradeName == "" {
+			return errors.New("gov-submit-proposal: upgradeName required for software-upgrade")
+		}
+		if t.UpgradeHeight <= 0 {
+			return errors.New("gov-submit-proposal: upgradeHeight required for software-upgrade (must be > 0)")
+		}
+	case "":
+		return errors.New("gov-submit-proposal: type required (allowed: software-upgrade)")
+	default:
+		return fmt.Errorf("gov-submit-proposal: unsupported proposal type %q (allowed: software-upgrade)", t.Type)
+	}
+	if t.InitialDeposit == "" {
+		return errors.New("gov-submit-proposal: initialDeposit required")
+	}
+	if t.Fees == "" {
+		return errors.New("gov-submit-proposal: fees required")
+	}
+	if t.Gas == 0 {
+		return errors.New("gov-submit-proposal: gas required (must be > 0)")
+	}
+	return nil
+}
+
+func (t GovSubmitProposalTask) ToTaskRequest() TaskRequest {
+	p := map[string]interface{}{
+		"chainId":        t.ChainID,
+		"keyName":        t.KeyName,
+		"type":           t.Type,
+		"title":          t.Title,
+		"description":    t.Description,
+		"initialDeposit": t.InitialDeposit,
+		"fees":           t.Fees,
+		"gas":            t.Gas,
+	}
+	if t.UpgradeName != "" {
+		p["upgradeName"] = t.UpgradeName
+	}
+	if t.UpgradeHeight != 0 {
+		p["upgradeHeight"] = t.UpgradeHeight
+	}
+	if t.UpgradeInfo != "" {
+		p["upgradeInfo"] = t.UpgradeInfo
 	}
 	if t.Memo != "" {
 		p["memo"] = t.Memo

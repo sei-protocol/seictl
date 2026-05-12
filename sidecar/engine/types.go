@@ -32,6 +32,7 @@ const (
 	TaskAssembleAndUploadGenesis TaskType = "assemble-and-upload-genesis"
 	TaskSetGenesisPeers          TaskType = "set-genesis-peers"
 	TaskGovVote                  TaskType = "gov-vote"
+	TaskGovSubmitProposal        TaskType = "gov-submit-proposal"
 )
 
 // Task is a unit of work submitted by the controller. When ID is set, the
