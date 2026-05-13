@@ -1,4 +1,4 @@
-name: GoReleaer
+name: GoReleaser
 
 on:
   release:
@@ -13,32 +13,7 @@ permissions:
 
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - name: Checkout latest tag (workflow_run path)
-        if: github.event_name == 'workflow_run'
-        run: |
-          git fetch origin --tags --force
-          LATEST_TAG=$(git tag --sort=-v:refname | head -n 1)
-          if [[ -z "${LATEST_TAG}" ]]; then
-            echo "::error::no tags present in repo"
-            exit 1
-          fi
-          echo "Checking out latest tag: ${LATEST_TAG}"
-          git checkout "${LATEST_TAG}"
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: '~> v2'
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    uses: sei-protocol/uci/.github/workflows/goreleaser-release.yml@monty/goreleaser-reusable-workflow
+    with:
+      go-version-file: go.mod
+      checkout-latest-tag: ${{ github.event_name == 'workflow_run' }}
