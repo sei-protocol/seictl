@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -559,7 +560,6 @@ type GenerateGentxTask struct {
 	ChainID        string
 	StakingAmount  string
 	AccountBalance string
-	GenesisParams  string
 }
 
 func (t GenerateGentxTask) TaskType() string { return TaskTypeGenerateGentx }
@@ -582,9 +582,6 @@ func (t GenerateGentxTask) ToTaskRequest() TaskRequest {
 		"chainId":        t.ChainID,
 		"stakingAmount":  t.StakingAmount,
 		"accountBalance": t.AccountBalance,
-	}
-	if t.GenesisParams != "" {
-		p["genesisParams"] = t.GenesisParams
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
@@ -654,11 +651,17 @@ func validateGenesisAccounts(prefix string, accounts []GenesisAccountEntry) erro
 
 // AssembleAndUploadGenesisTask collects per-node artifacts and produces final genesis.json.
 // S3 coordinates are derived by the sidecar from its environment.
+//
+// Overrides is a flat map of dotted-path keys into genesis.app_state to raw
+// JSON values, applied to the assembled genesis after collect-gentxs runs.
+// The controller validates keys (immutability post-bootstrap) via CEL; the
+// sidecar applies them verbatim and fails loudly on bad paths.
 type AssembleAndUploadGenesisTask struct {
 	AccountBalance string
 	Namespace      string
 	Nodes          []GenesisNodeParam
 	Accounts       []GenesisAccountEntry
+	Overrides      map[string]json.RawMessage
 }
 
 func (t AssembleAndUploadGenesisTask) TaskType() string { return TaskTypeAssembleGenesis }
@@ -688,6 +691,13 @@ func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
 	}
 	if accounts := genesisAccountsToWire(t.Accounts); accounts != nil {
 		p["accounts"] = accounts
+	}
+	if len(t.Overrides) > 0 {
+		overrides := make(map[string]interface{}, len(t.Overrides))
+		for k, v := range t.Overrides {
+			overrides[k] = v
+		}
+		p["overrides"] = overrides
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
