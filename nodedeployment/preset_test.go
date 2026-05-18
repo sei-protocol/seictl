@@ -698,6 +698,7 @@ func TestApplyGenesisOverride_Errors(t *testing.T) {
 	}{
 		{"no-equals", "missing '='"},
 		{"=value", "empty key"},
+		{"staking.params.unbonding_time=", "empty value"},
 		{"single=value", "must be of the form module.field"},
 		{"staking..params=value", "empty segment"},
 	}
@@ -711,6 +712,17 @@ func TestApplyGenesisOverride_Errors(t *testing.T) {
 				t.Errorf("err = %q; want containing %q", err.Error(), tc.want)
 			}
 		})
+	}
+}
+
+func TestApplyGenesisOverride_JSONStringEscape(t *testing.T) {
+	root := map[string]interface{}{}
+	if err := applyGenesisOverride(root, `staking.params.unbonding_time="42"`); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	overrides, _, _ := unstructured.NestedMap(root, "spec", "genesis", "overrides")
+	if v := overrides["staking.params.unbonding_time"]; v != "42" {
+		t.Errorf("want string \"42\", got %v (%T)", v, v)
 	}
 }
 

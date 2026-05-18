@@ -143,7 +143,7 @@ var applyCmd = cli.Command{
 		},
 		&cli.StringSliceFlag{
 			Name:  "genesis-override",
-			Usage: "Set a key in spec.genesis.overrides: --genesis-override <module.field[.field...]>=<value> (e.g. --genesis-override staking.params.unbonding_time=600s). Keys must be dotted cosmos-module paths — the first segment is a module in app_state (staking, bank, gov, ...). Values parse as JSON when possible (numbers, bools, objects); otherwise as strings. Repeatable. Requires --preset genesis-chain. --set cannot reach this map because its parser splits on every dot.",
+			Usage: `Set a key in spec.genesis.overrides: --genesis-override <module.field[.field...]>=<value> (e.g. --genesis-override staking.params.unbonding_time=600s). Keys must be dotted cosmos-module paths — the first segment is a module in app_state (staking, bank, gov, ...). Values parse as JSON when possible (numbers, bools, objects); otherwise as strings. To force a numeric-looking value to render as string, wrap in JSON quotes (e.g. --genesis-override foo.bar='"42"'). Repeatable. Requires --preset genesis-chain. --set cannot reach this map because its parser splits on every dot.`,
 		},
 		&cli.BoolFlag{
 			Name:  "dry-run",

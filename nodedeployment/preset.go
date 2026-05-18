@@ -209,6 +209,9 @@ func applyGenesisOverride(root map[string]interface{}, expr string) error {
 	if key == "" {
 		return fmt.Errorf("empty key before '='")
 	}
+	if val == "" {
+		return fmt.Errorf("empty value after '=' (the sidecar rejects empty json.RawMessage at assemble-genesis)")
+	}
 	parts := strings.Split(key, ".")
 	if len(parts) < 2 {
 		return fmt.Errorf("key %q must be of the form module.field[.field...]", key)
