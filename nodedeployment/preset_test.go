@@ -640,6 +640,109 @@ func TestApplyOverride_Errors(t *testing.T) {
 	}
 }
 
+func TestRender_GenesisOverrideFlag(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "genesis-chain",
+		name:    "x",
+		chainID: "c",
+		image:   "img:1",
+		genesisOverrides: []string{
+			`staking.params.unbonding_time=600s`,
+			`bank.params.default_send_enabled=true`,
+			`gov.params.voting_period_seconds=120`,
+			`mint.params.inflation={"min":0.05,"max":0.2}`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	overrides, found, _ := unstructured.NestedMap(got.Object, "spec", "genesis", "overrides")
+	if !found {
+		t.Fatalf("spec.genesis.overrides not found")
+	}
+	if v := overrides["staking.params.unbonding_time"]; v != "600s" {
+		t.Errorf("staking.params.unbonding_time = %v (%T); want \"600s\" (string)", v, v)
+	}
+	if v := overrides["bank.params.default_send_enabled"]; v != true {
+		t.Errorf("bank.params.default_send_enabled = %v (%T); want true (bool)", v, v)
+	}
+	if v := overrides["gov.params.voting_period_seconds"]; v != float64(120) {
+		t.Errorf("gov.params.voting_period_seconds = %v (%T); want 120 (float64 from JSON)", v, v)
+	}
+	inflation, ok := overrides["mint.params.inflation"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("mint.params.inflation not a map: %T", overrides["mint.params.inflation"])
+	}
+	if inflation["min"] != float64(0.05) || inflation["max"] != float64(0.2) {
+		t.Errorf("mint.params.inflation = %v; want {min:0.05, max:0.2}", inflation)
+	}
+}
+
+func TestRender_GenesisOverrideRejectsNonGenesisPreset(t *testing.T) {
+	_, err := render(renderArgs{
+		preset:           "rpc",
+		name:             "rpc-fleet",
+		chainID:          "pacific-1",
+		image:            "img:1",
+		genesisOverrides: []string{"staking.params.unbonding_time=600s"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only valid with --preset genesis-chain") {
+		t.Errorf("expected 'only valid with --preset genesis-chain' error, got %v", err)
+	}
+}
+
+func TestApplyGenesisOverride_Errors(t *testing.T) {
+	cases := []struct {
+		expr string
+		want string
+	}{
+		{"no-equals", "missing '='"},
+		{"=value", "empty key"},
+		{"staking.params.unbonding_time=", "empty value"},
+		{"single=value", "must be of the form module.field"},
+		{"staking..params=value", "empty segment"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.expr, func(t *testing.T) {
+			err := applyGenesisOverride(map[string]interface{}{}, tc.expr)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %q; want containing %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+func TestApplyGenesisOverride_JSONStringEscape(t *testing.T) {
+	root := map[string]interface{}{}
+	if err := applyGenesisOverride(root, `staking.params.unbonding_time="42"`); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	overrides, _, _ := unstructured.NestedMap(root, "spec", "genesis", "overrides")
+	if v := overrides["staking.params.unbonding_time"]; v != "42" {
+		t.Errorf("want string \"42\", got %v (%T)", v, v)
+	}
+}
+
+func TestApplyGenesisOverride_PreservesExistingKeys(t *testing.T) {
+	root := map[string]interface{}{}
+	if err := applyGenesisOverride(root, "staking.params.unbonding_time=600s"); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if err := applyGenesisOverride(root, "bank.params.default_send_enabled=true"); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	overrides, found, _ := unstructured.NestedMap(root, "spec", "genesis", "overrides")
+	if !found {
+		t.Fatalf("overrides not found")
+	}
+	if len(overrides) != 2 {
+		t.Errorf("expected 2 keys, got %v", overrides)
+	}
+}
+
 func TestParseValue(t *testing.T) {
 	cases := map[string]interface{}{
 		"":       "",

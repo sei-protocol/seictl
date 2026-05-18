@@ -19,14 +19,15 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 	}
 
 	args := renderArgs{
-		preset:          c.String("preset"),
-		name:            name,
-		namespace:       c.String("namespace"),
-		chainID:         c.String("chain-id"),
-		image:           c.String("image"),
-		sets:            c.StringSlice("set"),
-		genesisAccounts: c.StringSlice("genesis-account"),
-		overrides:       c.StringSlice("override"),
+		preset:           c.String("preset"),
+		name:             name,
+		namespace:        c.String("namespace"),
+		chainID:          c.String("chain-id"),
+		image:            c.String("image"),
+		sets:             c.StringSlice("set"),
+		genesisAccounts:  c.StringSlice("genesis-account"),
+		overrides:        c.StringSlice("override"),
+		genesisOverrides: c.StringSlice("genesis-override"),
 	}
 	if c.IsSet("replicas") {
 		args.replicas = int(c.Int("replicas"))
@@ -139,6 +140,10 @@ var applyCmd = cli.Command{
 		&cli.StringSliceFlag{
 			Name:  "override",
 			Usage: "Set a key in spec.template.spec.overrides: --override <toml-path>=<value> (e.g. --override evm.enabled_legacy_sei_apis=sei_getLogs,sei_getBlockByNumber). Keys are dotted TOML paths consumed by the controller's config-apply pipeline; --set cannot reach this map because its parser splits on every dot. Repeatable.",
+		},
+		&cli.StringSliceFlag{
+			Name:  "genesis-override",
+			Usage: `Set a key in spec.genesis.overrides: --genesis-override <module.field[.field...]>=<value> (e.g. --genesis-override staking.params.unbonding_time=600s). Keys must be dotted cosmos-module paths — the first segment is a module in app_state (staking, bank, gov, ...). Values parse as JSON when possible (numbers, bools, objects); otherwise as strings. To force a numeric-looking value to render as string, wrap in JSON quotes (e.g. --genesis-override foo.bar='"42"'). Repeatable. Requires --preset genesis-chain. --set cannot reach this map because its parser splits on every dot.`,
 		},
 		&cli.BoolFlag{
 			Name:  "dry-run",
