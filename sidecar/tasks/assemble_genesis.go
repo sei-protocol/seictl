@@ -58,11 +58,19 @@ type GenesisAccountEntry struct {
 
 // AssembleGenesisRequest holds the typed parameters for the assemble-and-upload-genesis task.
 // S3 bucket, region, and prefix are derived from the sidecar's environment.
+//
+// Overrides is a flat map of dotted-path keys into genesis.app_state to
+// raw JSON values. The first dotted token is the cosmos module name (a key
+// in app_state); subsequent tokens walk into that module's JSON tree. The
+// leaf value is replaced verbatim with the supplied json.RawMessage. The
+// controller enforces immutability of these keys post-bootstrap via CEL;
+// the sidecar applies them once during the genesis ceremony.
 type AssembleGenesisRequest struct {
-	AccountBalance string                `json:"accountBalance"`
-	Namespace      string                `json:"namespace"`
-	Nodes          []AssembleNodeEntry   `json:"nodes"`
-	Accounts       []GenesisAccountEntry `json:"accounts,omitempty"`
+	AccountBalance string                     `json:"accountBalance"`
+	Namespace      string                     `json:"namespace"`
+	Nodes          []AssembleNodeEntry        `json:"nodes"`
+	Accounts       []GenesisAccountEntry      `json:"accounts,omitempty"`
+	Overrides      map[string]json.RawMessage `json:"overrides,omitempty"`
 }
 
 // nodeNames returns the list of node name strings from the Nodes entries.
@@ -131,6 +139,10 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 		}
 
 		if err := a.collectGentxs(); err != nil {
+			return err
+		}
+
+		if err := a.applyOverrides(cfg.Overrides); err != nil {
 			return err
 		}
 
@@ -377,6 +389,45 @@ func (a *GenesisAssembler) collectGentxs() error {
 		return fmt.Errorf("assemble-genesis: collect-gentxs: %w", err)
 	}
 
+	return nil
+}
+
+// applyOverrides re-reads the assembled genesis.json, applies the
+// caller-supplied app_state overrides, and writes the file back. This runs
+// after collectGentxs so the dispatched MsgCreateValidator data and
+// derived persistent peers are already baked into app_state — overrides
+// are an in-place patch on the final assembled doc.
+func (a *GenesisAssembler) applyOverrides(overrides map[string]json.RawMessage) error {
+	if len(overrides) == 0 {
+		return nil
+	}
+
+	genFile := filepath.Join(a.homeDir, "config", "genesis.json")
+	genDoc, err := tmtypes.GenesisDocFromFile(genFile)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: reading genesis for overrides: %w", err)
+	}
+
+	var appState map[string]json.RawMessage
+	if err := json.Unmarshal(genDoc.AppState, &appState); err != nil {
+		return fmt.Errorf("assemble-genesis: parsing app_state for overrides: %w", err)
+	}
+
+	if err := applyGenesisOverrides(appState, overrides); err != nil {
+		return fmt.Errorf("assemble-genesis: %w", err)
+	}
+
+	appStateJSON, err := json.Marshal(appState)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: marshaling overridden app_state: %w", err)
+	}
+	genDoc.AppState = appStateJSON
+
+	if err := genutil.ExportGenesisFile(genDoc, genFile); err != nil {
+		return fmt.Errorf("assemble-genesis: writing genesis after overrides: %w", err)
+	}
+
+	assembleLog.Info("applied genesis overrides", "count", len(overrides))
 	return nil
 }
 
