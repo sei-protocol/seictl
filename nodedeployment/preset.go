@@ -1,6 +1,7 @@
 package nodedeployment
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,16 +13,17 @@ import (
 )
 
 type renderArgs struct {
-	preset          string
-	name            string
-	namespace       string
-	chainID         string
-	image           string
-	replicas        int
-	hasReps         bool
-	sets            []string
-	genesisAccounts []string
-	overrides       []string
+	preset           string
+	name             string
+	namespace        string
+	chainID          string
+	image            string
+	replicas         int
+	hasReps          bool
+	sets             []string
+	genesisAccounts  []string
+	overrides        []string
+	genesisOverrides []string
 }
 
 // presetRequiredFields surfaces missing required fields as a friendly
@@ -145,6 +147,17 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		}
 	}
 
+	if len(args.genesisOverrides) > 0 {
+		if args.preset != "genesis-chain" {
+			return nil, usageError("--genesis-override is only valid with --preset genesis-chain")
+		}
+		for _, expr := range args.genesisOverrides {
+			if err := applyGenesisOverride(u.Object, expr); err != nil {
+				return nil, usageError("apply --genesis-override %q: %s", expr, err.Error())
+			}
+		}
+	}
+
 	// Reassert identity after --set so --set metadata.namespace=kube-system
 	// can't silently retarget.
 	u.SetName(args.name)
@@ -171,6 +184,55 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	}
 
 	return u, nil
+}
+
+// applyGenesisOverride writes a single key=value pair into
+// spec.genesis.overrides. The key is a dotted cosmos-module path
+// (module.field[.field...]) — the first segment must be a key in
+// app_state of the genesis JSON. Value parses as JSON if it parses
+// (number, bool, object, array, or JSON-quoted string); otherwise
+// it's stored as a raw string.
+//
+// Distinct from applyOverride (spec.template.spec.overrides) because
+// the genesis-overrides map's value type is map[string]<JSON> rather
+// than map[string]string, and the key shape is validated upstream by
+// the sidecar's applyGenesisOverrides. Single-segment keys are
+// rejected here so the user sees the issue at apply time rather than
+// after the SND has stalled retrying the assemble-genesis task.
+func applyGenesisOverride(root map[string]interface{}, expr string) error {
+	eq := strings.Index(expr, "=")
+	if eq < 0 {
+		return fmt.Errorf("missing '=' in --genesis-override expression")
+	}
+	key := expr[:eq]
+	val := expr[eq+1:]
+	if key == "" {
+		return fmt.Errorf("empty key before '='")
+	}
+	parts := strings.Split(key, ".")
+	if len(parts) < 2 {
+		return fmt.Errorf("key %q must be of the form module.field[.field...]", key)
+	}
+	for i, p := range parts {
+		if p == "" {
+			return fmt.Errorf("key %q has empty segment at index %d", key, i)
+		}
+	}
+
+	var parsed interface{}
+	if jsonErr := json.Unmarshal([]byte(val), &parsed); jsonErr != nil {
+		parsed = val
+	}
+
+	existing, _, err := unstructured.NestedMap(root, "spec", "genesis", "overrides")
+	if err != nil {
+		return fmt.Errorf("read existing overrides: %w", err)
+	}
+	if existing == nil {
+		existing = map[string]interface{}{}
+	}
+	existing[key] = parsed
+	return unstructured.SetNestedMap(root, existing, "spec", "genesis", "overrides")
 }
 
 // applyOverride writes a single key=value pair into
