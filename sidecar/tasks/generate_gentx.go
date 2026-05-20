@@ -42,8 +42,17 @@ import (
 var gentxLog = seilog.NewLogger("seictl", "task", "generate-gentx")
 
 const (
-	gentxMarkerFile  = ".sei-sidecar-gentx-done"
-	validatorKeyName = "validator"
+	gentxMarkerFile = ".sei-sidecar-gentx-done"
+	// operatorKeyName is the keyring uid the gentx task writes the validator
+	// operator account under. The Cosmos SDK gentx flow ties this key to the
+	// validator's on-chain operator address (the MsgCreateValidator signer
+	// and self-delegator) — it is the same identity used post-genesis to
+	// sign governance, MsgEditValidator, withdraw-rewards, and other
+	// operator-account transactions. Matches the controller-side default
+	// SecretOperatorKeyringSource.KeyName so consumers that look up keys by
+	// uid resolve the same name on both the test-backend (gentx-written)
+	// and file-backend (BYO Secret) paths.
+	operatorKeyName = "node_admin"
 )
 
 // GenerateGentxRequest holds the typed parameters for the generate-gentx task.
@@ -112,12 +121,13 @@ func (g *GentxGenerator) Handler() engine.TaskHandler {
 }
 
 // addValidatorKey creates a local key and returns its bech32 address.
-// Same path as: seid keys add validator --keyring-backend test
+// Same path as: seid keys add node_admin --keyring-backend test
 //
-// Genesis ceremonies use throwaway keys; the production-keyring backend
-// configured via SEI_KEYRING_BACKEND is intentionally not consumed here.
-// Mixing the two would let a gentx run mutate an operator's production
-// keyring (or surface its passphrase prompt) — both unacceptable.
+// Genesis ceremonies write the key under the test backend on the local
+// home directory; the production-keyring backend configured via
+// SEI_KEYRING_BACKEND is intentionally not consumed here. Mixing the two
+// would let a gentx run mutate an operator's production keyring (or
+// surface its passphrase prompt) — both unacceptable.
 func (g *GentxGenerator) addValidatorKey(cdc codec.Codec) (string, error) {
 	gentxLog.Info("creating validator key")
 
@@ -127,7 +137,7 @@ func (g *GentxGenerator) addValidatorKey(cdc codec.Codec) (string, error) {
 	}
 
 	info, _, err := kb.NewMnemonic(
-		validatorKeyName,
+		operatorKeyName,
 		keyring.English,
 		sdk.GetConfig().GetFullBIP44Path(),
 		"",
@@ -236,7 +246,7 @@ func (g *GentxGenerator) generateGentx(cdc codec.Codec, txCfg client.TxConfig, c
 		return fmt.Errorf("generate-gentx: opening keyring: %w", err)
 	}
 
-	keyInfo, err := kb.Key(validatorKeyName)
+	keyInfo, err := kb.Key(operatorKeyName)
 	if err != nil {
 		return fmt.Errorf("generate-gentx: looking up key: %w", err)
 	}
@@ -328,7 +338,7 @@ func (g *GentxGenerator) generateGentx(cdc codec.Codec, txCfg client.TxConfig, c
 		return fmt.Errorf("generate-gentx: wrapping tx builder: %w", err)
 	}
 
-	if err := authclient.SignTx(txFactory, clientCtx, validatorKeyName, txBuilder, true, true); err != nil {
+	if err := authclient.SignTx(txFactory, clientCtx, operatorKeyName, txBuilder, true, true); err != nil {
 		return fmt.Errorf("generate-gentx: signing: %w", err)
 	}
 
