@@ -44,14 +44,11 @@ var gentxLog = seilog.NewLogger("seictl", "task", "generate-gentx")
 const (
 	gentxMarkerFile = ".sei-sidecar-gentx-done"
 	// operatorKeyName is the keyring uid the gentx task writes the validator
-	// operator account under. The Cosmos SDK gentx flow ties this key to the
-	// validator's on-chain operator address (the MsgCreateValidator signer
-	// and self-delegator) — it is the same identity used post-genesis to
-	// sign governance, MsgEditValidator, withdraw-rewards, and other
-	// operator-account transactions. Matches the controller-side default
-	// SecretOperatorKeyringSource.KeyName so consumers that look up keys by
-	// uid resolve the same name on both the test-backend (gentx-written)
-	// and file-backend (BYO Secret) paths.
+	// operator account under. This identity signs MsgCreateValidator at
+	// genesis and subsequently signs governance, MsgEditValidator, withdraw-
+	// rewards, and other operator-account txs. Matches the controller's
+	// default SecretOperatorKeyringSource.KeyName so look-ups resolve the
+	// same name on both test-backend (gentx) and file-backend (BYO) paths.
 	operatorKeyName = "node_admin"
 )
 
