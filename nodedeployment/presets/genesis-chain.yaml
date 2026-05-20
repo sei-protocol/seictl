@@ -4,7 +4,14 @@ spec:
   replicas: 4
   template:
     spec:
-      validator: {}
+      validator:
+        # Opt the bench validator into sidecar signing. With no .secret set,
+        # the controller wires the sidecar to read the keyring written by
+        # the gentx task at $SEI_HOME/keyring-test/ on the shared data PVC
+        # (Cosmos SDK test backend, unencrypted). This unlocks gov-vote and
+        # gov-software-upgrade tasks during nightly major-upgrade workflows
+        # without requiring a per-deployment operator Secret.
+        operatorKeyring: {}
   genesis: {}
   updateStrategy:
     type: InPlace
