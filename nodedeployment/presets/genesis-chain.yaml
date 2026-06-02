@@ -5,6 +5,8 @@ spec:
   template:
     spec:
       validator: {}
+      overrides:
+        network.rpc.pprof_listen_address: "0.0.0.0:6060"
   genesis: {}
   updateStrategy:
     type: InPlace

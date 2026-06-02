@@ -5,5 +5,7 @@ spec:
   template:
     spec:
       fullNode: {}
+      overrides:
+        network.rpc.pprof_listen_address: "0.0.0.0:6060"
   updateStrategy:
     type: InPlace
