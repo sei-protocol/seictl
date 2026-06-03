@@ -63,23 +63,19 @@ type StateSyncRequest struct {
 	TrustPeriod      string `json:"trustPeriod"`
 	BackfillBlocks   int64  `json:"backfillBlocks"`
 	// RpcServers are explicit light-client witness endpoints ("host:port").
-	// When set they are used verbatim and witnesses are NOT derived from
-	// persistent-peers. The controller supplies reachable internal RPC
-	// endpoints here so the witness plane stays internal even for nodes whose
-	// persistent-peers are external P2P NLB hostnames (which serve only P2P).
+	// When non-empty they are used verbatim; otherwise witnesses are derived
+	// from persistent-peers.
 	RpcServers []string `json:"rpcServers"`
 }
 
 // Configure determines the state-sync light-client witnesses, queries one for a
-// trust point, and writes the state sync settings back to config.toml.
+// trust point, and writes the settings to config.toml.
 //
-// Witnesses come from p.RpcServers when the caller provides them (the
-// controller resolves these to reachable internal RPC endpoints); otherwise
-// they are derived from persistent-peers. Either way only witnesses that
-// actually answer /status are written — a witness that does not serve RPC
-// (e.g. an external P2P NLB hostname) otherwise makes seid exit with
-// "no witnesses connected" and crashloop. When UseLocalSnapshot is true the
-// trust height is taken from the locally-restored snapshot rather than queried.
+// Witnesses come from p.RpcServers when provided, otherwise are derived from
+// persistent-peers. Only witnesses that answer /status are written: a peer that
+// serves P2P but not RPC (e.g. an external P2P NLB hostname) would otherwise make
+// seid exit on "no witnesses connected" and crashloop. With UseLocalSnapshot the
+// trust height comes from the restored snapshot instead of a query.
 func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncRequest) error {
 	if markerExists(s.homeDir, stateSyncMarkerFile) {
 		ssLog.Debug("already completed, skipping")
@@ -147,12 +143,11 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncRequest)
 	return writeMarker(s.homeDir, stateSyncMarkerFile)
 }
 
-// witnessCandidates returns the candidate state-sync witness endpoints
-// ("host:port"). Caller-provided RpcServers are used verbatim; otherwise the
-// witnesses are derived from persistent-peers by attaching the RPC port to each
-// peer's host. The peer-derived form is correct for peers that serve RPC on the
-// same host as P2P (EC2 peers, internal cluster DNS) and is filtered by
-// reachableWitnesses for peers that do not (external P2P NLB hostnames).
+// witnessCandidates returns the candidate witness endpoints ("host:port"):
+// caller-provided RpcServers verbatim, otherwise each persistent-peer host with
+// the RPC port attached. The peer-derived form holds for peers that serve RPC on
+// the P2P host (EC2 peers, internal cluster DNS); reachableWitnesses drops those
+// that don't.
 func (s *StateSyncConfigurer) witnessCandidates(p StateSyncRequest) ([]string, error) {
 	if len(p.RpcServers) > 0 {
 		ssLog.Info("using caller-provided rpc witnesses", "count", len(p.RpcServers))
@@ -180,9 +175,6 @@ func (s *StateSyncConfigurer) witnessCandidates(p StateSyncRequest) ([]string, e
 }
 
 // reachableWitnesses returns the candidate endpoints whose /status responds.
-// Dropping unreachable witnesses turns an otherwise-crashlooping config (seid
-// exits on "no witnesses connected") into a working config or a clear
-// configure-time error.
 func (s *StateSyncConfigurer) reachableWitnesses(ctx context.Context, candidates []string) []string {
 	reachable := make([]string, 0, len(candidates))
 	for _, ep := range candidates {
@@ -195,12 +187,9 @@ func (s *StateSyncConfigurer) reachableWitnesses(ctx context.Context, candidates
 	return reachable
 }
 
-// probeWitness reports whether endpoint answers /status. The context deadline
-// is the load-bearing bound here: the sidecar's http.Client has no Timeout, so
-// a black-holed endpoint (TCP accepted but no response) is bounded only by this
-// ctx cancellation. A listener-down endpoint returns connection-refused
-// immediately. (The rpc client applies an equal default internally, so the
-// effective bound is witnessProbeTimeout either way.)
+// probeWitness reports whether endpoint answers /status. The context deadline is
+// load-bearing: the sidecar's http.Client has no Timeout, so a black-holed
+// endpoint (TCP accepted, no response) is bounded only by this cancellation.
 func (s *StateSyncConfigurer) probeWitness(ctx context.Context, endpoint string) error {
 	pctx, cancel := context.WithTimeout(ctx, witnessProbeTimeout)
 	defer cancel()

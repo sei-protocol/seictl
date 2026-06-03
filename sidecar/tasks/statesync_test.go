@@ -483,7 +483,7 @@ func TestReadPeersFromConfig_NoConfigFile(t *testing.T) {
 }
 
 // Caller-provided RpcServers are used verbatim, independent of persistent-peers
-// (here there are none) — the controller resolves these to internal RPC DNS.
+// (here there are none).
 func TestStateSyncConfigurer_ExplicitRpcServers(t *testing.T) {
 	homeDir := t.TempDir()
 	setupPeersInConfig(t, homeDir, nil)
@@ -551,10 +551,9 @@ func TestStateSyncConfigurer_DropsUnreachableWitness(t *testing.T) {
 	}
 }
 
-// The exact production-regression ordering: the FIRST candidate is unreachable
-// (an external P2P NLB host) and the trust query must fall through to the
-// reachable second one. reachable[0] is the post-probe slice, so the dead
-// primary is filtered out before it's used for the trust point.
+// The production-regression ordering: the first candidate is unreachable (a
+// P2P-only NLB host), so the trust query must fall through to the reachable
+// second one — reachable[0] is the post-probe slice, not the raw peer list.
 func TestStateSyncConfigurer_PrimaryUnreachableFallsThrough(t *testing.T) {
 	homeDir := t.TempDir()
 	setupPeersInConfig(t, homeDir, []string{

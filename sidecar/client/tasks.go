@@ -318,11 +318,9 @@ type ConfigureStateSyncTask struct {
 	UseLocalSnapshot bool
 	TrustPeriod      string
 	BackfillBlocks   int64
-	// RpcServers, when set, are the state-sync light-client witness endpoints
-	// ("host:port") used verbatim — the caller (controller) resolves these to
-	// reachable RPC endpoints (internal cluster RPC services), so the sidecar
-	// does not derive them from persistent-peers. Left empty, the sidecar falls
-	// back to deriving witnesses from the node's peers.
+	// RpcServers, when set, are state-sync witness endpoints ("host:port") used
+	// verbatim; the controller resolves these to internal cluster RPC services.
+	// Left empty, the sidecar derives witnesses from the node's peers.
 	RpcServers []string
 }
 
