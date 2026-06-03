@@ -318,6 +318,7 @@ type ConfigureStateSyncTask struct {
 	UseLocalSnapshot bool
 	TrustPeriod      string
 	BackfillBlocks   int64
+	RpcServers       []string
 }
 
 func (t ConfigureStateSyncTask) TaskType() string { return TaskTypeConfigureStateSync }
@@ -333,6 +334,9 @@ func (t ConfigureStateSyncTask) ToTaskRequest() TaskRequest {
 	}
 	if t.BackfillBlocks > 0 {
 		p["backfillBlocks"] = t.BackfillBlocks
+	}
+	if len(t.RpcServers) > 0 {
+		p["rpcServers"] = t.RpcServers
 	}
 	var req TaskRequest
 	if len(p) == 0 {
