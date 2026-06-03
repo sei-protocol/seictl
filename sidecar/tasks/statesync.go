@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sei-protocol/seictl/internal/patch"
 	"github.com/sei-protocol/seictl/sidecar/engine"
@@ -21,6 +22,8 @@ var ssLog = seilog.NewLogger("seictl", "task", "state-sync")
 const (
 	stateSyncMarkerFile = ".sei-sidecar-statesync-done"
 	trustHeightOffset   = 2000
+	rpcPort             = "26657"
+	witnessProbeTimeout = 10 * time.Second
 )
 
 // StateSyncConfig holds the trust point and RPC servers for Tendermint state sync.
@@ -59,30 +62,38 @@ type StateSyncRequest struct {
 	UseLocalSnapshot bool   `json:"useLocalSnapshot"`
 	TrustPeriod      string `json:"trustPeriod"`
 	BackfillBlocks   int64  `json:"backfillBlocks"`
+	// RpcServers are explicit light-client witness endpoints ("host:port").
+	// When set they are used verbatim and witnesses are NOT derived from
+	// persistent-peers. The controller supplies reachable internal RPC
+	// endpoints here so the witness plane stays internal even for nodes whose
+	// persistent-peers are external P2P NLB hostnames (which serve only P2P).
+	RpcServers []string `json:"rpcServers"`
 }
 
-// Configure reads persistent-peers from config.toml, queries a peer for a
+// Configure determines the state-sync light-client witnesses, queries one for a
 // trust point, and writes the state sync settings back to config.toml.
-// When UseLocalSnapshot is true, the trust height is derived from the
-// locally-restored snapshot and use-local-snapshot is set in config.toml.
+//
+// Witnesses come from p.RpcServers when the caller provides them (the
+// controller resolves these to reachable internal RPC endpoints); otherwise
+// they are derived from persistent-peers. Either way only witnesses that
+// actually answer /status are written — a witness that does not serve RPC
+// (e.g. an external P2P NLB hostname) otherwise makes seid exit with
+// "no witnesses connected" and crashloop. When UseLocalSnapshot is true the
+// trust height is taken from the locally-restored snapshot rather than queried.
 func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncRequest) error {
 	if markerExists(s.homeDir, stateSyncMarkerFile) {
 		ssLog.Debug("already completed, skipping")
 		return nil
 	}
 
-	peers, err := readPeersFromConfig(s.homeDir)
+	candidates, err := s.witnessCandidates(p)
 	if err != nil {
 		return fmt.Errorf("configure-state-sync: %w", err)
 	}
-	if len(peers) == 0 {
-		return fmt.Errorf("configure-state-sync: no peers in config.toml")
-	}
-	ssLog.Debug("found peers", "count", len(peers))
 
-	rpcHosts := extractRPCHosts(peers, 2)
-	if len(rpcHosts) == 0 {
-		return fmt.Errorf("configure-state-sync: could not extract RPC hosts from peers")
+	reachable := s.reachableWitnesses(ctx, candidates)
+	if len(reachable) == 0 {
+		return fmt.Errorf("configure-state-sync: no reachable RPC witness among %v", candidates)
 	}
 
 	var trustHeight int64
@@ -94,8 +105,8 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncRequest)
 		trustHeight = h
 		ssLog.Info("using local snapshot height as trust height", "height", trustHeight)
 	} else {
-		ssLog.Info("querying latest height", "host", rpcHosts[0])
-		latestHeight, err := s.queryLatestHeight(ctx, rpcHosts[0])
+		ssLog.Info("querying latest height", "endpoint", reachable[0])
+		latestHeight, err := s.queryLatestHeight(ctx, reachable[0])
 		if err != nil {
 			return fmt.Errorf("configure-state-sync: querying latest height: %w", err)
 		}
@@ -105,25 +116,23 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncRequest)
 		}
 	}
 
-	ssLog.Info("querying trust hash", "trust-height", trustHeight, "host", rpcHosts[0])
-	trustHash, err := s.queryBlockHash(ctx, rpcHosts[0], trustHeight)
+	ssLog.Info("querying trust hash", "trust-height", trustHeight, "endpoint", reachable[0])
+	trustHash, err := s.queryBlockHash(ctx, reachable[0], trustHeight)
 	if err != nil {
 		return fmt.Errorf("configure-state-sync: querying block hash at height %d: %w", trustHeight, err)
 	}
 
-	for len(rpcHosts) < 2 {
-		rpcHosts = append(rpcHosts, rpcHosts[0])
-	}
-	rpcServers := make([]string, len(rpcHosts))
-	for i, h := range rpcHosts {
-		rpcServers[i] = h + ":26657"
+	// CometBFT's light client requires at least two witnesses; pad by
+	// duplicating the primary when only one reachable witness exists.
+	for len(reachable) < 2 {
+		reachable = append(reachable, reachable[0])
 	}
 
 	cfg := StateSyncConfig{
 		TrustHeight:      trustHeight,
 		TrustHash:        trustHash,
 		TrustPeriod:      p.TrustPeriod,
-		RpcServers:       strings.Join(rpcServers, ","),
+		RpcServers:       strings.Join(reachable, ","),
 		UseLocalSnapshot: p.UseLocalSnapshot,
 		BackfillBlocks:   p.BackfillBlocks,
 	}
@@ -136,6 +145,62 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncRequest)
 	}
 
 	return writeMarker(s.homeDir, stateSyncMarkerFile)
+}
+
+// witnessCandidates returns the candidate state-sync witness endpoints
+// ("host:port"). Caller-provided RpcServers are used verbatim; otherwise the
+// witnesses are derived from persistent-peers by attaching the RPC port to each
+// peer's host. The peer-derived form is correct for peers that serve RPC on the
+// same host as P2P (EC2 peers, internal cluster DNS) and is filtered by
+// reachableWitnesses for peers that do not (external P2P NLB hostnames).
+func (s *StateSyncConfigurer) witnessCandidates(p StateSyncRequest) ([]string, error) {
+	if len(p.RpcServers) > 0 {
+		ssLog.Info("using caller-provided rpc witnesses", "count", len(p.RpcServers))
+		return p.RpcServers, nil
+	}
+
+	peers, err := readPeersFromConfig(s.homeDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(peers) == 0 {
+		return nil, fmt.Errorf("no peers in config.toml")
+	}
+	ssLog.Debug("found peers", "count", len(peers))
+
+	hosts := extractRPCHosts(peers, 2)
+	if len(hosts) == 0 {
+		return nil, fmt.Errorf("could not extract RPC hosts from peers")
+	}
+	endpoints := make([]string, len(hosts))
+	for i, h := range hosts {
+		endpoints[i] = h + ":" + rpcPort
+	}
+	return endpoints, nil
+}
+
+// reachableWitnesses returns the candidate endpoints whose /status responds.
+// Dropping unreachable witnesses turns an otherwise-crashlooping config (seid
+// exits on "no witnesses connected") into a working config or a clear
+// configure-time error.
+func (s *StateSyncConfigurer) reachableWitnesses(ctx context.Context, candidates []string) []string {
+	reachable := make([]string, 0, len(candidates))
+	for _, ep := range candidates {
+		if err := s.probeWitness(ctx, ep); err != nil {
+			ssLog.Warn("state-sync witness unreachable, skipping", "endpoint", ep, "err", err)
+			continue
+		}
+		reachable = append(reachable, ep)
+	}
+	return reachable
+}
+
+// probeWitness reports whether endpoint answers /status within the probe timeout.
+func (s *StateSyncConfigurer) probeWitness(ctx context.Context, endpoint string) error {
+	pctx, cancel := context.WithTimeout(ctx, witnessProbeTimeout)
+	defer cancel()
+	_, err := s.rpcClientForEndpoint(endpoint).Get(pctx, "/status")
+	return err
 }
 
 // discoverLocalSnapshotHeight scans the Tendermint snapshots directory for the
@@ -192,13 +257,13 @@ func extractRPCHosts(peers []string, maxHosts int) []string {
 	return hosts
 }
 
-// rpcClientForHost builds an rpc.Client targeting a peer's RPC endpoint.
-func (s *StateSyncConfigurer) rpcClientForHost(host string) *rpc.Client {
-	return rpc.NewClient(fmt.Sprintf("http://%s:26657", host), s.httpClient)
+// rpcClientForEndpoint builds an rpc.Client targeting a full "host:port" RPC endpoint.
+func (s *StateSyncConfigurer) rpcClientForEndpoint(endpoint string) *rpc.Client {
+	return rpc.NewClient("http://"+endpoint, s.httpClient)
 }
 
-func (s *StateSyncConfigurer) queryLatestHeight(ctx context.Context, host string) (int64, error) {
-	raw, err := s.rpcClientForHost(host).Get(ctx, "/status")
+func (s *StateSyncConfigurer) queryLatestHeight(ctx context.Context, endpoint string) (int64, error) {
+	raw, err := s.rpcClientForEndpoint(endpoint).Get(ctx, "/status")
 	if err != nil {
 		return 0, err
 	}
@@ -215,9 +280,9 @@ func (s *StateSyncConfigurer) queryLatestHeight(ctx context.Context, host string
 	return height, nil
 }
 
-func (s *StateSyncConfigurer) queryBlockHash(ctx context.Context, host string, height int64) (string, error) {
+func (s *StateSyncConfigurer) queryBlockHash(ctx context.Context, endpoint string, height int64) (string, error) {
 	path := fmt.Sprintf("/block?height=%d", height)
-	raw, err := s.rpcClientForHost(host).Get(ctx, path)
+	raw, err := s.rpcClientForEndpoint(endpoint).Get(ctx, path)
 	if err != nil {
 		return "", err
 	}

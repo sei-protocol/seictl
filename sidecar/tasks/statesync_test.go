@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -21,7 +22,11 @@ func (m *mockHTTPDoer) Do(req *http.Request) (*http.Response, error) {
 	if !ok {
 		return nil, fmt.Errorf("unexpected request: %s", req.URL.String())
 	}
-	return resp, nil
+	// Read and restore the body so repeated requests to the same URL (the
+	// witness reachability probe, then the trust-point query) both succeed.
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return &http.Response{StatusCode: resp.StatusCode, Body: io.NopCloser(bytes.NewReader(body))}, nil
 }
 
 func generateBlockHash() string {
@@ -62,6 +67,9 @@ func TestStateSyncConfigurer_Success(t *testing.T) {
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
 			"http://1.2.3.4:26657/status": jsonResponse(wrapResult(`{
+				"sync_info": {"latest_block_height": "10000"}
+			}`)),
+			"http://5.6.7.8:26657/status": jsonResponse(wrapResult(`{
 				"sync_info": {"latest_block_height": "10000"}
 			}`)),
 			"http://1.2.3.4:26657/block?height=8000": jsonResponse(wrapResult(fmt.Sprintf(`{
@@ -296,6 +304,9 @@ func TestStateSyncConfigurer_NetworkWithBackfill(t *testing.T) {
 			"http://1.2.3.4:26657/status": jsonResponse(wrapResult(`{
 				"sync_info": {"latest_block_height": "10000"}
 			}`)),
+			"http://5.6.7.8:26657/status": jsonResponse(wrapResult(`{
+				"sync_info": {"latest_block_height": "10000"}
+			}`)),
 			"http://1.2.3.4:26657/block?height=8000": jsonResponse(wrapResult(fmt.Sprintf(`{
 				"block_id": {"hash": %q}
 			}`, hash))),
@@ -337,6 +348,12 @@ func TestStateSyncConfigurer_LocalSnapshot(t *testing.T) {
 	hash := generateBlockHash()
 	mock := &mockHTTPDoer{
 		responses: map[string]*http.Response{
+			"http://1.2.3.4:26657/status": jsonResponse(wrapResult(`{
+				"sync_info": {"latest_block_height": "198030000"}
+			}`)),
+			"http://5.6.7.8:26657/status": jsonResponse(wrapResult(`{
+				"sync_info": {"latest_block_height": "198030000"}
+			}`)),
 			"http://1.2.3.4:26657/block?height=198030000": jsonResponse(wrapResult(fmt.Sprintf(`{
 				"block_id": {"hash": %q}
 			}`, hash))),
@@ -377,7 +394,14 @@ func TestStateSyncConfigurer_LocalSnapshotNoDir(t *testing.T) {
 	homeDir := t.TempDir()
 	setupPeersInConfig(t, homeDir, []string{"nodeId1@1.2.3.4:26656"})
 
-	configurer := NewStateSyncConfigurer(homeDir, &mockHTTPDoer{})
+	mock := &mockHTTPDoer{
+		responses: map[string]*http.Response{
+			"http://1.2.3.4:26657/status": jsonResponse(wrapResult(`{
+				"sync_info": {"latest_block_height": "100"}
+			}`)),
+		},
+	}
+	configurer := NewStateSyncConfigurer(homeDir, mock)
 	err := configurer.Configure(context.Background(), StateSyncRequest{UseLocalSnapshot: true})
 	if err == nil {
 		t.Fatal("expected error when no snapshot directory exists")
@@ -455,5 +479,90 @@ func TestReadPeersFromConfig_NoConfigFile(t *testing.T) {
 	}
 	if len(peers) != 0 {
 		t.Fatalf("expected 0 peers for missing config, got %d", len(peers))
+	}
+}
+
+// Caller-provided RpcServers are used verbatim, independent of persistent-peers
+// (here there are none) — the controller resolves these to internal RPC DNS.
+func TestStateSyncConfigurer_ExplicitRpcServers(t *testing.T) {
+	homeDir := t.TempDir()
+	setupPeersInConfig(t, homeDir, nil)
+
+	const witness = "syncer-0-0-0.syncer-0-0.arctic-1.svc.cluster.local:26657"
+	hash := generateBlockHash()
+	mock := &mockHTTPDoer{
+		responses: map[string]*http.Response{
+			"http://" + witness + "/status": jsonResponse(wrapResult(`{
+				"sync_info": {"latest_block_height": "10000"}
+			}`)),
+			"http://" + witness + "/block?height=8000": jsonResponse(wrapResult(fmt.Sprintf(`{
+				"block_id": {"hash": %q}
+			}`, hash))),
+		},
+	}
+
+	configurer := NewStateSyncConfigurer(homeDir, mock)
+	if err := configurer.Configure(context.Background(), StateSyncRequest{
+		RpcServers: []string{witness},
+	}); err != nil {
+		t.Fatalf("Configure failed: %v", err)
+	}
+
+	ss := readTOML(t, filepath.Join(homeDir, "config", "config.toml"))["statesync"].(map[string]any)
+	if ss["rpc-servers"] != witness+","+witness {
+		t.Errorf("expected explicit witness padded to two, got %v", ss["rpc-servers"])
+	}
+	if ss["trust-height"] != int64(8000) {
+		t.Errorf("expected trust-height 8000, got %v", ss["trust-height"])
+	}
+}
+
+// The regression case: a peer-derived witness whose host serves P2P but not RPC
+// (an external NLB hostname). The reachable witness is kept; the dead one is
+// dropped instead of being written and crashlooping seid.
+func TestStateSyncConfigurer_DropsUnreachableWitness(t *testing.T) {
+	homeDir := t.TempDir()
+	setupPeersInConfig(t, homeDir, []string{
+		"nodeId1@1.2.3.4:26656",
+		"nodeId2@syncer-0-0-p2p.arctic-1.prod.platform.sei.io:26656",
+	})
+
+	hash := generateBlockHash()
+	mock := &mockHTTPDoer{
+		responses: map[string]*http.Response{
+			// Only 1.2.3.4 serves RPC; the p2p NLB host has no /status entry.
+			"http://1.2.3.4:26657/status": jsonResponse(wrapResult(`{
+				"sync_info": {"latest_block_height": "10000"}
+			}`)),
+			"http://1.2.3.4:26657/block?height=8000": jsonResponse(wrapResult(fmt.Sprintf(`{
+				"block_id": {"hash": %q}
+			}`, hash))),
+		},
+	}
+
+	configurer := NewStateSyncConfigurer(homeDir, mock)
+	if err := configurer.Configure(context.Background(), StateSyncRequest{}); err != nil {
+		t.Fatalf("Configure failed: %v", err)
+	}
+
+	ss := readTOML(t, filepath.Join(homeDir, "config", "config.toml"))["statesync"].(map[string]any)
+	if ss["rpc-servers"] != "1.2.3.4:26657,1.2.3.4:26657" {
+		t.Errorf("expected unreachable witness dropped, got %v", ss["rpc-servers"])
+	}
+}
+
+// When no candidate witness is reachable, fail at configure time with a clear
+// error rather than writing a config that makes seid exit on "no witnesses".
+func TestStateSyncConfigurer_NoReachableWitness(t *testing.T) {
+	homeDir := t.TempDir()
+	setupPeersInConfig(t, homeDir, []string{"nodeId1@1.2.3.4:26656"})
+
+	configurer := NewStateSyncConfigurer(homeDir, &mockHTTPDoer{})
+	err := configurer.Configure(context.Background(), StateSyncRequest{})
+	if err == nil {
+		t.Fatal("expected error when no witness is reachable")
+	}
+	if !strings.Contains(err.Error(), "no reachable RPC witness") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
