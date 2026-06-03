@@ -318,10 +318,7 @@ type ConfigureStateSyncTask struct {
 	UseLocalSnapshot bool
 	TrustPeriod      string
 	BackfillBlocks   int64
-	// RpcServers, when set, are state-sync witness endpoints ("host:port") used
-	// verbatim; the controller resolves these to internal cluster RPC services.
-	// Left empty, the sidecar derives witnesses from the node's peers.
-	RpcServers []string
+	RpcServers       []string
 }
 
 func (t ConfigureStateSyncTask) TaskType() string { return TaskTypeConfigureStateSync }
