@@ -229,6 +229,31 @@ func TestConfigureStateSyncRoundTrip(t *testing.T) {
 	}
 }
 
+// Wire contract the controller depends on: RpcServers must surface verbatim
+// under the "rpcServers" params key the sidecar handler reads.
+func TestConfigureStateSyncRpcServersWire(t *testing.T) {
+	witnesses := []string{
+		"syncer-0-0-0.syncer-0-0.arctic-1.svc.cluster.local:26657",
+		"syncer-0-1-0.syncer-0-1.arctic-1.svc.cluster.local:26657",
+	}
+	req := ConfigureStateSyncTask{RpcServers: witnesses}.ToTaskRequest()
+	if req.Params == nil {
+		t.Fatal("Params = nil, want rpcServers populated")
+	}
+	got, ok := (*req.Params)["rpcServers"].([]string)
+	if !ok {
+		t.Fatalf("params[rpcServers] = %T, want []string", (*req.Params)["rpcServers"])
+	}
+	if len(got) != len(witnesses) {
+		t.Fatalf("rpcServers = %v, want %v", got, witnesses)
+	}
+	for i := range witnesses {
+		if got[i] != witnesses[i] {
+			t.Errorf("rpcServers[%d] = %q, want %q", i, got[i], witnesses[i])
+		}
+	}
+}
+
 func TestMarkReadyRoundTrip(t *testing.T) {
 	task := MarkReadyTask{}
 	if err := task.Validate(); err != nil {
