@@ -551,6 +551,46 @@ func TestStateSyncConfigurer_DropsUnreachableWitness(t *testing.T) {
 	}
 }
 
+// The exact production-regression ordering: the FIRST candidate is unreachable
+// (an external P2P NLB host) and the trust query must fall through to the
+// reachable second one. reachable[0] is the post-probe slice, so the dead
+// primary is filtered out before it's used for the trust point.
+func TestStateSyncConfigurer_PrimaryUnreachableFallsThrough(t *testing.T) {
+	homeDir := t.TempDir()
+	setupPeersInConfig(t, homeDir, []string{
+		"nodeId1@syncer-0-0-p2p.arctic-1.prod.platform.sei.io:26656", // P2P-only, no RPC
+		"nodeId2@1.2.3.4:26656", // serves RPC
+	})
+
+	hash := generateBlockHash()
+	mock := &mockHTTPDoer{
+		responses: map[string]*http.Response{
+			"http://1.2.3.4:26657/status": jsonResponse(wrapResult(`{
+				"sync_info": {"latest_block_height": "10000"}
+			}`)),
+			"http://1.2.3.4:26657/block?height=8000": jsonResponse(wrapResult(fmt.Sprintf(`{
+				"block_id": {"hash": %q}
+			}`, hash))),
+		},
+	}
+
+	configurer := NewStateSyncConfigurer(homeDir, mock)
+	if err := configurer.Configure(context.Background(), StateSyncRequest{}); err != nil {
+		t.Fatalf("Configure failed: %v", err)
+	}
+
+	ss := readTOML(t, filepath.Join(homeDir, "config", "config.toml"))["statesync"].(map[string]any)
+	if ss["trust-height"] != int64(8000) {
+		t.Errorf("expected trust query to fall through to the reachable witness, trust-height = %v", ss["trust-height"])
+	}
+	if ss["trust-hash"] != hash {
+		t.Errorf("expected trust-hash %s, got %v", hash, ss["trust-hash"])
+	}
+	if ss["rpc-servers"] != "1.2.3.4:26657,1.2.3.4:26657" {
+		t.Errorf("expected only the reachable witness, got %v", ss["rpc-servers"])
+	}
+}
+
 // When no candidate witness is reachable, fail at configure time with a clear
 // error rather than writing a config that makes seid exit on "no witnesses".
 func TestStateSyncConfigurer_NoReachableWitness(t *testing.T) {

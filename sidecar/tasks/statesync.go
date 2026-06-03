@@ -195,7 +195,12 @@ func (s *StateSyncConfigurer) reachableWitnesses(ctx context.Context, candidates
 	return reachable
 }
 
-// probeWitness reports whether endpoint answers /status within the probe timeout.
+// probeWitness reports whether endpoint answers /status. The context deadline
+// is the load-bearing bound here: the sidecar's http.Client has no Timeout, so
+// a black-holed endpoint (TCP accepted but no response) is bounded only by this
+// ctx cancellation. A listener-down endpoint returns connection-refused
+// immediately. (The rpc client applies an equal default internally, so the
+// effective bound is witnessProbeTimeout either way.)
 func (s *StateSyncConfigurer) probeWitness(ctx context.Context, endpoint string) error {
 	pctx, cancel := context.WithTimeout(ctx, witnessProbeTimeout)
 	defer cancel()
