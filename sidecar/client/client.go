@@ -303,6 +303,13 @@ func (c *SidecarClient) SubmitMarkReadyTask(ctx context.Context, task MarkReadyT
 	return c.SubmitTask(ctx, task.ToTaskRequest())
 }
 
+func (c *SidecarClient) SubmitRestartSeidTask(ctx context.Context, task RestartSeidTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
 func (c *SidecarClient) SubmitConfigureStateSyncTask(ctx context.Context, task ConfigureStateSyncTask) (uuid.UUID, error) {
 	if err := task.Validate(); err != nil {
 		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
