@@ -21,6 +21,7 @@ const (
 	TaskConfigValidate           TaskType = "config-validate"
 	TaskConfigReload             TaskType = "config-reload"
 	TaskMarkReady                TaskType = "mark-ready"
+	TaskRestartSeid              TaskType = "restart-seid"
 	TaskConfigureGenesis         TaskType = "configure-genesis"
 	TaskConfigureStateSync       TaskType = "configure-state-sync"
 	TaskSnapshotUpload           TaskType = "snapshot-upload"

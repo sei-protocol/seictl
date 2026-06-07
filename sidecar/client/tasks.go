@@ -45,6 +45,7 @@ const (
 	TaskTypeConfigValidate     = string(engine.TaskConfigValidate)
 	TaskTypeConfigReload       = string(engine.TaskConfigReload)
 	TaskTypeMarkReady          = string(engine.TaskMarkReady)
+	TaskTypeRestartSeid        = string(engine.TaskRestartSeid)
 	TaskTypeConfigureGenesis   = string(engine.TaskConfigureGenesis)
 	TaskTypeConfigureStateSync = string(engine.TaskConfigureStateSync)
 	TaskTypeSnapshotUpload     = string(engine.TaskSnapshotUpload)
@@ -354,6 +355,19 @@ func (t MarkReadyTask) TaskType() string { return TaskTypeMarkReady }
 func (t MarkReadyTask) Validate() error  { return nil }
 
 func (t MarkReadyTask) ToTaskRequest() TaskRequest {
+	req := TaskRequest{Type: t.TaskType()}
+	return req
+}
+
+// RestartSeidTask restarts the co-located seid process in place so it
+// re-reads config.toml without bouncing the sidecar. The task completes
+// once seid's local RPC is serving again.
+type RestartSeidTask struct{}
+
+func (t RestartSeidTask) TaskType() string { return TaskTypeRestartSeid }
+func (t RestartSeidTask) Validate() error  { return nil }
+
+func (t RestartSeidTask) ToTaskRequest() TaskRequest {
 	req := TaskRequest{Type: t.TaskType()}
 	return req
 }

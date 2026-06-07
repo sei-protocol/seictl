@@ -112,6 +112,7 @@ var serveCmd = cli.Command{
 			engine.TaskConfigValidate:           tasks.NewConfigValidator(homeDir).Handler(),
 			engine.TaskConfigReload:             tasks.NewConfigReloader(homeDir).Handler(),
 			engine.TaskMarkReady:                tasks.MarkReadyHandler(),
+			engine.TaskRestartSeid:              tasks.NewRestartSeider().Handler(),
 			engine.TaskConfigureGenesis:         tasks.NewGenesisFetcher(homeDir, chainID, genesisBucket, genesisRegion, nil).Handler(),
 			engine.TaskConfigureStateSync:       tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
 			engine.TaskSnapshotUpload:           snapshotUploader.Handler(),
