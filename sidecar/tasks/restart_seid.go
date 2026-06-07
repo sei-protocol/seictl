@@ -21,25 +21,34 @@ const (
 	// restartSeidProcess is the comm/argv[0] of the validator process.
 	restartSeidProcess = "seid"
 
-	// restartSeidGracePeriod bounds the SIGTERM→SIGKILL window. seid traps
-	// SIGTERM and exits in ~3s; the kubelet then restarts the container
-	// (restartPolicy: Always). 30s leaves ample headroom over the observed
-	// shutdown without risking an unbounded hang.
-	restartSeidGracePeriod = 30 * time.Second
+	// restartSeidGracePeriod bounds the SIGTERM→exit window. A loaded validator's
+	// graceful shutdown (consensus WAL flush + PebbleDB/IAVL close, possibly
+	// mid-compaction) can run well past the idle-only ~3s figure, so the window
+	// is sized for the loaded-shutdown tail. If seid is still alive at the
+	// deadline the task fails loud and leaves the process running for an
+	// operator — it is never force-killed (a stuck-but-alive validator is safer
+	// than a SIGKILL mid-commit).
+	restartSeidGracePeriod = 90 * time.Second
 
 	// restartSeidUpTimeout bounds the wait for seid's local RPC to serve
 	// /status again after the restart. Cold-start replay can be slow on a
-	// loaded node; the engine has no retry, so this is the full budget.
+	// loaded node; the engine has no retry, so this is the full budget. With
+	// graceful-only shutdown there is no SIGKILL-induced replay blowup, so 5m
+	// holds; revisit for very large archive nodes if replay outgrows it.
 	restartSeidUpTimeout = 5 * time.Minute
 
 	restartSeidUpPollInterval = 1 * time.Second
+
+	// restartSeidExitPollInterval is how often gracefulStop checks whether seid
+	// has exited after SIGTERM.
+	restartSeidExitPollInterval = 100 * time.Millisecond
 )
 
 // seidStartFinder scans /proc for the running `seid start` process. It
 // corroborates argv[0]==seid with the "start" subcommand so it never matches
 // seid-init or the bash wait-loop wrapper that share the PID namespace.
 //
-// It implements actions.ProcessSignaler so it can drive actions.GracefulStop;
+// It implements actions.ProcessSignaler so stopSeid can SIGTERM + poll it;
 // FindPID ignores the name argument (the corroboration is baked in) and Signal
 // / Alive delegate to the real syscall-backed package functions.
 type seidStartFinder struct{}
@@ -90,17 +99,26 @@ func isSeidStart(cmdline []byte) bool {
 	return args[1] == "start"
 }
 
-// RestartSeider restarts the co-located seid process in place: it signals seid
-// to exit (the kubelet restarts the container), then waits for seid's local RPC
-// to serve again. seid re-reads config.toml on this restart without bouncing
-// the sidecar. The handler never starts seid and never flips the engine ready
-// flag — it is not a readiness operation.
+// RestartSeider restarts the co-located seid process in place: it SIGTERMs seid
+// and waits for it to exit gracefully (the kubelet restarts the container), then
+// waits for seid's local RPC to serve again. seid re-reads config.toml on this
+// restart without bouncing the sidecar. The handler never starts seid and never
+// flips the engine ready flag — it is not a readiness operation.
+//
+// Shutdown is graceful-only and fail-loud: if seid does not exit within the
+// grace window it is left running and the task fails (never SIGKILLed). A
+// force-kill opt-in is intentionally omitted until a non-validator forced
+// restart needs it.
+//
+// Completion means "seid's RPC is serving /status again," NOT "caught up /
+// voting." Callers that need in-service-and-voting must gate height / caught-up
+// separately (downstream AwaitNodesAtHeight).
 //
 // The three OS interactions are injectable for testing:
-//   - signaler: process discovery + SIGTERM/SIGKILL (defaults to a /proc +
-//     syscall implementation that corroborates `seid start`).
-//   - probeUp: returns true once seid's local RPC reports node_info (defaults
-//     to a local CometBFT /status probe).
+//   - signaler: process discovery + SIGTERM (defaults to a /proc + syscall
+//     implementation that corroborates `seid start`).
+//   - probeUp: returns true once seid's local RPC answers /status (defaults to
+//     a local CometBFT /status probe).
 type RestartSeider struct {
 	signaler    actions.ProcessSignaler
 	probeUp     func(ctx context.Context) bool
@@ -122,9 +140,9 @@ func NewRestartSeider() *RestartSeider {
 	}
 }
 
-// seidRPCUp reports whether seid's local RPC answers /status with a non-empty
-// node_info network — the same signal sign_and_broadcast uses to confirm the
-// local node identity. A transport error (RPC not yet listening) returns false.
+// seidRPCUp reports whether seid's local RPC answers /status (latest_block_height
+// parses); any successful parse counts as RPC up. A transport or parse error
+// (RPC not yet listening) returns false.
 func seidRPCUp(ctx context.Context, c *rpc.StatusClient) bool {
 	if _, err := c.Status(ctx); err != nil {
 		return false
@@ -143,17 +161,51 @@ func (r *RestartSeider) Handler() engine.TaskHandler {
 	})
 }
 
-// stopSeid signals seid to exit. A missing process is not an error: seid may be
-// down or mid-restart already, in which case we proceed straight to waitForUp.
+// stopSeid SIGTERMs seid and waits for it to exit gracefully. When the process
+// is not found in /proc we disambiguate: if seid's RPC is serving, the process
+// exists but is invisible to us (e.g. a non-shared-PID-ns profile) and we refuse
+// to report a restart that did not happen; if its RPC is down, seid is genuinely
+// stopped or mid-restart (including the entrypoint's bash wait-loop window before
+// it execs seid) and we proceed straight to waitForUp.
 func (r *RestartSeider) stopSeid(ctx context.Context) error {
 	pid, err := r.signaler.FindPID(restartSeidProcess)
 	if err != nil {
-		restartSeidLog.Info("seid process not running; proceeding to wait for it to come up",
+		if r.probeUp(ctx) {
+			return fmt.Errorf("seid RPC is serving but its process was not found in /proc: %w — refusing to report a restart that did not happen", err)
+		}
+		restartSeidLog.Info("seid process not running and RPC down; proceeding to wait for it to come up",
 			"reason", err.Error())
 		return nil
 	}
 	restartSeidLog.Info("restarting seid in place", "pid", pid, "grace", r.gracePeriod)
-	return actions.GracefulStop(ctx, r.signaler, restartSeidProcess, r.gracePeriod)
+	return r.gracefulStop(ctx, pid)
+}
+
+// gracefulStop SIGTERMs pid and polls until it exits or the grace window
+// elapses. It never escalates to SIGKILL: if seid is still alive at the
+// deadline the task fails and the process is left running for an operator.
+func (r *RestartSeider) gracefulStop(ctx context.Context, pid int) error {
+	if err := r.signaler.Signal(pid, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("sending SIGTERM to seid pid %d: %w", pid, err)
+	}
+
+	ticker := time.NewTicker(restartSeidExitPollInterval)
+	defer ticker.Stop()
+	deadline := time.After(r.gracePeriod)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return fmt.Errorf("seid pid %d still alive %s after SIGTERM; leaving it running (not force-killing a validator mid-commit)", pid, r.gracePeriod)
+		case <-ticker.C:
+			if !r.signaler.Alive(pid) {
+				restartSeidLog.Info("seid exited after SIGTERM", "pid", pid)
+				return nil
+			}
+		}
+	}
 }
 
 // waitForUp polls seid's local RPC until it serves /status or the timeout

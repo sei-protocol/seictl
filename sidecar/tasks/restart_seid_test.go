@@ -2,7 +2,9 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -60,7 +62,7 @@ func TestRestartSeider_HappyPath(t *testing.T) {
 	}
 }
 
-func TestRestartSeider_GraceTimeoutEscalatesToSIGKILL(t *testing.T) {
+func TestRestartSeider_GraceTimeoutFailsWithoutSIGKILL(t *testing.T) {
 	sig := &fakeSignaler{findPID: 42}
 	sig.alive.Store(true) // never exits on SIGTERM
 
@@ -72,36 +74,78 @@ func TestRestartSeider_GraceTimeoutEscalatesToSIGKILL(t *testing.T) {
 		upInterval:  time.Millisecond,
 	}
 
-	if err := r.Handler()(context.Background(), nil); err != nil {
-		t.Fatalf("expected success after SIGKILL, got %v", err)
+	err := r.Handler()(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected grace-timeout failure, got nil")
 	}
-	if len(sig.signals) < 2 {
-		t.Fatalf("expected >= 2 signals, got %v", sig.signals)
+	if !strings.Contains(err.Error(), "still alive") {
+		t.Errorf("expected still-alive error, got %v", err)
 	}
-	if sig.signals[0] != syscall.SIGTERM {
-		t.Errorf("first signal: expected SIGTERM, got %v", sig.signals[0])
-	}
-	if sig.signals[len(sig.signals)-1] != syscall.SIGKILL {
-		t.Errorf("last signal: expected SIGKILL, got %v", sig.signals[len(sig.signals)-1])
+	if len(sig.signals) != 1 || sig.signals[0] != syscall.SIGTERM {
+		t.Errorf("expected single SIGTERM and no SIGKILL, got %v", sig.signals)
 	}
 }
 
-func TestRestartSeider_NotFoundWaitsForUp(t *testing.T) {
+func TestRestartSeider_NotFoundRPCDownWaitsForUp(t *testing.T) {
 	sig := &fakeSignaler{findErr: fmt.Errorf("process \"seid\" not found in /proc")}
 
 	r := &RestartSeider{
 		signaler:    sig,
-		probeUp:     upAfter(2), // booting: down twice, then up
+		probeUp:     upAfter(2), // RPC down (not-found guard + first poll), then up
 		gracePeriod: time.Second,
 		upTimeout:   time.Second,
 		upInterval:  time.Millisecond,
 	}
 
 	if err := r.Handler()(context.Background(), nil); err != nil {
-		t.Fatalf("expected success when seid not found, got %v", err)
+		t.Fatalf("expected success when seid not found and RPC down, got %v", err)
 	}
 	if len(sig.signals) != 0 {
 		t.Errorf("expected no signals when seid not running, got %v", sig.signals)
+	}
+}
+
+func TestRestartSeider_NotFoundRPCUpFails(t *testing.T) {
+	sig := &fakeSignaler{findErr: fmt.Errorf("process \"seid\" not found in /proc")}
+
+	r := &RestartSeider{
+		signaler:    sig,
+		probeUp:     upAfter(0), // RPC serving despite no /proc match
+		gracePeriod: time.Second,
+		upTimeout:   time.Second,
+		upInterval:  time.Millisecond,
+	}
+
+	err := r.Handler()(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error when RPC up but process not found, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found in /proc") {
+		t.Errorf("expected not-found-in-/proc error, got %v", err)
+	}
+	if len(sig.signals) != 0 {
+		t.Errorf("expected no signals, got %v", sig.signals)
+	}
+}
+
+func TestRestartSeider_WaitForUpContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &RestartSeider{
+		signaler:    &fakeSignaler{findErr: fmt.Errorf("process \"seid\" not found in /proc")},
+		probeUp:     neverUp,
+		gracePeriod: time.Second,
+		upTimeout:   time.Minute,
+		upInterval:  10 * time.Millisecond,
+	}
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	err := r.waitForUp(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
 
