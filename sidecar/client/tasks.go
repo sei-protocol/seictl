@@ -90,19 +90,6 @@ func (t SnapshotRestoreTask) ToTaskRequest() TaskRequest {
 	return req
 }
 
-// SnapshotRestoreTaskFromParams reconstructs a SnapshotRestoreTask from
-// a generic params map. Useful for round-trip testing.
-func SnapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestoreTask {
-	var t SnapshotRestoreTask
-	switch h := params["targetHeight"].(type) {
-	case float64:
-		t.TargetHeight = int64(h)
-	case int64:
-		t.TargetHeight = h
-	}
-	return t
-}
-
 // SnapshotUploadTask archives and streams a local snapshot to S3.
 // S3 coordinates are derived by the sidecar from its environment.
 type SnapshotUploadTask struct {
@@ -115,12 +102,6 @@ func (t SnapshotUploadTask) Validate() error { return nil }
 func (t SnapshotUploadTask) ToTaskRequest() TaskRequest {
 	req := TaskRequest{Type: t.TaskType()}
 	return req
-}
-
-// SnapshotUploadTaskFromParams reconstructs a SnapshotUploadTask from
-// a generic params map.
-func SnapshotUploadTaskFromParams(_ map[string]interface{}) SnapshotUploadTask {
-	return SnapshotUploadTask{}
 }
 
 // ConfigureGenesisTask instructs the sidecar to resolve and write genesis.json.
@@ -137,12 +118,6 @@ func (t ConfigureGenesisTask) Validate() error { return nil }
 func (t ConfigureGenesisTask) ToTaskRequest() TaskRequest {
 	req := TaskRequest{Type: t.TaskType()}
 	return req
-}
-
-// ConfigureGenesisTaskFromParams reconstructs a ConfigureGenesisTask from
-// a generic params map.
-func ConfigureGenesisTaskFromParams(_ map[string]interface{}) ConfigureGenesisTask {
-	return ConfigureGenesisTask{}
 }
 
 // PeerSourceType identifies the peer discovery mechanism.
@@ -228,62 +203,6 @@ func (t DiscoverPeersTask) ToTaskRequest() TaskRequest {
 	p := map[string]interface{}{"sources": sources}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
-}
-
-// DiscoverPeersTaskFromParams reconstructs a DiscoverPeersTask from
-// a generic params map.
-func DiscoverPeersTaskFromParams(params map[string]interface{}) (DiscoverPeersTask, error) {
-	rawSources, ok := params["sources"]
-	if !ok {
-		return DiscoverPeersTask{}, fmt.Errorf("missing 'sources' key")
-	}
-	items, ok := rawSources.([]interface{})
-	if !ok {
-		return DiscoverPeersTask{}, fmt.Errorf("sources is not a list")
-	}
-
-	var sources []PeerSource
-	for i, item := range items {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			return DiscoverPeersTask{}, fmt.Errorf("source[%d] is not an object", i)
-		}
-		typ, _ := m["type"].(string)
-		src := PeerSource{Type: PeerSourceType(typ)}
-
-		switch PeerSourceType(typ) {
-		case PeerSourceEC2Tags:
-			src.Region, _ = m["region"].(string)
-			if rawTags, ok := m["tags"].(map[string]interface{}); ok {
-				src.Tags = make(map[string]string, len(rawTags))
-				for k, v := range rawTags {
-					src.Tags[k], _ = v.(string)
-				}
-			}
-		case PeerSourceStatic:
-			if rawAddrs, ok := m["addresses"].([]interface{}); ok {
-				src.Addresses = make([]string, 0, len(rawAddrs))
-				for _, a := range rawAddrs {
-					if s, ok := a.(string); ok {
-						src.Addresses = append(src.Addresses, s)
-					}
-				}
-			}
-		case PeerSourceDNSEndpoints:
-			if rawEps, ok := m["endpoints"].([]interface{}); ok {
-				src.Endpoints = make([]string, 0, len(rawEps))
-				for _, e := range rawEps {
-					if s, ok := e.(string); ok {
-						src.Endpoints = append(src.Endpoints, s)
-					}
-				}
-			}
-		default:
-			return DiscoverPeersTask{}, fmt.Errorf("source[%d] unknown type %q", i, typ)
-		}
-		sources = append(sources, src)
-	}
-	return DiscoverPeersTask{Sources: sources}, nil
 }
 
 // ConfigPatchTask applies generic TOML merge-patches to seid config files.
@@ -419,32 +338,6 @@ func (t ConfigApplyTask) ToTaskRequest() TaskRequest {
 	return req
 }
 
-// ConfigApplyTaskFromParams reconstructs a ConfigApplyTask from a generic
-// params map.
-func ConfigApplyTaskFromParams(params map[string]interface{}) ConfigApplyTask {
-	s := func(k string) string { v, _ := params[k].(string); return v }
-	inc, _ := params["incremental"].(bool)
-	tv := 0
-	if raw, ok := params["targetVersion"].(float64); ok {
-		tv = int(raw)
-	}
-	var overrides map[string]string
-	if raw, ok := params["overrides"].(map[string]interface{}); ok {
-		overrides = make(map[string]string, len(raw))
-		for k, v := range raw {
-			overrides[k], _ = v.(string)
-		}
-	}
-	return ConfigApplyTask{
-		Intent: seiconfig.ConfigIntent{
-			Mode:          seiconfig.NodeMode(s("mode")),
-			Overrides:     overrides,
-			Incremental:   inc,
-			TargetVersion: tv,
-		},
-	}
-}
-
 // ConfigValidateTask reads on-disk config and returns validation diagnostics.
 type ConfigValidateTask struct{}
 
@@ -479,19 +372,6 @@ func (t ConfigReloadTask) ToTaskRequest() TaskRequest {
 	p := map[string]interface{}{"fields": fields}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
-}
-
-// ConfigReloadTaskFromParams reconstructs a ConfigReloadTask from a generic
-// params map.
-func ConfigReloadTaskFromParams(params map[string]interface{}) ConfigReloadTask {
-	var fields map[string]string
-	if raw, ok := params["fields"].(map[string]interface{}); ok {
-		fields = make(map[string]string, len(raw))
-		for k, v := range raw {
-			fields[k], _ = v.(string)
-		}
-	}
-	return ConfigReloadTask{Fields: fields}
 }
 
 // ResultExportTask queries the local seid RPC for block results and uploads
@@ -530,18 +410,6 @@ func (t ResultExportTask) ToTaskRequest() TaskRequest {
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
-}
-
-// ResultExportTaskFromParams reconstructs a ResultExportTask from
-// a generic params map.
-func ResultExportTaskFromParams(params map[string]interface{}) ResultExportTask {
-	s := func(k string) string { v, _ := params[k].(string); return v }
-	return ResultExportTask{
-		Bucket:       s("bucket"),
-		Prefix:       s("prefix"),
-		Region:       s("region"),
-		CanonicalRPC: s("canonicalRpc"),
-	}
 }
 
 // GenerateIdentityTask creates validator identity (keys, node ID).
