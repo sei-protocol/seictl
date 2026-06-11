@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/leanovate/gopter"
@@ -94,7 +95,7 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 			if task.TargetHeight == 0 {
 				return req.Params == nil
 			}
-			rebuilt := SnapshotRestoreTaskFromParams(*req.Params)
+			rebuilt := snapshotRestoreTaskFromParams(*req.Params)
 			return rebuilt.TargetHeight == task.TargetHeight
 		},
 		genSnapshotRestoreTask(),
@@ -143,7 +144,7 @@ func TestDiscoverPeersRoundTrip(t *testing.T) {
 			if req.Type != TaskTypeDiscoverPeers {
 				return false
 			}
-			rebuilt, err := DiscoverPeersTaskFromParams(*req.Params)
+			rebuilt, err := discoverPeersTaskFromParams(*req.Params)
 			if err != nil {
 				return false
 			}
@@ -469,7 +470,7 @@ func TestResultExportRoundTrip(t *testing.T) {
 			if req.Type != TaskTypeResultExport {
 				return false
 			}
-			rebuilt := ResultExportTaskFromParams(*req.Params)
+			rebuilt := resultExportTaskFromParams(*req.Params)
 			return rebuilt.Bucket == task.Bucket &&
 				rebuilt.Region == task.Region
 		},
@@ -516,7 +517,7 @@ func TestResultExportTask_WithCanonicalRPC(t *testing.T) {
 		t.Errorf("canonicalRpc = %v, want %q", p["canonicalRpc"], "http://canonical-rpc:26657")
 	}
 
-	rebuilt := ResultExportTaskFromParams(p)
+	rebuilt := resultExportTaskFromParams(p)
 	if rebuilt.CanonicalRPC != task.CanonicalRPC {
 		t.Errorf("round-trip CanonicalRPC = %q, want %q", rebuilt.CanonicalRPC, task.CanonicalRPC)
 	}
@@ -624,5 +625,86 @@ func TestAwaitConditionJSONRoundTrip(t *testing.T) {
 	// JSON numbers decode as float64.
 	if p["targetHeight"] != float64(8000) {
 		t.Errorf("targetHeight = %v (type %T), want 8000", p["targetHeight"], p["targetHeight"])
+	}
+}
+
+// snapshotRestoreTaskFromParams reconstructs a SnapshotRestoreTask from
+// a generic params map. Useful for round-trip testing.
+func snapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestoreTask {
+	var t SnapshotRestoreTask
+	switch h := params["targetHeight"].(type) {
+	case float64:
+		t.TargetHeight = int64(h)
+	case int64:
+		t.TargetHeight = h
+	}
+	return t
+}
+
+// discoverPeersTaskFromParams reconstructs a DiscoverPeersTask from
+// a generic params map.
+func discoverPeersTaskFromParams(params map[string]interface{}) (DiscoverPeersTask, error) {
+	rawSources, ok := params["sources"]
+	if !ok {
+		return DiscoverPeersTask{}, fmt.Errorf("missing 'sources' key")
+	}
+	items, ok := rawSources.([]interface{})
+	if !ok {
+		return DiscoverPeersTask{}, fmt.Errorf("sources is not a list")
+	}
+
+	var sources []PeerSource
+	for i, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			return DiscoverPeersTask{}, fmt.Errorf("source[%d] is not an object", i)
+		}
+		typ, _ := m["type"].(string)
+		src := PeerSource{Type: PeerSourceType(typ)}
+
+		switch PeerSourceType(typ) {
+		case PeerSourceEC2Tags:
+			src.Region, _ = m["region"].(string)
+			if rawTags, ok := m["tags"].(map[string]interface{}); ok {
+				src.Tags = make(map[string]string, len(rawTags))
+				for k, v := range rawTags {
+					src.Tags[k], _ = v.(string)
+				}
+			}
+		case PeerSourceStatic:
+			if rawAddrs, ok := m["addresses"].([]interface{}); ok {
+				src.Addresses = make([]string, 0, len(rawAddrs))
+				for _, a := range rawAddrs {
+					if s, ok := a.(string); ok {
+						src.Addresses = append(src.Addresses, s)
+					}
+				}
+			}
+		case PeerSourceDNSEndpoints:
+			if rawEps, ok := m["endpoints"].([]interface{}); ok {
+				src.Endpoints = make([]string, 0, len(rawEps))
+				for _, e := range rawEps {
+					if s, ok := e.(string); ok {
+						src.Endpoints = append(src.Endpoints, s)
+					}
+				}
+			}
+		default:
+			return DiscoverPeersTask{}, fmt.Errorf("source[%d] unknown type %q", i, typ)
+		}
+		sources = append(sources, src)
+	}
+	return DiscoverPeersTask{Sources: sources}, nil
+}
+
+// resultExportTaskFromParams reconstructs a ResultExportTask from
+// a generic params map.
+func resultExportTaskFromParams(params map[string]interface{}) ResultExportTask {
+	s := func(k string) string { v, _ := params[k].(string); return v }
+	return ResultExportTask{
+		Bucket:       s("bucket"),
+		Prefix:       s("prefix"),
+		Region:       s("region"),
+		CanonicalRPC: s("canonicalRpc"),
 	}
 }

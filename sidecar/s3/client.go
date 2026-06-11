@@ -3,7 +3,6 @@ package s3
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
@@ -80,32 +79,4 @@ func DefaultDownloaderFactory(ctx context.Context, region string) (Downloader, e
 		return nil, fmt.Errorf("loading AWS config: %w", err)
 	}
 	return s3.NewFromConfig(cfg), nil
-}
-
-// WriteAtBuffer is a goroutine-safe in-memory io.WriterAt, used for
-// downloading small S3 objects (e.g. latest.txt) via DownloadObject.
-type WriteAtBuffer struct {
-	mu  sync.Mutex
-	buf []byte
-}
-
-func (w *WriteAtBuffer) WriteAt(p []byte, off int64) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	end := int(off) + len(p)
-	if end > len(w.buf) {
-		grown := make([]byte, end)
-		copy(grown, w.buf)
-		w.buf = grown
-	}
-	copy(w.buf[off:], p)
-	return len(p), nil
-}
-
-func (w *WriteAtBuffer) Bytes() []byte {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	out := make([]byte, len(w.buf))
-	copy(out, w.buf)
-	return out
 }
