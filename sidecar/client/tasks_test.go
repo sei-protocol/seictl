@@ -2,7 +2,6 @@ package client
 
 import (
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/leanovate/gopter"
@@ -26,41 +25,6 @@ func genSnapshotUploadTask() gopter.Gen {
 
 func genConfigureGenesisTask() gopter.Gen {
 	return gen.Const(ConfigureGenesisTask{})
-}
-
-func genEC2TagsSource() gopter.Gen {
-	return gopter.CombineGens(
-		genNonEmptyString(),
-		genNonEmptyString(),
-		genNonEmptyString(),
-	).Map(func(v []interface{}) PeerSource {
-		return PeerSource{
-			Type:   PeerSourceEC2Tags,
-			Region: v[0].(string),
-			Tags:   map[string]string{v[1].(string): v[2].(string)},
-		}
-	})
-}
-
-func genStaticSource() gopter.Gen {
-	return genNonEmptyString().Map(func(v string) PeerSource {
-		return PeerSource{
-			Type:      PeerSourceStatic,
-			Addresses: []string{v},
-		}
-	})
-}
-
-func genPeerSource() gopter.Gen {
-	return gen.OneGenOf(genEC2TagsSource(), genStaticSource())
-}
-
-func genDiscoverPeersTask() gopter.Gen {
-	return gen.SliceOfN(3, genPeerSource()).SuchThat(func(v []PeerSource) bool {
-		return len(v) > 0
-	}).Map(func(v []PeerSource) DiscoverPeersTask {
-		return DiscoverPeersTask{Sources: v}
-	})
 }
 
 func genConfigPatchTask() gopter.Gen {
@@ -129,60 +93,6 @@ func TestConfigureGenesisRoundTrip_S3(t *testing.T) {
 			return req.Type == TaskTypeConfigureGenesis && req.Params == nil
 		},
 		genConfigureGenesisTask(),
-	))
-	properties.TestingRun(t)
-}
-
-func TestDiscoverPeersRoundTrip(t *testing.T) {
-	properties := gopter.NewProperties(gopter.DefaultTestParameters())
-	properties.Property("DiscoverPeersTask round-trips through TaskRequest", prop.ForAll(
-		func(task DiscoverPeersTask) bool {
-			if err := task.Validate(); err != nil {
-				return false
-			}
-			req := task.ToTaskRequest()
-			if req.Type != TaskTypeDiscoverPeers {
-				return false
-			}
-			rebuilt, err := discoverPeersTaskFromParams(*req.Params)
-			if err != nil {
-				return false
-			}
-			if len(rebuilt.Sources) != len(task.Sources) {
-				return false
-			}
-			for i, src := range task.Sources {
-				r := rebuilt.Sources[i]
-				if r.Type != src.Type {
-					return false
-				}
-				switch src.Type {
-				case PeerSourceEC2Tags:
-					if r.Region != src.Region {
-						return false
-					}
-					if len(r.Tags) != len(src.Tags) {
-						return false
-					}
-					for k, v := range src.Tags {
-						if r.Tags[k] != v {
-							return false
-						}
-					}
-				case PeerSourceStatic:
-					if len(r.Addresses) != len(src.Addresses) {
-						return false
-					}
-					for j, a := range src.Addresses {
-						if r.Addresses[j] != a {
-							return false
-						}
-					}
-				}
-			}
-			return true
-		},
-		genDiscoverPeersTask(),
 	))
 	properties.TestingRun(t)
 }
@@ -315,33 +225,6 @@ func TestConfigureGenesisValidation(t *testing.T) {
 	}
 }
 
-func TestDiscoverPeersValidation(t *testing.T) {
-	cases := []struct {
-		name string
-		task DiscoverPeersTask
-		ok   bool
-	}{
-		{"empty sources", DiscoverPeersTask{}, false},
-		{"ec2Tags missing region", DiscoverPeersTask{Sources: []PeerSource{{Type: PeerSourceEC2Tags, Tags: map[string]string{"k": "v"}}}}, false},
-		{"ec2Tags missing tags", DiscoverPeersTask{Sources: []PeerSource{{Type: PeerSourceEC2Tags, Region: "us-east-1"}}}, false},
-		{"static missing addresses", DiscoverPeersTask{Sources: []PeerSource{{Type: PeerSourceStatic}}}, false},
-		{"unknown type", DiscoverPeersTask{Sources: []PeerSource{{Type: "unknown"}}}, false},
-		{"valid ec2Tags", DiscoverPeersTask{Sources: []PeerSource{{Type: PeerSourceEC2Tags, Region: "us-east-1", Tags: map[string]string{"k": "v"}}}}, true},
-		{"valid static", DiscoverPeersTask{Sources: []PeerSource{{Type: PeerSourceStatic, Addresses: []string{"addr1"}}}}, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.task.Validate()
-			if tc.ok && err != nil {
-				t.Errorf("expected no error, got %v", err)
-			}
-			if !tc.ok && err == nil {
-				t.Error("expected validation error, got nil")
-			}
-		})
-	}
-}
-
 func TestConfigPatchToTaskRequest_NestedValuesPreserved(t *testing.T) {
 	task := ConfigPatchTask{
 		Files: map[string]map[string]any{
@@ -447,7 +330,6 @@ func TestTaskRequestJSONRoundTrip(t *testing.T) {
 		},
 		gen.OneConstOf(
 			TaskTypeSnapshotRestore,
-			TaskTypeDiscoverPeers,
 			TaskTypeConfigPatch,
 			TaskTypeMarkReady,
 			TaskTypeConfigureGenesis,
@@ -639,62 +521,6 @@ func snapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestor
 		t.TargetHeight = h
 	}
 	return t
-}
-
-// discoverPeersTaskFromParams reconstructs a DiscoverPeersTask from
-// a generic params map.
-func discoverPeersTaskFromParams(params map[string]interface{}) (DiscoverPeersTask, error) {
-	rawSources, ok := params["sources"]
-	if !ok {
-		return DiscoverPeersTask{}, fmt.Errorf("missing 'sources' key")
-	}
-	items, ok := rawSources.([]interface{})
-	if !ok {
-		return DiscoverPeersTask{}, fmt.Errorf("sources is not a list")
-	}
-
-	var sources []PeerSource
-	for i, item := range items {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			return DiscoverPeersTask{}, fmt.Errorf("source[%d] is not an object", i)
-		}
-		typ, _ := m["type"].(string)
-		src := PeerSource{Type: PeerSourceType(typ)}
-
-		switch PeerSourceType(typ) {
-		case PeerSourceEC2Tags:
-			src.Region, _ = m["region"].(string)
-			if rawTags, ok := m["tags"].(map[string]interface{}); ok {
-				src.Tags = make(map[string]string, len(rawTags))
-				for k, v := range rawTags {
-					src.Tags[k], _ = v.(string)
-				}
-			}
-		case PeerSourceStatic:
-			if rawAddrs, ok := m["addresses"].([]interface{}); ok {
-				src.Addresses = make([]string, 0, len(rawAddrs))
-				for _, a := range rawAddrs {
-					if s, ok := a.(string); ok {
-						src.Addresses = append(src.Addresses, s)
-					}
-				}
-			}
-		case PeerSourceDNSEndpoints:
-			if rawEps, ok := m["endpoints"].([]interface{}); ok {
-				src.Endpoints = make([]string, 0, len(rawEps))
-				for _, e := range rawEps {
-					if s, ok := e.(string); ok {
-						src.Endpoints = append(src.Endpoints, s)
-					}
-				}
-			}
-		default:
-			return DiscoverPeersTask{}, fmt.Errorf("source[%d] unknown type %q", i, typ)
-		}
-		sources = append(sources, src)
-	}
-	return DiscoverPeersTask{Sources: sources}, nil
 }
 
 // resultExportTaskFromParams reconstructs a ResultExportTask from

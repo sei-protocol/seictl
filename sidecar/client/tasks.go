@@ -39,7 +39,6 @@ type TaskBuilder interface {
 // Task type constants re-exported from engine for external consumers.
 const (
 	TaskTypeSnapshotRestore    = string(engine.TaskSnapshotRestore)
-	TaskTypeDiscoverPeers      = string(engine.TaskDiscoverPeers)
 	TaskTypeConfigPatch        = string(engine.TaskConfigPatch)
 	TaskTypeConfigApply        = string(engine.TaskConfigApply)
 	TaskTypeConfigValidate     = string(engine.TaskConfigValidate)
@@ -117,91 +116,6 @@ func (t ConfigureGenesisTask) Validate() error { return nil }
 
 func (t ConfigureGenesisTask) ToTaskRequest() TaskRequest {
 	req := TaskRequest{Type: t.TaskType()}
-	return req
-}
-
-// PeerSourceType identifies the peer discovery mechanism.
-type PeerSourceType string
-
-const (
-	PeerSourceEC2Tags      PeerSourceType = "ec2Tags"
-	PeerSourceStatic       PeerSourceType = "static"
-	PeerSourceDNSEndpoints PeerSourceType = "dnsEndpoints"
-)
-
-// PeerSource is a single peer discovery source.
-type PeerSource struct {
-	Type      PeerSourceType    `json:"type"`
-	Region    string            `json:"region,omitempty"`
-	Tags      map[string]string `json:"tags,omitempty"`
-	Addresses []string          `json:"addresses,omitempty"`
-	Endpoints []string          `json:"endpoints,omitempty"`
-}
-
-// DiscoverPeersTask resolves peers from one or more sources.
-type DiscoverPeersTask struct {
-	Sources []PeerSource
-}
-
-func (t DiscoverPeersTask) TaskType() string { return TaskTypeDiscoverPeers }
-
-func (t DiscoverPeersTask) Validate() error {
-	if len(t.Sources) == 0 {
-		return fmt.Errorf("discover-peers: at least one source is required")
-	}
-	for i, src := range t.Sources {
-		switch src.Type {
-		case PeerSourceEC2Tags:
-			if src.Region == "" {
-				return fmt.Errorf("discover-peers: source[%d] ec2Tags missing required field Region", i)
-			}
-			if len(src.Tags) == 0 {
-				return fmt.Errorf("discover-peers: source[%d] ec2Tags missing required field Tags", i)
-			}
-		case PeerSourceStatic:
-			if len(src.Addresses) == 0 {
-				return fmt.Errorf("discover-peers: source[%d] static missing required field Addresses", i)
-			}
-		case PeerSourceDNSEndpoints:
-			if len(src.Endpoints) == 0 {
-				return fmt.Errorf("discover-peers: source[%d] dnsEndpoints missing required field Endpoints", i)
-			}
-		default:
-			return fmt.Errorf("discover-peers: source[%d] unknown type %q", i, src.Type)
-		}
-	}
-	return nil
-}
-
-func (t DiscoverPeersTask) ToTaskRequest() TaskRequest {
-	sources := make([]interface{}, len(t.Sources))
-	for i, src := range t.Sources {
-		m := map[string]interface{}{"type": string(src.Type)}
-		switch src.Type {
-		case PeerSourceEC2Tags:
-			m["region"] = src.Region
-			tags := make(map[string]interface{}, len(src.Tags))
-			for k, v := range src.Tags {
-				tags[k] = v
-			}
-			m["tags"] = tags
-		case PeerSourceStatic:
-			addrs := make([]interface{}, len(src.Addresses))
-			for j, a := range src.Addresses {
-				addrs[j] = a
-			}
-			m["addresses"] = addrs
-		case PeerSourceDNSEndpoints:
-			eps := make([]interface{}, len(src.Endpoints))
-			for j, e := range src.Endpoints {
-				eps[j] = e
-			}
-			m["endpoints"] = eps
-		}
-		sources[i] = m
-	}
-	p := map[string]interface{}{"sources": sources}
-	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
 }
 

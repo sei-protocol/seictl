@@ -15,7 +15,6 @@ type TaskType string
 
 const (
 	TaskSnapshotRestore          TaskType = "snapshot-restore"
-	TaskDiscoverPeers            TaskType = "discover-peers"
 	TaskConfigPatch              TaskType = "config-patch"
 	TaskConfigApply              TaskType = "config-apply"
 	TaskConfigValidate           TaskType = "config-validate"

@@ -106,7 +106,6 @@ var serveCmd = cli.Command{
 
 		handlers := map[engine.TaskType]engine.TaskHandler{
 			engine.TaskSnapshotRestore:          snapshotRestorer.Handler(),
-			engine.TaskDiscoverPeers:            tasks.NewPeerDiscoverer(homeDir, nil, nil).Handler(),
 			engine.TaskConfigPatch:              tasks.NewConfigPatcher(homeDir).Handler(),
 			engine.TaskConfigApply:              tasks.NewConfigApplier(homeDir).Handler(),
 			engine.TaskConfigValidate:           tasks.NewConfigValidator(homeDir).Handler(),
