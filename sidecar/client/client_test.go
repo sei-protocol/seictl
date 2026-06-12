@@ -203,8 +203,8 @@ func TestSubmitTask_ValidationFailure(t *testing.T) {
 		t.Fatal("server should not be called when validation fails")
 	}))
 
-	// DiscoverPeersTask requires at least one source — empty should fail validation.
-	_, err := c.SubmitDiscoverPeersTask(context.Background(), DiscoverPeersTask{})
+	// ConfigPatchTask requires at least one file — empty should fail validation.
+	_, err := c.SubmitConfigPatchTask(context.Background(), ConfigPatchTask{})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
