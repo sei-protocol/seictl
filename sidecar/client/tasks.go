@@ -676,7 +676,10 @@ func (t GovSoftwareUpgradeTask) ToTaskRequest() TaskRequest {
 // ("86400000000000"), a bool, or an object. It is carried as
 // json.RawMessage and stringified exactly ONCE in the handler
 // (gov_param_change.go); a pre-escaped string would double-encode and
-// fail at apply time.
+// fail at apply time. Integer-valued params must be JSON strings (e.g.
+// "100"), not bare numbers — the sidecar decode is float64-based and
+// loses precision above 2^53 (Sei large-integer params are string-encoded
+// by convention).
 type ParamChangeInput struct {
 	Subspace string          `json:"subspace"`
 	Key      string          `json:"key"`

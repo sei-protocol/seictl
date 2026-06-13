@@ -38,6 +38,12 @@ var govParamChangeLog = seilog.NewLogger("seictl", "task", "gov-param-change")
 // paramChange is one (subspace, key, value) entry. Value is raw JSON of
 // whatever shape the param's registered type expects (scalar, string,
 // bool, or object). It is stringified exactly ONCE — see buildParamChangeMsg.
+//
+// Integer-valued params MUST be passed as JSON strings (e.g. "100"), not
+// bare numbers: the sidecar request decode routes values through a
+// map[string]any (float64 numbers), which silently loses precision above
+// 2^53. Sei's large-integer params (durations, windows) are string-encoded
+// by convention, so this is the natural form anyway.
 type paramChange struct {
 	Subspace string          `json:"subspace"`
 	Key      string          `json:"key"`

@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -89,11 +90,77 @@ func TestBuildParamChangeMsg(t *testing.T) {
 		}
 	})
 
-	t.Run("empty changes rejected", func(t *testing.T) {
-		req := validParamChangeRequest()
-		req.Changes = nil
-		if _, err := buildParamChangeMsg(cfg, req); err == nil {
-			t.Fatal("expected error for empty changes")
+	t.Run("validation failures are Terminal", func(t *testing.T) {
+		cases := []struct {
+			name string
+			mut  func(*GovParamChangeRequest)
+		}{
+			{"missing keyName", func(r *GovParamChangeRequest) { r.KeyName = "" }},
+			{"missing title", func(r *GovParamChangeRequest) { r.Title = "" }},
+			{"missing description", func(r *GovParamChangeRequest) { r.Description = "" }},
+			{"empty changes", func(r *GovParamChangeRequest) { r.Changes = nil }},
+			{"empty subspace", func(r *GovParamChangeRequest) { r.Changes[0].Subspace = "" }},
+			{"empty key", func(r *GovParamChangeRequest) { r.Changes[0].Key = "" }},
+			{"empty value", func(r *GovParamChangeRequest) { r.Changes[0].Value = nil }},
+			{"non-usei deposit", func(r *GovParamChangeRequest) { r.InitialDeposit = "1uatom" }},
+			{"zero-coin deposit", func(r *GovParamChangeRequest) { r.InitialDeposit = "0usei" }},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				req := validParamChangeRequest()
+				tc.mut(&req)
+				_, err := buildParamChangeMsg(cfg, req)
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				if !IsTerminal(err) {
+					t.Errorf("err = %v, want Terminal", err)
+				}
+			})
 		}
 	})
+}
+
+// TestGovParamChangeHandler_HappyPath threads the handler end-to-end
+// through signAndBroadcast with a fake txClient. The MsgSubmitProposal
+// content (a ParameterChangeProposal) is packed as an Any, so reaching
+// the broadcast step proves newSignTxInterfaceRegistry registers the
+// x/params proposal interfaces; a missing registration fails in
+// txCfg.TxEncoder before the fakeTxClient ever sees bytes.
+func TestGovParamChangeHandler_HappyPath(t *testing.T) {
+	cfg, _ := newGuardCfg(t, "arctic-1")
+	tc := &fakeTxClient{
+		accountNumber: 17,
+		sequence:      42,
+		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h", Height: 0},
+		queryDefault:  &sdk.TxResponse{Code: 0, Height: 7},
+	}
+
+	req := validParamChangeRequest()
+	msg, err := buildParamChangeMsg(cfg, req)
+	if err != nil {
+		t.Fatalf("buildParamChangeMsg: %v", err)
+	}
+	info, err := cfg.Keyring.Key("node_admin")
+	if err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+
+	result, err := signAndBroadcast(context.Background(), cfg, tc, SignAndBroadcastInput{
+		ChainID: "arctic-1",
+		KeyName: "node_admin",
+		Msg:     msg,
+		Fees:    req.Fees,
+		Gas:     req.Gas,
+		TaskID:  "00000000-0000-0000-0000-0000000000aa",
+	}, info.GetAddress())
+	if err != nil {
+		t.Fatalf("signAndBroadcast: %v", err)
+	}
+	if result.TxHash != "h" {
+		t.Errorf("TxHash = %q, want %q", result.TxHash, "h")
+	}
+	if tc.broadcasts != 1 {
+		t.Errorf("broadcasts = %d, want 1", tc.broadcasts)
+	}
 }
