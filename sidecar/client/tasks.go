@@ -59,6 +59,7 @@ const (
 
 	TaskTypeGovVote            = string(engine.TaskGovVote)
 	TaskTypeGovSoftwareUpgrade = string(engine.TaskGovSoftwareUpgrade)
+	TaskTypeGovParamChange     = string(engine.TaskGovParamChange)
 )
 
 // Known condition and action values for AwaitConditionTask.
@@ -662,6 +663,106 @@ func (t GovSoftwareUpgradeTask) ToTaskRequest() TaskRequest {
 	}
 	if t.UpgradeInfo != "" {
 		p["upgradeInfo"] = t.UpgradeInfo
+	}
+	if t.Memo != "" {
+		p["memo"] = t.Memo
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// ParamChangeInput is one (subspace, key, value) entry of a
+// ParameterChangeProposal. Value is raw JSON of whatever shape the
+// param's registered type expects — a scalar (100), a string
+// ("86400000000000"), a bool, or an object. It is carried as
+// json.RawMessage and stringified exactly ONCE in the handler
+// (gov_param_change.go); a pre-escaped string would double-encode and
+// fail at apply time. Integer-valued params must be JSON strings (e.g.
+// "100"), not bare numbers — the sidecar decode is float64-based and
+// loses precision above 2^53 (Sei large-integer params are string-encoded
+// by convention).
+type ParamChangeInput struct {
+	Subspace string          `json:"subspace"`
+	Key      string          `json:"key"`
+	Value    json.RawMessage `json:"value"`
+}
+
+// GovParamChangeTask submits a gov v1beta1 ParameterChangeProposal. The
+// chain auto-assigns proposalID; it is not returned via the task result
+// (operators correlate via the memo's taskID= tag).
+//
+// REHYDRATION WARNING: MsgSubmitProposal is NOT chain-idempotent, and —
+// unlike a software upgrade, which the upgrade module applies once at a
+// named height — a param-change has no "applies once" safety net: a
+// rehydration double-submit produces two real proposals and two
+// deposits. See the handler doc in sidecar/tasks/gov_param_change.go
+// and #174.
+type GovParamChangeTask struct {
+	ChainID string
+	KeyName string
+
+	Title       string
+	Description string
+
+	Changes []ParamChangeInput
+
+	InitialDeposit string
+
+	Memo string
+	Fees string
+	Gas  uint64
+}
+
+func (t GovParamChangeTask) TaskType() string { return TaskTypeGovParamChange }
+
+func (t GovParamChangeTask) Validate() error {
+	if t.ChainID == "" {
+		return errors.New("gov-param-change: chainId required")
+	}
+	if t.KeyName == "" {
+		return errors.New("gov-param-change: keyName required")
+	}
+	if t.Title == "" {
+		return errors.New("gov-param-change: title required")
+	}
+	if t.Description == "" {
+		return errors.New("gov-param-change: description required")
+	}
+	if len(t.Changes) == 0 {
+		return errors.New("gov-param-change: at least one change required")
+	}
+	for i, c := range t.Changes {
+		if c.Subspace == "" {
+			return fmt.Errorf("gov-param-change: changes[%d].subspace required", i)
+		}
+		if c.Key == "" {
+			return fmt.Errorf("gov-param-change: changes[%d].key required", i)
+		}
+		if len(c.Value) == 0 {
+			return fmt.Errorf("gov-param-change: changes[%d].value required", i)
+		}
+	}
+	if t.InitialDeposit == "" {
+		return errors.New("gov-param-change: initialDeposit required")
+	}
+	if t.Fees == "" {
+		return errors.New("gov-param-change: fees required")
+	}
+	if t.Gas == 0 {
+		return errors.New("gov-param-change: gas required (must be > 0)")
+	}
+	return nil
+}
+
+func (t GovParamChangeTask) ToTaskRequest() TaskRequest {
+	p := map[string]interface{}{
+		"chainId":        t.ChainID,
+		"keyName":        t.KeyName,
+		"title":          t.Title,
+		"description":    t.Description,
+		"changes":        t.Changes,
+		"initialDeposit": t.InitialDeposit,
+		"fees":           t.Fees,
+		"gas":            t.Gas,
 	}
 	if t.Memo != "" {
 		p["memo"] = t.Memo

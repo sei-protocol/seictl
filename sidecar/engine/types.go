@@ -33,6 +33,7 @@ const (
 	TaskSetGenesisPeers          TaskType = "set-genesis-peers"
 	TaskGovVote                  TaskType = "gov-vote"
 	TaskGovSoftwareUpgrade       TaskType = "gov-software-upgrade"
+	TaskGovParamChange           TaskType = "gov-param-change"
 )
 
 // Task is a unit of work submitted by the controller. When ID is set, the

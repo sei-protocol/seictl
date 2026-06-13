@@ -124,6 +124,7 @@ var serveCmd = cli.Command{
 			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
 			engine.TaskGovVote:                  tasks.NewGovVoter(execCfg).Handler(),
 			engine.TaskGovSoftwareUpgrade:       tasks.NewGovSoftwareUpgrader(execCfg).Handler(),
+			engine.TaskGovParamChange:           tasks.NewGovParamChanger(execCfg).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)
