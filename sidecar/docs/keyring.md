@@ -7,7 +7,7 @@ governance signing design).
 
 This document covers the operator-facing contract. The full design — including
 the controller-side Secret projection that materializes the keyring directory
-in the pod — lives in `docs/design/in-pod-governance-signing.md`.
+in the pod — lives in the [in-pod-governance-signing design](https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/governance-signing/in-pod-governance-signing.md) (relocated to the bdchatham-designs repo per Design 05 / PLT-497).
 
 ## Environment contract
 
@@ -70,7 +70,7 @@ no keyring object and live in different packages.
 
 ## Operator runbook
 
-See the "Operator runbook: creating the Secrets" section of
-`docs/design/in-pod-governance-signing.md` for the end-to-end flow:
+See the "Operator runbook: creating the Secrets" section of the
+[in-pod-governance-signing design](https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/governance-signing/in-pod-governance-signing.md) for the end-to-end flow:
 generating the keyring locally, building the projected Kubernetes Secret,
 and wiring it to the validator CRD.
