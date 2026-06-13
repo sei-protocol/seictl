@@ -2,7 +2,7 @@
 // `nd`) verb tree. v1 ships `apply`; subsequent PRs add get/list/delete
 // and watch.
 //
-// See docs/design/nodedeployment-cli.md for output shape and exit-code
+// See https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/nodedeployment-cli/nodedeployment-cli.md for output shape and exit-code
 // conventions.
 package nodedeployment
 
