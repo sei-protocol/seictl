@@ -3,6 +3,8 @@ package tasks
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -123,6 +125,64 @@ func TestParseAssembleNodes_MissingName(t *testing.T) {
 	// The node should unmarshal but with empty Name — the handler validates this.
 	if nodes[0].Name != "" {
 		t.Fatalf("expected empty name, got %q", nodes[0].Name)
+	}
+}
+
+func TestAssembler_UploadGenesis_ReturnsHashOfUploadedBytes(t *testing.T) {
+	homeDir := t.TempDir()
+	configDir := filepath.Join(homeDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := []byte(`{"chain_id":"test-chain-1","app_state":{"staking":{"params":{}}}}`)
+	if err := os.WriteFile(filepath.Join(configDir, "genesis.json"), body, 0o644); err != nil {
+		t.Fatalf("write genesis: %v", err)
+	}
+
+	mock := newMockS3Uploader()
+	a := NewGenesisAssembler(homeDir, "my-bucket", "us-west-2", "test-chain-1", nil, mockUploaderFactory(mock))
+
+	gotHash, err := a.uploadGenesis(context.Background(), AssembleGenesisRequest{})
+	if err != nil {
+		t.Fatalf("uploadGenesis: %v", err)
+	}
+
+	// The returned hash is the SHA-256 of the exact uploaded bytes.
+	uploaded, ok := mock.uploads["my-bucket/test-chain-1/genesis.json"]
+	if !ok {
+		t.Fatal("genesis.json was not uploaded")
+	}
+	sum := sha256.Sum256(uploaded)
+	wantHash := hex.EncodeToString(sum[:])
+	if gotHash != wantHash {
+		t.Errorf("returned hash = %q, want sha256(uploaded bytes) = %q", gotHash, wantHash)
+	}
+	// Byte-exactness: the uploaded bytes equal the on-disk genesis (no re-marshal).
+	if !bytes.Equal(uploaded, body) {
+		t.Errorf("uploaded bytes differ from on-disk genesis; got %q", uploaded)
+	}
+	// No "sha256:" prefix — bare hex.
+	if strings.Contains(gotHash, ":") {
+		t.Errorf("hash %q must be bare hex (no algorithm prefix)", gotHash)
+	}
+	// The hash travels only in-band: no sibling .sha256 object is written
+	// to the attacker-writable prefix.
+	if _, ok := mock.uploads["my-bucket/test-chain-1/genesis.json.sha256"]; ok {
+		t.Error("sibling genesis.json.sha256 object must not be uploaded; the hash travels in-band only")
+	}
+
+	// The in-band result the handler emits is {"genesisHash":"<bare-hex>"}
+	// carrying exactly sha256(uploaded bytes).
+	resultJSON, err := json.Marshal(AssembleGenesisResult{GenesisHash: gotHash})
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	var decoded AssembleGenesisResult
+	if err := json.Unmarshal(resultJSON, &decoded); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if decoded.GenesisHash != wantHash {
+		t.Errorf("in-band result genesisHash = %q, want sha256(uploaded) = %q", decoded.GenesisHash, wantHash)
 	}
 }
 

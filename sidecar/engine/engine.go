@@ -142,9 +142,11 @@ func (e *Engine) Submit(task Task) (string, error) {
 // runTask spawns a goroutine to run the handler and persist the result.
 func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
 	go func() {
-		// Thread id through ctx for handlers that need it (e.g., sign-tx
-		// memo tagging) without changing the TaskHandler signature.
-		ctx := WithTaskID(e.ctx, id)
+		// Thread id and a result sink through ctx for handlers that need
+		// them (e.g., sign-tx memo tagging, assemble-genesis hash emission)
+		// without changing the TaskHandler signature.
+		sink := &resultSink{}
+		ctx := withResultSink(WithTaskID(e.ctx, id), sink)
 		err := e.execute(ctx, taskType, handler, params)
 
 		t := time.Now().UTC()
@@ -161,6 +163,9 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 			tr.Status = TaskStatusFailed
 		} else {
 			tr.Status = TaskStatusCompleted
+			// Capture only on success — a partial result from a failed
+			// run must not be stamped as authoritative.
+			tr.Result = sink.payload
 		}
 
 		if storeErr := e.store.Save(tr); storeErr != nil {

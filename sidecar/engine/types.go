@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -67,6 +68,35 @@ func WithTaskID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, taskIDKey{}, id)
 }
 
+// resultSink is the mutable slot a handler writes its structured result
+// into. The engine threads a sink through ctx (alongside the task ID) so a
+// handler can emit an in-band result without changing the TaskHandler
+// signature. The engine reads sink.payload only after the handler returns,
+// on the same goroutine — no concurrent access, no lock needed.
+type resultSink struct {
+	payload json.RawMessage
+}
+
+type resultSinkKey struct{}
+
+// withResultSink attaches a result sink to ctx. The engine calls this in
+// runTask; tests that exercise SetTaskResult directly use it too.
+func withResultSink(ctx context.Context, sink *resultSink) context.Context {
+	return context.WithValue(ctx, resultSinkKey{}, sink)
+}
+
+// SetTaskResult records a handler's structured result for the current task.
+// It is captured by the engine and persisted on the TaskResult's Result
+// field, then surfaced over the trusted controller↔sidecar task-result
+// channel (GET /v0/tasks/{id}). Handlers that emit no result behave exactly
+// as before. A no-op when ctx carries no sink (e.g. a handler invoked
+// outside the engine in a unit test).
+func SetTaskResult(ctx context.Context, result json.RawMessage) {
+	if sink, ok := ctx.Value(resultSinkKey{}).(*resultSink); ok && sink != nil {
+		sink.payload = result
+	}
+}
+
 // TaskStatus represents the lifecycle state of a task.
 type TaskStatus string
 
@@ -96,15 +126,24 @@ func (e *TaskError) Error() string {
 }
 
 // TaskResult records a task and its outcome.
+//
+// Result carries a handler's structured output (e.g. assemble-genesis emits
+// {"genesisHash":"<bare-hex>"}). It is optional and additive: handlers that
+// emit nothing leave it nil and it is omitted from the wire, so the
+// currently-deployed controller is unaffected. This in-band channel — read
+// by the controller over the trusted GET /v0/tasks/{id} path — is the
+// authenticated alternative to publishing results through attacker-writable
+// shared storage.
 type TaskResult struct {
-	ID          string         `json:"id"`
-	Type        string         `json:"type"`
-	Status      TaskStatus     `json:"status"`
-	Run         int            `json:"run"`
-	Params      map[string]any `json:"params,omitempty"`
-	Error       string         `json:"error,omitempty"`
-	SubmittedAt time.Time      `json:"submittedAt"`
-	CompletedAt *time.Time     `json:"completedAt,omitempty"`
+	ID          string          `json:"id"`
+	Type        string          `json:"type"`
+	Status      TaskStatus      `json:"status"`
+	Run         int             `json:"run"`
+	Params      map[string]any  `json:"params,omitempty"`
+	Result      json.RawMessage `json:"result,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	SubmittedAt time.Time       `json:"submittedAt"`
+	CompletedAt *time.Time      `json:"completedAt,omitempty"`
 }
 
 // StatusResponse is the shape returned by the status endpoint.
