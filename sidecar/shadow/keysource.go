@@ -38,12 +38,13 @@ func NewTraceKeySource(evmRPC string) (*TraceKeySource, error) {
 	return &TraceKeySource{client: c}, nil
 }
 
-// Close releases the underlying RPC connection.
-func (t *TraceKeySource) Close() error {
+// Close releases the underlying RPC connection. No return value, matching
+// go-ethereum's *ethclient.Client / *rpc.Client Close() so Comparator.Close can
+// treat all closeables uniformly.
+func (t *TraceKeySource) Close() {
 	if t.client != nil {
 		t.client.Close()
 	}
-	return nil
 }
 
 // prestateAccount is the subset of the prestateTracer's per-account output the

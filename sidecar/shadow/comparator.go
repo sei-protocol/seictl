@@ -3,7 +3,6 @@ package shadow
 import (
 	"context"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/sei-protocol/seictl/sidecar/rpc"
@@ -174,10 +173,13 @@ func (c *Comparator) compareLayer2(ctx context.Context, height int64) (*Layer2Re
 }
 
 // Close releases resources held by configured Layer 2 readers / key source.
+// go-ethereum's *ethclient.Client and *rpc.Client expose Close() with NO return,
+// so they do not satisfy io.Closer — assert the no-return shape instead, or the
+// connections leak silently.
 func (c *Comparator) Close() {
 	for _, r := range []any{c.shadowState, c.canonicalState, c.keySource} {
-		if cl, ok := r.(io.Closer); ok {
-			_ = cl.Close()
+		if cl, ok := r.(interface{ Close() }); ok {
+			cl.Close()
 		}
 	}
 }
