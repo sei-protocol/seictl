@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   goreleaser:
-    uses: sei-protocol/uci/.github/workflows/goreleaser-release.yml@monty/goreleaser-reusable-workflow
+    uses: sei-protocol/uci/.github/workflows/goreleaser-release.yml@v0.0.10
     with:
       go-version-file: go.mod
       checkout-latest-tag: ${{ github.event_name == 'workflow_run' }}
