@@ -21,6 +21,12 @@ const (
 	comparePageSize     = 100
 )
 
+// Guard the external contract Comparator.Close relies on: *ethclient.Client must
+// expose a no-return Close(). If a go-ethereum upgrade changed it to Close()
+// error, the no-return assertion in Comparator.Close would silently skip it
+// (the leak we already fixed once) — this fails the build instead.
+var _ interface{ Close() } = (*ethclient.Client)(nil)
+
 // comparisonLoop holds the state for a running block comparison session.
 type comparisonLoop struct {
 	exporter     *ResultExporter
