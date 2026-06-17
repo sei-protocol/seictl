@@ -87,6 +87,10 @@ func writeLayer1(b *strings.Builder, l1 *Layer1Result) {
 
 func writeLayer2(b *strings.Builder, l2 *Layer2Result) {
 	fmt.Fprintf(b, "## Layer 2: Logical State Comparison\n\n")
+	if l2.Indeterminate {
+		fmt.Fprintf(b, "**Indeterminate** — the logical state check could not run, so this block is not validated: %s\n\n", l2.Error)
+		return
+	}
 	fmt.Fprintf(b, "**Accounts checked:** %d &nbsp;&nbsp; **Keys checked:** %d\n", l2.AccountsChecked, l2.KeysChecked)
 	fmt.Fprintf(b, "**Divergent keys:** %d\n\n", len(l2.Divergences))
 

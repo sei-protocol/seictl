@@ -3,6 +3,7 @@ package shadow
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/sei-protocol/seictl/sidecar/rpc"
@@ -10,6 +11,10 @@ import (
 )
 
 var log = seilog.NewLogger("seictl", "shadow")
+
+// layer2Timeout bounds the per-block Layer 2 RPC fan-out (touched-key trace plus
+// state reads on both chains) so one slow endpoint cannot stall the compare loop.
+const layer2Timeout = 30 * time.Second
 
 // Comparator performs block-by-block comparison between a shadow node and
 // a canonical chain node via their RPC endpoints.
@@ -85,11 +90,15 @@ func (c *Comparator) CompareBlock(ctx context.Context, height int64) (*CompareRe
 	result.Layer0 = *l0
 
 	// In migration mode AppHash mismatch is expected; a real Layer 0 divergence
-	// is an execution-results mismatch (LastResultsHash/gas). Otherwise any
-	// Layer 0 field mismatch (including AppHash) counts.
+	// is a LastResultsHash mismatch (execution results differ). Per-tx gas is
+	// compared in Layer 1; Layer 0 GasUsedMatch is not yet wired (stubbed true),
+	// so it is deliberately not part of this verdict. Otherwise any Layer 0 field
+	// mismatch (including AppHash) counts.
+	// Note: LastResultsHash at height N reflects N-1 execution; the per-tx Layer 1
+	// signal lands on the correct height, so attribution stays accurate.
 	realL0Divergence := !l0.Match()
 	if c.migrationMode {
-		realL0Divergence = !l0.LastResultsHashMatch || !l0.GasUsedMatch
+		realL0Divergence = !l0.LastResultsHashMatch
 	}
 
 	// --- Layer 1: transaction receipt comparison ---
@@ -108,13 +117,19 @@ func (c *Comparator) CompareBlock(ctx context.Context, height int64) (*CompareRe
 	if c.layer2Enabled() && (realL0Divergence || c.migrationMode) {
 		l2, err := c.compareLayer2(ctx, height)
 		if err != nil {
-			log.Warn("layer 2 state comparison failed, skipping it for this height",
+			// Fail closed: the load-bearing check could not run, so this block is
+			// NOT clean. Record it as indeterminate (forces Match=false below)
+			// rather than silently passing on the layer that actually validates
+			// the migration.
+			log.Warn("layer 2 state comparison could not run; marking indeterminate",
 				"height", height, "err", err)
+			result.Layer2 = &Layer2Result{Indeterminate: true, Error: err.Error()}
 		} else {
 			result.Layer2 = l2
 		}
 	}
 	l2Diverged := result.Layer2 != nil && len(result.Layer2.Divergences) > 0
+	l2Indeterminate := result.Layer2 != nil && result.Layer2.Indeterminate
 
 	switch {
 	case realL0Divergence:
@@ -125,7 +140,7 @@ func (c *Comparator) CompareBlock(ctx context.Context, height int64) (*CompareRe
 		result.Match = false
 		layer := 1
 		result.DivergenceLayer = &layer
-	case l2Diverged:
+	case l2Diverged || l2Indeterminate:
 		result.Match = false
 		layer := 2
 		result.DivergenceLayer = &layer
@@ -139,11 +154,30 @@ func (c *Comparator) layer2Enabled() bool {
 }
 
 // compareLayer2 fetches the accounts a block touched and compares their logical
-// state (storage/code/nonce) between the shadow and canonical chains.
+// state (balance/code/nonce/storage) between the shadow and canonical chains. It
+// bounds the per-block RPC fan-out with a timeout so one slow endpoint cannot
+// stall the compare loop.
+//
+// The CometBFT height is used directly as the EVM block number for the trace and
+// the state reads. This holds because sei-chain maps an explicit EVM block number
+// straight to the tendermint height (evmrpc getBlockNumber: identity, no offset).
+// If a future sei-chain reintroduces an offset, that identity breaks and this
+// must translate height -> EVM block number before the EVM calls.
 func (c *Comparator) compareLayer2(ctx context.Context, height int64) (*Layer2Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, layer2Timeout)
+	defer cancel()
 	touched, err := c.keySource.TouchedAccounts(ctx, height)
 	if err != nil {
 		return nil, fmt.Errorf("resolving touched accounts at height %d: %w", height, err)
 	}
 	return compareState(ctx, height, touched, c.shadowState, c.canonicalState)
+}
+
+// Close releases resources held by configured Layer 2 readers / key source.
+func (c *Comparator) Close() {
+	for _, r := range []any{c.shadowState, c.canonicalState, c.keySource} {
+		if cl, ok := r.(io.Closer); ok {
+			_ = cl.Close()
+		}
+	}
 }

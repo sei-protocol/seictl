@@ -114,11 +114,17 @@ type Layer2Result struct {
 	AccountsChecked int `json:"accountsChecked"`
 
 	// KeysChecked is the number of individual state reads compared (storage
-	// slots plus per-account code/nonce checks).
+	// slots plus per-account balance/code/nonce checks).
 	KeysChecked int `json:"keysChecked"`
 
 	// Divergences lists the logical-state mismatches found.
 	Divergences []StateDivergence `json:"divergences,omitempty"`
+
+	// Indeterminate is set when the layer could not be evaluated (a key source
+	// or state read failed). A migration shadow's load-bearing check could not
+	// run, so the block must NOT be counted clean — Error carries the cause.
+	Indeterminate bool   `json:"indeterminate,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 // StateDivergence records a single logical-state mismatch between the shadow

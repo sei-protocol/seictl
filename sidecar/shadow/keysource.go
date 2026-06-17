@@ -1,8 +1,10 @@
 package shadow
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -10,10 +12,17 @@ import (
 )
 
 // TraceKeySource derives a block's touched accounts and storage slots from a
-// prestate trace (debug_traceBlockByNumber with the prestateTracer) on an EVM
-// JSON-RPC endpoint. The prestate lists every account and slot the block's
-// transactions accessed — exactly the set Layer 2 should compare. Requires the
-// debug_ namespace enabled on the endpoint (a non-public, operator-owned node).
+// diff-mode prestate trace (debug_traceBlockByNumber, prestateTracer with
+// diffMode) on an EVM JSON-RPC endpoint. diffMode reports both the pre-state
+// (slots read) and post-state (slots written), so the union covers keys the
+// block read OR modified — not just those read. Requires the debug_ namespace
+// enabled on the endpoint (a non-public, operator-owned node).
+//
+// Coverage boundary: this is the per-block TOUCHED set. Keys migrated but never
+// touched by any transaction (cold state), and non-EVM Cosmos-module state, are
+// not covered here — that breadth is the corpus harness's job (Arm A) plus a
+// periodic StaticKeySource sweep. Layer 2 over a trace source is a hot-state
+// sampling oracle, not a full-keyspace check.
 type TraceKeySource struct {
 	client *gethrpc.Client
 }
@@ -30,10 +39,11 @@ func NewTraceKeySource(evmRPC string) (*TraceKeySource, error) {
 }
 
 // Close releases the underlying RPC connection.
-func (t *TraceKeySource) Close() {
+func (t *TraceKeySource) Close() error {
 	if t.client != nil {
 		t.client.Close()
 	}
+	return nil
 }
 
 // prestateAccount is the subset of the prestateTracer's per-account output the
@@ -44,29 +54,39 @@ type prestateAccount struct {
 	Code    hexutil.Bytes               `json:"code"`
 }
 
-// prestateTxTrace wraps one transaction's prestate tracer result.
+// prestateResult is one transaction's diff-mode prestate output: pre-state
+// (read) and post-state (written) per account.
+type prestateResult struct {
+	Pre  map[common.Address]prestateAccount `json:"pre"`
+	Post map[common.Address]prestateAccount `json:"post"`
+}
+
+// prestateTxTrace wraps one transaction's tracer result.
 type prestateTxTrace struct {
-	Result map[common.Address]prestateAccount `json:"result"`
+	Result prestateResult `json:"result"`
 }
 
 func (t *TraceKeySource) TouchedAccounts(ctx context.Context, height int64) ([]TouchedAccount, error) {
 	var traces []prestateTxTrace
 	blockArg := hexutil.EncodeUint64(uint64(height))
-	cfg := map[string]any{"tracer": "prestateTracer"}
+	cfg := map[string]any{"tracer": "prestateTracer", "tracerConfig": map[string]any{"diffMode": true}}
 	if err := t.client.CallContext(ctx, &traces, "debug_traceBlockByNumber", blockArg, cfg); err != nil {
 		return nil, fmt.Errorf("debug_traceBlockByNumber at height %d: %w", height, err)
 	}
 	return mergePrestateTraces(traces), nil
 }
 
-// mergePrestateTraces unions the per-transaction prestate results into one
-// touched-account set per address (slots unioned; code checked when the trace
-// shows the account carries code; nonce checked for every touched account).
+// mergePrestateTraces unions the per-transaction diff-mode results into one
+// touched-account set per address: slots unioned across pre and post (reads and
+// writes), code checked when either side shows code, balance and nonce checked
+// for every touched account. Output is sorted (accounts by address, slots by
+// hash) so the same block yields a byte-reproducible report.
 func mergePrestateTraces(traces []prestateTxTrace) []TouchedAccount {
 	slots := map[common.Address]map[common.Hash]struct{}{}
 	hasCode := map[common.Address]bool{}
-	for _, tx := range traces {
-		for addr, acct := range tx.Result {
+
+	absorb := func(accts map[common.Address]prestateAccount) {
+		for addr, acct := range accts {
 			if slots[addr] == nil {
 				slots[addr] = map[common.Hash]struct{}{}
 			}
@@ -78,21 +98,27 @@ func mergePrestateTraces(traces []prestateTxTrace) []TouchedAccount {
 			}
 		}
 	}
+	for _, tx := range traces {
+		absorb(tx.Result.Pre)
+		absorb(tx.Result.Post)
+	}
 
 	out := make([]TouchedAccount, 0, len(slots))
 	for addr, slotSet := range slots {
-		ta := TouchedAccount{Addr: addr, CheckCode: hasCode[addr], CheckNonce: true}
+		ta := TouchedAccount{Addr: addr, CheckCode: hasCode[addr], CheckNonce: true, CheckBalance: true}
 		for slot := range slotSet {
 			ta.Slots = append(ta.Slots, slot)
 		}
+		sort.Slice(ta.Slots, func(i, j int) bool { return bytes.Compare(ta.Slots[i][:], ta.Slots[j][:]) < 0 })
 		out = append(out, ta)
 	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].Addr[:], out[j].Addr[:]) < 0 })
 	return out
 }
 
 // StaticKeySource compares a fixed, curated set of accounts on every block — the
-// fallback when prestate tracing (debug_) is unavailable. Coverage is sampled,
-// not exact; pair it with a curated hot-contract / hot-account list.
+// fallback when prestate tracing (debug_) is unavailable, and the hook for a
+// periodic cold-key / hot-contract sweep that the trace source does not cover.
 type StaticKeySource struct {
 	Accounts []TouchedAccount
 }

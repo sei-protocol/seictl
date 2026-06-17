@@ -41,6 +41,7 @@ func (e *ResultExporter) ExportAndCompare(ctx context.Context, cfg ResultExportR
 	if err != nil {
 		return err
 	}
+	defer loop.comparator.Close()
 
 	exportLog.Info("starting block comparison",
 		"start-height", loop.height,
@@ -71,6 +72,7 @@ func (e *ResultExporter) newComparisonLoop(ctx context.Context, cfg ResultExport
 		}
 		canonicalState, err := ethclient.Dial(cfg.CanonicalEVMRPC)
 		if err != nil {
+			shadowState.Close()
 			return nil, fmt.Errorf("dialing canonical EVM RPC: %w", err)
 		}
 		traceRPC := cfg.TraceRPC
@@ -79,6 +81,8 @@ func (e *ResultExporter) newComparisonLoop(ctx context.Context, cfg ResultExport
 		}
 		keySource, err := shadow.NewTraceKeySource(traceRPC)
 		if err != nil {
+			shadowState.Close()
+			canonicalState.Close()
 			return nil, fmt.Errorf("building trace key source: %w", err)
 		}
 		compOpts = append(compOpts, shadow.WithLayer2(shadowState, canonicalState, keySource))
