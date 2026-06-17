@@ -2,6 +2,7 @@ package shadow
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/sei-protocol/seictl/sidecar/rpc"
@@ -22,6 +23,11 @@ type Comparator struct {
 	// The correctness signals become LastResultsHash + gas + per-tx receipts
 	// (execution equivalence), and Layer 1 always runs.
 	migrationMode bool
+
+	// Layer 2 (logical state diff) runs only when all three are configured.
+	shadowState    StateReader
+	canonicalState StateReader
+	keySource      KeySource
 }
 
 // Option configures a Comparator.
@@ -32,6 +38,17 @@ type Option func(*Comparator)
 // an AppHash-breaking state migration against an un-migrated canonical chain.
 func WithMigrationMode() Option {
 	return func(c *Comparator) { c.migrationMode = true }
+}
+
+// WithLayer2 enables logical state-diff comparison: the keySource yields the
+// accounts/slots each block touched, and the two StateReaders (EVM RPC on the
+// shadow and canonical chains) supply their logical values to compare.
+func WithLayer2(shadowState, canonicalState StateReader, keySource KeySource) Option {
+	return func(c *Comparator) {
+		c.shadowState = shadowState
+		c.canonicalState = canonicalState
+		c.keySource = keySource
+	}
 }
 
 // NewComparator creates a Comparator that queries shadowRPC for the local
@@ -87,6 +104,18 @@ func (c *Comparator) CompareBlock(ctx context.Context, height int64) (*CompareRe
 	}
 	l1Diverged := result.Layer1 != nil && len(result.Layer1.Divergences) > 0
 
+	// --- Layer 2: logical state diff (when configured) ---
+	if c.layer2Enabled() && (realL0Divergence || c.migrationMode) {
+		l2, err := c.compareLayer2(ctx, height)
+		if err != nil {
+			log.Warn("layer 2 state comparison failed, skipping it for this height",
+				"height", height, "err", err)
+		} else {
+			result.Layer2 = l2
+		}
+	}
+	l2Diverged := result.Layer2 != nil && len(result.Layer2.Divergences) > 0
+
 	switch {
 	case realL0Divergence:
 		result.Match = false
@@ -96,7 +125,25 @@ func (c *Comparator) CompareBlock(ctx context.Context, height int64) (*CompareRe
 		result.Match = false
 		layer := 1
 		result.DivergenceLayer = &layer
+	case l2Diverged:
+		result.Match = false
+		layer := 2
+		result.DivergenceLayer = &layer
 	}
 
 	return result, nil
+}
+
+func (c *Comparator) layer2Enabled() bool {
+	return c.keySource != nil && c.shadowState != nil && c.canonicalState != nil
+}
+
+// compareLayer2 fetches the accounts a block touched and compares their logical
+// state (storage/code/nonce) between the shadow and canonical chains.
+func (c *Comparator) compareLayer2(ctx context.Context, height int64) (*Layer2Result, error) {
+	touched, err := c.keySource.TouchedAccounts(ctx, height)
+	if err != nil {
+		return nil, fmt.Errorf("resolving touched accounts at height %d: %w", height, err)
+	}
+	return compareState(ctx, height, touched, c.shadowState, c.canonicalState)
 }
