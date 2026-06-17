@@ -87,6 +87,12 @@ type Layer1Result struct {
 
 	// Divergences lists the per-transaction differences found.
 	Divergences []TxDivergence `json:"divergences,omitempty"`
+
+	// Indeterminate is set when the receipt comparison could not run (RPC error).
+	// In migration mode Layer 1 is a load-bearing check, so an indeterminate
+	// Layer 1 forces the block to fail closed rather than pass silently.
+	Indeterminate bool   `json:"indeterminate,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 // TxDivergence records a mismatch for a single transaction within a block.

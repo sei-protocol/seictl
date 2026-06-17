@@ -3,6 +3,8 @@ package shadow
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/sei-protocol/seictl/sidecar/rpc"
@@ -43,6 +45,46 @@ func TestCompareBlock_MigrationMode_AppHashExpected(t *testing.T) {
 	}
 	if result.DivergenceLayer != nil {
 		t.Errorf("expected nil divergence layer, got %d", *result.DivergenceLayer)
+	}
+}
+
+// In migration mode Layer 1 is load-bearing (AppHash is expected to differ). If
+// the receipt comparison cannot run, the block must fail closed (indeterminate,
+// attributed to layer 1) — never a silent clean pass.
+func TestCompareBlock_MigrationMode_Layer1ErrorFailsClosed(t *testing.T) {
+	// /block returns differing AppHash but matching LastResultsHash (so Layer 0 is
+	// not a real divergence); /block_results errors, so Layer 1 cannot run.
+	handler := func(appHash string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/block":
+				_, _ = w.Write(blockJSON(appHash, "SAME_RESULTS"))
+			case "/block_results":
+				http.Error(w, "block_results unavailable", http.StatusInternalServerError)
+			default:
+				http.NotFound(w, r)
+			}
+		}
+	}
+	shadowSrv := httptest.NewServer(handler("SHADOW_APPHASH"))
+	defer shadowSrv.Close()
+	canonicalSrv := httptest.NewServer(handler("CANON_APPHASH"))
+	defer canonicalSrv.Close()
+
+	comp := NewComparator(shadowSrv.URL, canonicalSrv.URL, WithMigrationMode())
+	result, err := comp.CompareBlock(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("CompareBlock: %v", err)
+	}
+
+	if result.Match {
+		t.Error("expected NOT clean: Layer 1 could not run in migration mode, must fail closed")
+	}
+	if result.DivergenceLayer == nil || *result.DivergenceLayer != 1 {
+		t.Errorf("expected divergence layer 1, got %v", result.DivergenceLayer)
+	}
+	if result.Layer1 == nil || !result.Layer1.Indeterminate {
+		t.Errorf("expected Layer1 marked indeterminate, got %+v", result.Layer1)
 	}
 }
 

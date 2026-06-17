@@ -104,13 +104,21 @@ func (c *Comparator) CompareBlock(ctx context.Context, height int64) (*CompareRe
 	if realL0Divergence || c.migrationMode {
 		l1, err := c.compareLayer1(ctx, height)
 		if err != nil {
-			log.Warn("layer 1 comparison failed, returning layer 0 result only",
-				"height", height, "err", err)
+			// In migration mode Layer 1 is load-bearing (AppHash is expected to
+			// differ), so an error must fail closed, not silently pass. Outside
+			// migration mode Layer 1 only runs after a confirmed Layer 0
+			// divergence, so the block is already not clean and the error is
+			// merely missing detail.
+			log.Warn("layer 1 comparison failed", "height", height, "err", err)
+			if c.migrationMode {
+				result.Layer1 = &Layer1Result{Indeterminate: true, Error: err.Error()}
+			}
 		} else {
 			result.Layer1 = l1
 		}
 	}
 	l1Diverged := result.Layer1 != nil && len(result.Layer1.Divergences) > 0
+	l1Indeterminate := result.Layer1 != nil && result.Layer1.Indeterminate
 
 	// --- Layer 2: logical state diff (when configured) ---
 	if c.layer2Enabled() && (realL0Divergence || c.migrationMode) {
@@ -130,18 +138,21 @@ func (c *Comparator) CompareBlock(ctx context.Context, height int64) (*CompareRe
 	l2Diverged := result.Layer2 != nil && len(result.Layer2.Divergences) > 0
 	l2Indeterminate := result.Layer2 != nil && result.Layer2.Indeterminate
 
+	// Attribute to the deepest (most specific) layer that fired: a Layer 1/2
+	// divergence or indeterminate is more actionable than the Layer 0 header
+	// mismatch that triggered the descent.
 	switch {
-	case realL0Divergence:
-		result.Match = false
-		layer := 0
-		result.DivergenceLayer = &layer
-	case l1Diverged:
-		result.Match = false
-		layer := 1
-		result.DivergenceLayer = &layer
 	case l2Diverged || l2Indeterminate:
 		result.Match = false
 		layer := 2
+		result.DivergenceLayer = &layer
+	case l1Diverged || l1Indeterminate:
+		result.Match = false
+		layer := 1
+		result.DivergenceLayer = &layer
+	case realL0Divergence:
+		result.Match = false
+		layer := 0
 		result.DivergenceLayer = &layer
 	}
 

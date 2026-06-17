@@ -72,6 +72,10 @@ func writeL0GasRow(b *strings.Builder, l0 Layer0Result) {
 
 func writeLayer1(b *strings.Builder, l1 *Layer1Result) {
 	fmt.Fprintf(b, "## Layer 1: Transaction Receipt Comparison\n\n")
+	if l1.Indeterminate {
+		fmt.Fprintf(b, "**Indeterminate** — receipt comparison could not run, so this block is not validated: %s\n\n", l1.Error)
+		return
+	}
 	fmt.Fprintf(b, "**Total transactions:** %d\n", l1.TotalTxs)
 
 	if !l1.TxCountMatch {
