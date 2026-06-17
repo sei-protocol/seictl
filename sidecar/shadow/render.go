@@ -18,6 +18,10 @@ func RenderMarkdown(r *DivergenceReport) string {
 		writeLayer1(&b, r.Comparison.Layer1)
 	}
 
+	if r.Comparison.Layer2 != nil {
+		writeLayer2(&b, r.Comparison.Layer2)
+	}
+
 	writeRawDataNote(&b, r.Height)
 	return b.String()
 }
@@ -79,6 +83,29 @@ func writeLayer1(b *strings.Builder, l1 *Layer1Result) {
 	for _, div := range l1.Divergences {
 		writeTxDivergence(b, div)
 	}
+}
+
+func writeLayer2(b *strings.Builder, l2 *Layer2Result) {
+	fmt.Fprintf(b, "## Layer 2: Logical State Comparison\n\n")
+	fmt.Fprintf(b, "**Accounts checked:** %d &nbsp;&nbsp; **Keys checked:** %d\n", l2.AccountsChecked, l2.KeysChecked)
+	fmt.Fprintf(b, "**Divergent keys:** %d\n\n", len(l2.Divergences))
+
+	if len(l2.Divergences) == 0 {
+		return
+	}
+
+	fmt.Fprintf(b, "| Kind | Address | Slot | Shadow | Canonical |\n")
+	fmt.Fprintf(b, "|------|---------|------|--------|----------|\n")
+	for _, d := range l2.Divergences {
+		slot := d.Slot
+		if slot == "" {
+			slot = "—"
+		}
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s |\n",
+			d.Kind, truncateHash(d.Addr), truncateHash(slot),
+			truncateHash(d.Shadow), truncateHash(d.Canonical))
+	}
+	fmt.Fprintf(b, "\n")
 }
 
 func writeTxDivergence(b *strings.Builder, div TxDivergence) {

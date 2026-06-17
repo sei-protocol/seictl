@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	"github.com/ethereum/go-ethereum/ethclient"
 
 	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 	"github.com/sei-protocol/seictl/sidecar/shadow"
@@ -58,6 +59,29 @@ func (e *ResultExporter) newComparisonLoop(ctx context.Context, cfg ResultExport
 	var compOpts []shadow.Option
 	if cfg.MigrationMode {
 		compOpts = append(compOpts, shadow.WithMigrationMode())
+	}
+
+	// Layer 2 (logical state diff) is enabled when both EVM JSON-RPC endpoints
+	// are configured. Touched keys come from a prestate trace on TraceRPC
+	// (defaults to the canonical endpoint).
+	if cfg.ShadowEVMRPC != "" && cfg.CanonicalEVMRPC != "" {
+		shadowState, err := ethclient.Dial(cfg.ShadowEVMRPC)
+		if err != nil {
+			return nil, fmt.Errorf("dialing shadow EVM RPC: %w", err)
+		}
+		canonicalState, err := ethclient.Dial(cfg.CanonicalEVMRPC)
+		if err != nil {
+			return nil, fmt.Errorf("dialing canonical EVM RPC: %w", err)
+		}
+		traceRPC := cfg.TraceRPC
+		if traceRPC == "" {
+			traceRPC = cfg.CanonicalEVMRPC
+		}
+		keySource, err := shadow.NewTraceKeySource(traceRPC)
+		if err != nil {
+			return nil, fmt.Errorf("building trace key source: %w", err)
+		}
+		compOpts = append(compOpts, shadow.WithLayer2(shadowState, canonicalState, keySource))
 	}
 
 	last := e.readExportState()
