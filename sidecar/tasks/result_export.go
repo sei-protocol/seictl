@@ -41,6 +41,25 @@ type ResultExportRequest struct {
 	// local block execution against this canonical RPC endpoint and completes
 	// when app-hash divergence is detected.
 	CanonicalRPC string `json:"canonicalRpc"`
+
+	// MigrationMode tunes comparison for an AppHash-breaking migration shadow
+	// (e.g. memiavl->flatkv): AppHash divergence from canonical is expected
+	// every block, so it is treated as informational and the verdict keys on
+	// execution-results equivalence (LastResultsHash + gas + per-tx receipts).
+	MigrationMode bool `json:"migrationMode,omitempty"`
+
+	// ShadowEVMRPC and CanonicalEVMRPC are the EVM JSON-RPC endpoints for the
+	// shadow and canonical chains. When both are set, Layer 2 (logical state
+	// diff) is enabled, comparing storage/code/nonce for the keys each block
+	// touched. These are EVM JSON-RPC (eth_*), distinct from the CometBFT RPC
+	// used for Layers 0/1.
+	ShadowEVMRPC    string `json:"shadowEvmRpc,omitempty"`
+	CanonicalEVMRPC string `json:"canonicalEvmRpc,omitempty"`
+
+	// TraceRPC is the EVM JSON-RPC endpoint used for prestate traces
+	// (debug_traceBlockByNumber) to derive each block's touched keys. Defaults
+	// to CanonicalEVMRPC. Requires the debug_ namespace enabled on that node.
+	TraceRPC string `json:"traceRpc,omitempty"`
 }
 
 type exportState struct {

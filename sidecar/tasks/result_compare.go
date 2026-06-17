@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	"github.com/ethereum/go-ethereum/ethclient"
 
 	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 	"github.com/sei-protocol/seictl/sidecar/shadow"
@@ -19,6 +20,12 @@ const (
 	comparePollInterval = 5 * time.Second
 	comparePageSize     = 100
 )
+
+// Guard the external contract Comparator.Close relies on: *ethclient.Client must
+// expose a no-return Close(). If a go-ethereum upgrade changed it to Close()
+// error, the no-return assertion in Comparator.Close would silently skip it
+// (the leak we already fixed once) — this fails the build instead.
+var _ interface{ Close() } = (*ethclient.Client)(nil)
 
 // comparisonLoop holds the state for a running block comparison session.
 type comparisonLoop struct {
@@ -40,6 +47,7 @@ func (e *ResultExporter) ExportAndCompare(ctx context.Context, cfg ResultExportR
 	if err != nil {
 		return err
 	}
+	defer loop.comparator.Close()
 
 	exportLog.Info("starting block comparison",
 		"start-height", loop.height,
@@ -55,10 +63,41 @@ func (e *ResultExporter) newComparisonLoop(ctx context.Context, cfg ResultExport
 		return nil, fmt.Errorf("building S3 uploader: %w", err)
 	}
 
+	var compOpts []shadow.Option
+	if cfg.MigrationMode {
+		compOpts = append(compOpts, shadow.WithMigrationMode())
+	}
+
+	// Layer 2 (logical state diff) is enabled when both EVM JSON-RPC endpoints
+	// are configured. Touched keys come from a prestate trace on TraceRPC
+	// (defaults to the canonical endpoint).
+	if cfg.ShadowEVMRPC != "" && cfg.CanonicalEVMRPC != "" {
+		shadowState, err := ethclient.Dial(cfg.ShadowEVMRPC)
+		if err != nil {
+			return nil, fmt.Errorf("dialing shadow EVM RPC: %w", err)
+		}
+		canonicalState, err := ethclient.Dial(cfg.CanonicalEVMRPC)
+		if err != nil {
+			shadowState.Close()
+			return nil, fmt.Errorf("dialing canonical EVM RPC: %w", err)
+		}
+		traceRPC := cfg.TraceRPC
+		if traceRPC == "" {
+			traceRPC = cfg.CanonicalEVMRPC
+		}
+		keySource, err := shadow.NewTraceKeySource(traceRPC)
+		if err != nil {
+			shadowState.Close()
+			canonicalState.Close()
+			return nil, fmt.Errorf("building trace key source: %w", err)
+		}
+		compOpts = append(compOpts, shadow.WithLayer2(shadowState, canonicalState, keySource))
+	}
+
 	last := e.readExportState()
 	return &comparisonLoop{
 		exporter:     e,
-		comparator:   shadow.NewComparator(cfg.RPCEndpoint, cfg.CanonicalRPC),
+		comparator:   shadow.NewComparator(cfg.RPCEndpoint, cfg.CanonicalRPC, compOpts...),
 		uploader:     uploader,
 		cfg:          cfg,
 		prefix:       normalizePrefix(cfg.Prefix),
