@@ -41,6 +41,12 @@ type ResultExportRequest struct {
 	// local block execution against this canonical RPC endpoint and completes
 	// when app-hash divergence is detected.
 	CanonicalRPC string `json:"canonicalRpc"`
+
+	// MigrationMode tunes comparison for an AppHash-breaking migration shadow
+	// (e.g. memiavl->flatkv): AppHash divergence from canonical is expected
+	// every block, so it is treated as informational and the verdict keys on
+	// execution-results equivalence (LastResultsHash + gas + per-tx receipts).
+	MigrationMode bool `json:"migrationMode,omitempty"`
 }
 
 type exportState struct {

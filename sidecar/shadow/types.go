@@ -20,7 +20,13 @@ type CompareResult struct {
 	Timestamp string `json:"timestamp"`
 
 	// Match is true when all checked layers agree between shadow and canonical.
+	// In migration mode an expected AppHash divergence does not clear Match.
 	Match bool `json:"match"`
+
+	// MigrationMode records that this comparison treated AppHash divergence as
+	// expected (an AppHash-breaking migration shadow), keying the verdict on
+	// execution-results equivalence instead.
+	MigrationMode bool `json:"migrationMode,omitempty"`
 
 	// DivergenceLayer is the first layer that detected a mismatch.
 	// Nil when Match is true.

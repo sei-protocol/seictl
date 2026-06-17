@@ -55,10 +55,15 @@ func (e *ResultExporter) newComparisonLoop(ctx context.Context, cfg ResultExport
 		return nil, fmt.Errorf("building S3 uploader: %w", err)
 	}
 
+	var compOpts []shadow.Option
+	if cfg.MigrationMode {
+		compOpts = append(compOpts, shadow.WithMigrationMode())
+	}
+
 	last := e.readExportState()
 	return &comparisonLoop{
 		exporter:     e,
-		comparator:   shadow.NewComparator(cfg.RPCEndpoint, cfg.CanonicalRPC),
+		comparator:   shadow.NewComparator(cfg.RPCEndpoint, cfg.CanonicalRPC, compOpts...),
 		uploader:     uploader,
 		cfg:          cfg,
 		prefix:       normalizePrefix(cfg.Prefix),
