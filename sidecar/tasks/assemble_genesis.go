@@ -3,6 +3,8 @@ package tasks
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -54,6 +56,15 @@ type AssembleNodeEntry struct {
 type GenesisAccountEntry struct {
 	Address string `json:"address"`
 	Balance string `json:"balance"`
+}
+
+// AssembleGenesisResult is the task's structured result, emitted in-band over
+// the trusted controller↔sidecar task-result channel. GenesisHash is the bare
+// SHA-256 hex digest (no "sha256:" prefix) of the exact uploaded genesis.json
+// bytes; the controller stamps status.genesisHash from it and plumbs it into
+// followers' ConfigureGenesisTask.ExpectedGenesisHash.
+type AssembleGenesisResult struct {
+	GenesisHash string `json:"genesisHash"`
 }
 
 // AssembleGenesisRequest holds the typed parameters for the assemble-and-upload-genesis task.
@@ -146,7 +157,8 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return err
 		}
 
-		if err := a.uploadGenesis(ctx, cfg); err != nil {
+		genesisHash, err := a.uploadGenesis(ctx, cfg)
+		if err != nil {
 			return err
 		}
 
@@ -154,7 +166,15 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return err
 		}
 
-		assembleLog.Info("genesis assembled and uploaded", "nodes", len(nodes))
+		// Hand the hash to the controller over the trusted task-result
+		// channel (GET /v0/tasks/{id}); never via shared S3.
+		result, err := json.Marshal(AssembleGenesisResult{GenesisHash: genesisHash})
+		if err != nil {
+			return fmt.Errorf("assemble-genesis: marshaling result: %w", err)
+		}
+		engine.SetTaskResult(ctx, result)
+
+		assembleLog.Info("genesis assembled and uploaded", "nodes", len(nodes), "genesisHash", genesisHash)
 		return writeMarker(a.homeDir, assembleMarkerFile)
 	})
 }
@@ -432,21 +452,31 @@ func (a *GenesisAssembler) applyOverrides(overrides map[string]json.RawMessage) 
 }
 
 // uploadGenesis reads the assembled genesis.json and uploads it to S3
-// at <prefix>/genesis.json where all validators will fetch it from.
-func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg AssembleGenesisRequest) error {
+// at <prefix>/genesis.json where all validators will fetch it from. It
+// returns the bare SHA-256 hex digest (no "sha256:" prefix) computed over the
+// exact bytes uploaded — the same []byte handed to PutObject, not a re-read or
+// re-serialized form — so the digest matches what a follower will download and
+// verify. The digest travels to the controller only in-band, over the trusted
+// task-result channel; it is never written to S3, where the prefix is
+// attacker-writable and a sibling hash would let a poisoned genesis carry its
+// own matching digest.
+func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg AssembleGenesisRequest) (string, error) {
 	genesisPath := filepath.Join(a.homeDir, "config", "genesis.json")
 	data, err := os.ReadFile(genesisPath)
 	if err != nil {
-		return fmt.Errorf("assemble-genesis: reading genesis.json: %w", err)
+		return "", fmt.Errorf("assemble-genesis: reading genesis.json: %w", err)
 	}
+
+	sum := sha256.Sum256(data)
+	genesisHash := hex.EncodeToString(sum[:])
 
 	uploader, err := a.s3UploaderFactory(ctx, a.region)
 	if err != nil {
-		return fmt.Errorf("assemble-genesis: building S3 uploader: %w", err)
+		return "", fmt.Errorf("assemble-genesis: building S3 uploader: %w", err)
 	}
 
 	key := a.chainID + "/" + "genesis.json"
-	assembleLog.Info("uploading assembled genesis", "key", key)
+	assembleLog.Info("uploading assembled genesis", "key", key, "sha256", genesisHash)
 
 	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket:      aws.String(a.bucket),
@@ -455,9 +485,10 @@ func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg AssembleGenesi
 		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
-		return seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
+		return "", seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
 	}
-	return nil
+
+	return genesisHash, nil
 }
 
 // uploadPeers builds a peers.json from each node's identity.json and uploads

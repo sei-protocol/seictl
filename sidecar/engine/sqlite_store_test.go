@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -249,6 +250,54 @@ func TestStoreRunFieldRoundTrip(t *testing.T) {
 	}
 	if got.Run != 3 {
 		t.Fatalf("Run = %d, want 3", got.Run)
+	}
+}
+
+func TestStoreResultFieldRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().Truncate(time.Nanosecond)
+
+	r := &TaskResult{
+		ID:          "res-rt00-0000-0000-0000-000000000000",
+		Type:        "assemble-and-upload-genesis",
+		Status:      TaskStatusCompleted,
+		Run:         1,
+		Result:      json.RawMessage(`{"genesisHash":"abc123"}`),
+		SubmittedAt: now,
+	}
+	if err := s.Save(r); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	got, err := s.Get(r.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if string(got.Result) != `{"genesisHash":"abc123"}` {
+		t.Fatalf("Result = %q, want round-tripped payload", string(got.Result))
+	}
+}
+
+func TestStoreNilResultIsNil(t *testing.T) {
+	// A handler that emits no result stores NULL and reads back as nil.
+	s := newTestStore(t)
+
+	r := &TaskResult{
+		ID:          "res-nil0-0000-0000-0000-000000000000",
+		Type:        "config-patch",
+		Status:      TaskStatusCompleted,
+		SubmittedAt: time.Now(),
+	}
+	if err := s.Save(r); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	got, err := s.Get(r.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Result != nil {
+		t.Fatalf("Result = %q, want nil", string(got.Result))
 	}
 }
 

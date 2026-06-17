@@ -107,8 +107,14 @@ func (t SnapshotUploadTask) ToTaskRequest() TaskRequest {
 // ConfigureGenesisTask instructs the sidecar to resolve and write genesis.json.
 // The sidecar resolves genesis from its chain ID: embedded config is checked
 // first, then S3 fallback at {bucket}/{chainID}/genesis.json using env vars.
-// No parameters are needed from the controller.
+//
+// ExpectedGenesisHash is the bare SHA-256 hex digest (no "sha256:" prefix) the
+// downloaded genesis.json must match. When set it gates the S3 download and the
+// sidecar fails closed on mismatch. When empty the download is unverified —
+// callers that omit it (and the field is omitted from the wire request) keep
+// the sidecar's pre-verification behavior.
 type ConfigureGenesisTask struct {
+	ExpectedGenesisHash string
 }
 
 func (t ConfigureGenesisTask) TaskType() string { return TaskTypeConfigureGenesis }
@@ -116,8 +122,11 @@ func (t ConfigureGenesisTask) TaskType() string { return TaskTypeConfigureGenesi
 func (t ConfigureGenesisTask) Validate() error { return nil }
 
 func (t ConfigureGenesisTask) ToTaskRequest() TaskRequest {
-	req := TaskRequest{Type: t.TaskType()}
-	return req
+	if t.ExpectedGenesisHash == "" {
+		return TaskRequest{Type: t.TaskType()}
+	}
+	p := map[string]interface{}{"expectedGenesisHash": t.ExpectedGenesisHash}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
 
 // ConfigPatchTask applies generic TOML merge-patches to seid config files.
@@ -457,6 +466,13 @@ func validateGenesisAccounts(prefix string, accounts []GenesisAccountEntry) erro
 // JSON values, applied to the assembled genesis after collect-gentxs runs.
 // The controller validates keys (immutability post-bootstrap) via CEL; the
 // sidecar applies them verbatim and fails loudly on bad paths.
+//
+// RESULT: this task produces the assembled genesis.json's bare SHA-256 hex
+// digest (the value the controller writes to status.genesisHash and plumbs
+// into followers' ConfigureGenesisTask.ExpectedGenesisHash). The digest is
+// returned in-band on the task result as {"genesisHash":"<bare-hex>"}, which
+// the controller reads over the trusted GET /v0/tasks/{id} channel. It is
+// never written to S3, where the prefix is attacker-writable.
 type AssembleAndUploadGenesisTask struct {
 	AccountBalance string
 	Namespace      string
