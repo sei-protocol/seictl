@@ -9,7 +9,8 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/sei-protocol/seictl/nodedeployment"
+	"github.com/sei-protocol/seictl/seinetwork"
+	"github.com/sei-protocol/seictl/seinode"
 )
 
 var (
@@ -51,7 +52,8 @@ var (
 			&awaitCmd,
 			&serveCmd,
 			&reportCmd,
-			&nodedeployment.Cmd,
+			&seinetwork.Cmd,
+			&seinode.Cmd,
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
