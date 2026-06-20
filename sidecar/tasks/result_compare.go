@@ -176,11 +176,13 @@ func (l *comparisonLoop) handleDivergence(ctx context.Context, result shadow.Com
 	if result.DivergenceLayer != nil {
 		layer = fmt.Sprintf("%d", *result.DivergenceLayer)
 	}
-	shadow.Divergences.WithLabelValues(l.exporter.chainID, l.exporter.podName, layer).Inc()
+	reason := shadow.ReasonFor(&result)
+	shadow.Divergences.WithLabelValues(l.exporter.chainID, l.exporter.podName, layer, reason).Inc()
 
 	exportLog.Info("app-hash divergence detected",
 		"height", l.height,
 		"divergence-layer", layer,
+		"reason", reason,
 		"shadow-app-hash", result.Layer0.ShadowAppHash,
 		"canonical-app-hash", result.Layer0.CanonicalAppHash)
 

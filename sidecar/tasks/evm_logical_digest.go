@@ -135,6 +135,7 @@ func (d *EvmLogicalDigester) run(ctx context.Context, req EvmLogicalDigestReques
 		}
 
 		record := buildEndpointDigest(req.Height, norm, flatkv, memiavl)
+		recordDigestMetrics(record)
 		key := fmt.Sprintf("%sendpoint-digest-%d-%s.json.gz", prefix, req.Height, norm)
 
 		emit, err := seis3.StreamGzipJSON(ctx, uploader, req.Bucket, key, record)

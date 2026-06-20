@@ -364,7 +364,7 @@ func TestExportAndCompare_DivergenceDetected(t *testing.T) {
 	const testPodName = "shadow-test-0"
 	e := NewResultExporter(tmpDir, "test-1", testPodName, mockResultUploaderFactory())
 
-	divergenceBefore := testutil.ToFloat64(shadow.Divergences.WithLabelValues("test-1", testPodName, "0"))
+	divergenceBefore := testutil.ToFloat64(shadow.Divergences.WithLabelValues("test-1", testPodName, "0", "layer0-apphash"))
 
 	err := e.ExportAndCompare(context.Background(), ResultExportRequest{
 		Bucket:       "test-bucket",
@@ -383,8 +383,8 @@ func TestExportAndCompare_DivergenceDetected(t *testing.T) {
 		t.Errorf("LastExportedHeight = %d, want 1 (diverged at first block)", state.LastExportedHeight)
 	}
 
-	if got := testutil.ToFloat64(shadow.Divergences.WithLabelValues("test-1", testPodName, "0")); got-divergenceBefore != 1 {
-		t.Errorf("seictl_shadow_divergences_total{chain_id=test-1,pod_name=%s,divergence_layer=0} delta = %v, want 1", testPodName, got-divergenceBefore)
+	if got := testutil.ToFloat64(shadow.Divergences.WithLabelValues("test-1", testPodName, "0", "layer0-apphash")); got-divergenceBefore != 1 {
+		t.Errorf("seictl_shadow_divergences_total{chain_id=test-1,pod_name=%s,divergence_layer=0,reason=layer0-apphash} delta = %v, want 1", testPodName, got-divergenceBefore)
 	}
 	if got := testutil.ToFloat64(shadow.BlocksCompared.WithLabelValues("test-1", testPodName)); got < 1 {
 		t.Errorf("seictl_shadow_blocks_compared_total{chain_id=test-1,pod_name=%s} = %v, want >= 1", testPodName, got)

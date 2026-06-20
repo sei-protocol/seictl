@@ -19,13 +19,15 @@ var (
 	// Divergences counts app-hash divergences detected. Increments at most
 	// once per process lifetime — the comparison loop exits on first divergence.
 	// divergence_layer is "0" for header-hash mismatch, "1" when Layer 1
-	// isolated specific tx-receipt mismatches.
+	// isolated specific tx-receipt mismatches. reason conveys the discrepancy
+	// type the verdict isolated (deepest-layer-first): layer2-<axis>, layer1-<kind>,
+	// or layer0-apphash. See ReasonFor.
 	Divergences = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "seictl_shadow_divergences_total",
 			Help: "App-hash divergences detected by the shadow comparator. Increments once per process lifetime since the loop exits on first divergence.",
 		},
-		[]string{"chain_id", "pod_name", "divergence_layer"},
+		[]string{"chain_id", "pod_name", "divergence_layer", "reason"},
 	)
 )
 

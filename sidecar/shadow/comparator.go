@@ -159,6 +159,45 @@ func (c *Comparator) CompareBlock(ctx context.Context, height int64) (*CompareRe
 	return result, nil
 }
 
+// ReasonFor isolates the discrepancy type the verdict already determined,
+// deepest-layer-first to mirror the DivergenceLayer attribution in CompareBlock:
+// a Layer 2 axis divergence is more specific than the Layer 1 kind, which is
+// more specific than the Layer 0 app-hash mismatch that triggered the descent.
+//
+//   - layer2-<axis>: storage|balance|code|nonce (the diverging StateDivergence kind)
+//   - layer1-results: transaction-count mismatch (the result sets differ)
+//   - layer1-receipt: a per-transaction receipt field diverged
+//   - layer0-apphash: header-level divergence only
+//
+// An indeterminate (load-bearing check could not run) reports the layer it
+// could not evaluate, since that is the actionable signal. Returns "" for a
+// clean result; callers only label on a divergence.
+func ReasonFor(result *CompareResult) string {
+	if result.Match {
+		return ""
+	}
+	if l2 := result.Layer2; l2 != nil {
+		if len(l2.Divergences) > 0 {
+			return "layer2-" + l2.Divergences[0].Kind
+		}
+		if l2.Indeterminate {
+			return "layer2-indeterminate"
+		}
+	}
+	if l1 := result.Layer1; l1 != nil {
+		if !l1.TxCountMatch {
+			return "layer1-results"
+		}
+		if len(l1.Divergences) > 0 {
+			return "layer1-receipt"
+		}
+		if l1.Indeterminate {
+			return "layer1-indeterminate"
+		}
+	}
+	return "layer0-apphash"
+}
+
 func (c *Comparator) layer2Enabled() bool {
 	return c.keySource != nil && c.shadowState != nil && c.canonicalState != nil
 }
