@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -147,7 +148,7 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 		// without changing the TaskHandler signature.
 		sink := &resultSink{}
 		ctx := withResultSink(WithTaskID(e.ctx, id), sink)
-		err := e.execute(ctx, taskType, handler, params)
+		err := e.executeRecovered(ctx, taskType, handler, params)
 
 		t := time.Now().UTC()
 		tr := &TaskResult{
@@ -172,6 +173,22 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 			log.Error("failed to persist task result", "id", id, "err", storeErr)
 		}
 	}()
+}
+
+// executeRecovered runs execute under a recover so a handler panic becomes a
+// failed TaskResult instead of taking down the shared sidecar process. It
+// guards only the handler goroutine; a task that spawns its own goroutines must
+// recover within them (e.g. s3.streamGzip's writer).
+func (e *Engine) executeRecovered(ctx context.Context, taskType TaskType, handler TaskHandler, params map[string]any) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("task handler panicked", "type", taskType, "panic", r, "stack", string(debug.Stack()))
+			taskPanics.WithLabelValues(string(taskType)).Inc()
+			taskFailures.WithLabelValues(string(taskType)).Inc()
+			err = fmt.Errorf("task handler panicked: %v", r)
+		}
+	}()
+	return e.execute(ctx, taskType, handler, params)
 }
 
 // execute runs a handler synchronously and logs the outcome.

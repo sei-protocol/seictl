@@ -35,6 +35,7 @@ const (
 	TaskGovVote                  TaskType = "gov-vote"
 	TaskGovSoftwareUpgrade       TaskType = "gov-software-upgrade"
 	TaskGovParamChange           TaskType = "gov-param-change"
+	TaskEvmLogicalDigest         TaskType = "evm-logical-digest"
 )
 
 // Task is a unit of work submitted by the controller. When ID is set, the

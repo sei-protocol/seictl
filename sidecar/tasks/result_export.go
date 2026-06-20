@@ -1,7 +1,6 @@
 package tasks
 
 import (
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	seiconfig "github.com/sei-protocol/sei-config"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seictl/sidecar/rpc"
@@ -181,50 +178,19 @@ func (e *ResultExporter) exportPage(
 ) error {
 	key := fmt.Sprintf("%s%d-%d.ndjson.gz", prefix, start, end)
 
-	pr, pw := io.Pipe()
-
-	collectErr := make(chan error, 1)
-	go func() {
-		collectErr <- e.collectResults(ctx, client, pw, start, end)
-	}()
-
-	_, uploadErr := uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket:      aws.String(bucket),
-		Key:         aws.String(key),
-		Body:        pr,
-		ContentType: aws.String("application/gzip"),
+	_, err := seis3.StreamGzipFunc(ctx, uploader, bucket, key, func(w io.Writer) error {
+		return e.collectResults(ctx, client, w, start, end)
 	})
-
-	if uploadErr != nil {
-		pr.CloseWithError(uploadErr)
+	if err != nil {
+		return seis3.ClassifyS3Error("result-export", bucket, key, region, err)
 	}
-
-	cErr := <-collectErr
-	if uploadErr != nil {
-		return seis3.ClassifyS3Error("result-export", bucket, key, region, uploadErr)
-	}
-	return cErr
+	return nil
 }
 
-// collectResults queries block_results for each height and writes gzipped
-// NDJSON to wc. Each line is a JSON object with height, time, and the raw
-// block_results response.
-func (e *ResultExporter) collectResults(ctx context.Context, client *rpc.Client, wc io.WriteCloser, start, end int64) (retErr error) {
-	defer func() {
-		if retErr != nil {
-			wc.(*io.PipeWriter).CloseWithError(retErr)
-		} else {
-			_ = wc.Close()
-		}
-	}()
-
-	gw := gzip.NewWriter(wc)
-	defer func() {
-		if err := gw.Close(); err != nil && retErr == nil {
-			retErr = fmt.Errorf("closing gzip writer: %w", err)
-		}
-	}()
-
+// collectResults queries block_results for each height and writes one NDJSON
+// line per block to w. Each line is a JSON object with height, time, and the
+// raw block_results response. gzip/pipe/checksum are owned by the s3 helper.
+func (e *ResultExporter) collectResults(ctx context.Context, client *rpc.Client, w io.Writer, start, end int64) error {
 	for h := start; h <= end; h++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -247,7 +213,7 @@ func (e *ResultExporter) collectResults(ctx context.Context, client *rpc.Client,
 		}
 		line = append(line, '\n')
 
-		if _, err := gw.Write(line); err != nil {
+		if _, err := w.Write(line); err != nil {
 			return fmt.Errorf("writing result at height %d: %w", h, err)
 		}
 	}
