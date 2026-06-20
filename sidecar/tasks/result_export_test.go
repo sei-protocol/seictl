@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/rpc"
 	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 	"github.com/sei-protocol/seictl/sidecar/shadow"
 )
@@ -38,6 +41,62 @@ func mockResultUploaderFactory() seis3.UploaderFactory {
 func failingUploaderFactory(errMsg string) seis3.UploaderFactory {
 	return func(_ context.Context, _ string) (seis3.Uploader, error) {
 		return nil, fmt.Errorf("%s", errMsg)
+	}
+}
+
+// drainingFailingUploader drains the streamed body (so the writer never blocks)
+// then fails — an S3 error after reading a valid stream.
+type drainingFailingUploader struct{ err error }
+
+func (u drainingFailingUploader) UploadObject(_ context.Context, in *transfermanager.UploadObjectInput, _ ...func(*transfermanager.Options)) (*transfermanager.UploadObjectOutput, error) {
+	if in.Body != nil {
+		_, _ = io.Copy(io.Discard, in.Body)
+	}
+	return nil, u.err
+}
+
+// TestExportPage_ProducerErrorNotClassifiedAsS3 proves a block_results RPC
+// failure is returned as-is, not mislabeled as an S3 access problem.
+func TestExportPage_ProducerErrorNotClassifiedAsS3(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/block_results" {
+			http.Error(w, "block results unavailable", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":-1,"result":{"sync_info":{"latest_block_height":"100"}}}`)
+	}))
+	defer srv.Close()
+
+	e := NewResultExporter(t.TempDir(), "test-1", "pod-0", mockResultUploaderFactory())
+	err := e.exportPage(context.Background(), rpc.NewClient(srv.URL, nil), &mockResultUploader{}, "bkt", "us-east-1", "p/", 100, 100)
+	if err == nil {
+		t.Fatal("expected a producer error")
+	}
+	var te *engine.TaskError
+	if errors.As(err, &te) && te.Operation == "S3" {
+		t.Fatalf("producer RPC error misclassified as S3: %v", err)
+	}
+	if !strings.Contains(err.Error(), "block_results") {
+		t.Fatalf("expected the block_results producer error, got: %v", err)
+	}
+}
+
+// TestExportPage_UploadErrorKeepsS3Classification proves a genuine upload
+// failure retains its ClassifyS3Error treatment (Operation S3), not lost behind
+// a wrapped sink-write error.
+func TestExportPage_UploadErrorKeepsS3Classification(t *testing.T) {
+	srv := fakeRPCServer(100)
+	defer srv.Close()
+
+	up := drainingFailingUploader{err: errors.New("connection reset by peer")}
+	e := NewResultExporter(t.TempDir(), "test-1", "pod-0", mockResultUploaderFactory())
+	err := e.exportPage(context.Background(), rpc.NewClient(srv.URL, nil), up, "bkt", "us-east-1", "p/", 100, 100)
+	if err == nil {
+		t.Fatal("expected an upload error")
+	}
+	var te *engine.TaskError
+	if !errors.As(err, &te) || te.Operation != "S3" {
+		t.Fatalf("upload failure should be S3-classified, got: %v", err)
 	}
 }
 
