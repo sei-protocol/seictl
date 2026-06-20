@@ -178,11 +178,20 @@ func (e *ResultExporter) exportPage(
 ) error {
 	key := fmt.Sprintf("%s%d-%d.ndjson.gz", prefix, start, end)
 
-	_, err := seis3.StreamGzipFunc(ctx, uploader, bucket, key, func(w io.Writer) error {
-		return e.collectResults(ctx, client, w, start, end)
+	var collectErr error
+	_, uploadErr := seis3.StreamGzipFunc(ctx, uploader, bucket, key, func(w io.Writer) error {
+		collectErr = e.collectResults(ctx, client, w, start, end)
+		return collectErr
 	})
-	if err != nil {
-		return seis3.ClassifyS3Error("result-export", bucket, key, region, err)
+	// A producer failure (block_results RPC, marshaling, ctx cancel) is not an S3
+	// problem — return it as-is so it isn't mislabeled with S3 access hints.
+	// collectErr is set iff the producer failed; if S3 dies mid-stream the error
+	// surfaces into collectErr through the closed pipe, so it is never swallowed.
+	if collectErr != nil {
+		return collectErr
+	}
+	if uploadErr != nil {
+		return seis3.ClassifyS3Error("result-export", bucket, key, region, uploadErr)
 	}
 	return nil
 }

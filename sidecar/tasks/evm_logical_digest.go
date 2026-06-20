@@ -199,6 +199,8 @@ func (d *EvmLogicalDigester) runSeidb(ctx context.Context, seidbPath, backend, d
 	}
 
 	cmd := exec.CommandContext(ctx, seidbPath, args...)
+	// Stderr is left nil so Output() captures it into ExitError.Stderr, which
+	// stderrTail surfaces on failure.
 	out, err := cmd.Output()
 	if err != nil {
 		return bucketDigests{}, fmt.Errorf("running %s %s: %w%s", seidbPath, strings.Join(args, " "), err, stderrTail(err))
