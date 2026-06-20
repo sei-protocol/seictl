@@ -135,13 +135,16 @@ func (d *EvmLogicalDigester) run(ctx context.Context, req EvmLogicalDigestReques
 		}
 
 		record := buildEndpointDigest(req.Height, norm, flatkv, memiavl)
-		recordDigestMetrics(record)
 		key := fmt.Sprintf("%sendpoint-digest-%d-%s.json.gz", prefix, req.Height, norm)
 
 		emit, err := seis3.StreamGzipJSON(ctx, uploader, req.Bucket, key, record)
 		if err != nil {
 			return seis3.ClassifyS3Error("evm-logical-digest", req.Bucket, key, req.Region, err)
 		}
+		// After the publish succeeds: the run/mismatch counters count records
+		// that actually landed in S3, so a failed upload can't leave the
+		// oracle-liveness signal looking healthy while no artifact was written.
+		recordDigestMetrics(record)
 
 		evmDigestLog.Info("published endpoint digest",
 			"height", req.Height,
