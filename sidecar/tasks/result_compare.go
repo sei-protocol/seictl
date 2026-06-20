@@ -1,15 +1,10 @@
 package tasks
 
 import (
-	"compress/gzip"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/ethereum/go-ethereum/ethclient"
 
 	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
@@ -208,7 +203,8 @@ func (l *comparisonLoop) uploadDivergenceReport(ctx context.Context, result shad
 	}
 
 	key := fmt.Sprintf("%sdivergence-%d.report.json.gz", l.prefix, l.height)
-	return uploadGzipJSON(ctx, l.uploader, l.cfg.Bucket, key, report)
+	_, err = seis3.StreamGzipJSON(ctx, l.uploader, l.cfg.Bucket, key, report)
+	return err
 }
 
 func (l *comparisonLoop) flushPageIfFull(ctx context.Context) error {
@@ -245,106 +241,8 @@ func flushComparePage(ctx context.Context, uploader seis3.Uploader, bucket, pref
 	key := fmt.Sprintf("%s%d-%d.compare.ndjson.gz", prefix, start, end)
 
 	exportLog.Info("flushing comparison page", "key", key, "blocks", len(results))
-	return streamGzipNDJSON(ctx, uploader, bucket, key, results)
-}
-
-func streamGzipNDJSON(ctx context.Context, uploader seis3.Uploader, bucket, key string, results []shadow.CompareResult) error {
-	pr, pw := io.Pipe()
-
-	writeErr := make(chan error, 1)
-	go func() {
-		writeErr <- writeGzipNDJSON(results, pw)
-	}()
-
-	_, uploadErr := uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket:      aws.String(bucket),
-		Key:         aws.String(key),
-		Body:        pr,
-		ContentType: aws.String("application/gzip"),
-	})
-	if uploadErr != nil {
-		pr.CloseWithError(uploadErr)
-	}
-
-	wErr := <-writeErr
-	if uploadErr != nil {
-		return uploadErr
-	}
-	return wErr
-}
-
-func writeGzipNDJSON(results []shadow.CompareResult, wc io.WriteCloser) (retErr error) {
-	defer func() {
-		if retErr != nil {
-			wc.(*io.PipeWriter).CloseWithError(retErr)
-		} else {
-			_ = wc.Close()
-		}
-	}()
-
-	gw := gzip.NewWriter(wc)
-	defer func() {
-		if err := gw.Close(); err != nil && retErr == nil {
-			retErr = fmt.Errorf("closing gzip writer: %w", err)
-		}
-	}()
-
-	for _, r := range results {
-		line, err := json.Marshal(r)
-		if err != nil {
-			return fmt.Errorf("marshaling comparison at height %d: %w", r.Height, err)
-		}
-		if _, err := gw.Write(append(line, '\n')); err != nil {
-			return fmt.Errorf("writing comparison at height %d: %w", r.Height, err)
-		}
-	}
-	return nil
-}
-
-func uploadGzipJSON(ctx context.Context, uploader seis3.Uploader, bucket, key string, v any) error {
-	pr, pw := io.Pipe()
-
-	writeErr := make(chan error, 1)
-	go func() {
-		writeErr <- writeGzipSingleJSON(v, pw)
-	}()
-
-	_, uploadErr := uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket:      aws.String(bucket),
-		Key:         aws.String(key),
-		Body:        pr,
-		ContentType: aws.String("application/gzip"),
-	})
-	if uploadErr != nil {
-		pr.CloseWithError(uploadErr)
-	}
-
-	wErr := <-writeErr
-	if uploadErr != nil {
-		return uploadErr
-	}
-	return wErr
-}
-
-func writeGzipSingleJSON(v any, wc io.WriteCloser) (retErr error) {
-	defer func() {
-		if retErr != nil {
-			wc.(*io.PipeWriter).CloseWithError(retErr)
-		} else {
-			_ = wc.Close()
-		}
-	}()
-
-	gw := gzip.NewWriter(wc)
-	defer func() {
-		if err := gw.Close(); err != nil && retErr == nil {
-			retErr = fmt.Errorf("closing gzip writer: %w", err)
-		}
-	}()
-
-	enc := json.NewEncoder(gw)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
+	_, err := seis3.StreamGzipNDJSON(ctx, uploader, bucket, key, results)
+	return err
 }
 
 func sleep(ctx context.Context, d time.Duration) error {

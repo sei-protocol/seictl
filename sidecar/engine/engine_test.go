@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func newTestEngine(t *testing.T, handlers map[TaskType]TaskHandler) *Engine {
@@ -810,5 +812,33 @@ func TestTaskErrorProducesRichErrorString(t *testing.T) {
 	}
 	if !strings.Contains(r.Error, "hint:") {
 		t.Errorf("error should contain hint, got: %s", r.Error)
+	}
+}
+
+func TestSubmitHandlerPanicBecomesFailedTask(t *testing.T) {
+	before := testutil.ToFloat64(taskPanics.WithLabelValues(string(TaskConfigPatch)))
+
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			panic("kaboom")
+		},
+	})
+
+	id, err := eng.Submit(Task{Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	r := waitForResult(t, eng, id)
+	if r.Status != TaskStatusFailed {
+		t.Fatalf("panicking handler should produce Failed, got %s", r.Status)
+	}
+	if !strings.Contains(r.Error, "panicked") || !strings.Contains(r.Error, "kaboom") {
+		t.Errorf("error should describe the panic, got: %s", r.Error)
+	}
+
+	after := testutil.ToFloat64(taskPanics.WithLabelValues(string(TaskConfigPatch)))
+	if after != before+1 {
+		t.Errorf("taskPanics delta = %v, want 1", after-before)
 	}
 }
