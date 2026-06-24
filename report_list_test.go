@@ -71,6 +71,63 @@ func TestComparePageRe(t *testing.T) {
 	}
 }
 
+func TestEndpointDigestRe(t *testing.T) {
+	tests := []struct {
+		key      string
+		wantH    string
+		wantNorm string
+		want     bool
+	}{
+		{
+			key:      "shadow-results/endpoint-digest-198032451-semantic.json.gz",
+			wantH:    "198032451",
+			wantNorm: "semantic",
+			want:     true,
+		},
+		{
+			key:      "prefix/endpoint-digest-1-translator.json.gz",
+			wantH:    "1",
+			wantNorm: "translator",
+			want:     true,
+		},
+		{
+			// Divergence report — must NOT match.
+			key:  "shadow-results/divergence-198032451.report.json.gz",
+			want: false,
+		},
+		{
+			// Comparison page — must NOT match.
+			key:  "shadow-results/198000000-198000099.compare.ndjson.gz",
+			want: false,
+		},
+		{
+			key:  "",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			m := endpointDigestRe.FindStringSubmatch(tt.key)
+			if !tt.want {
+				if len(m) >= 3 {
+					t.Fatalf("expected no match for %q, got %v", tt.key, m)
+				}
+				return
+			}
+			if len(m) < 3 {
+				t.Fatalf("expected match for %q, got nil", tt.key)
+			}
+			if m[1] != tt.wantH {
+				t.Errorf("height = %q, want %q", m[1], tt.wantH)
+			}
+			if m[2] != tt.wantNorm {
+				t.Errorf("normalization = %q, want %q", m[2], tt.wantNorm)
+			}
+		})
+	}
+}
+
 func TestDivergenceReportRe(t *testing.T) {
 	tests := []struct {
 		key        string

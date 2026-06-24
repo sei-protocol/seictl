@@ -136,7 +136,7 @@ type Layer2Result struct {
 // StateDivergence records a single logical-state mismatch between the shadow
 // and canonical chains. Values are hex for legibility in reports.
 type StateDivergence struct {
-	Kind      string `json:"kind"` // storage | code | nonce
+	Kind      string `json:"kind"` // storage | balance | code | nonce
 	Addr      string `json:"addr"`
 	Slot      string `json:"slot,omitempty"` // set only for storage
 	Shadow    string `json:"shadow"`

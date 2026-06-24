@@ -20,6 +20,7 @@ import (
 var (
 	comparePageRe      = regexp.MustCompile(`(\d+)-(\d+)\.compare\.ndjson\.gz$`)
 	divergenceReportRe = regexp.MustCompile(`divergence-(\d+)\.report\.json\.gz$`)
+	endpointDigestRe   = regexp.MustCompile(`endpoint-digest-(\d+)-(\w+)\.json\.gz$`)
 )
 
 var reportListCmd = cli.Command{
@@ -58,6 +59,7 @@ var reportListCmd = cli.Command{
 type listOutput struct {
 	Pages             []pageEntry       `json:"pages"`
 	DivergenceReports []divergenceEntry `json:"divergenceReports"`
+	DigestRecords     []digestEntry     `json:"digestRecords"`
 	TotalBlocks       int64             `json:"totalBlocks"`
 }
 
@@ -71,6 +73,12 @@ type pageEntry struct {
 type divergenceEntry struct {
 	Key    string `json:"key"`
 	Height int64  `json:"height"`
+}
+
+type digestEntry struct {
+	Key           string `json:"key"`
+	Height        int64  `json:"height"`
+	Normalization string `json:"normalization"`
 }
 
 func runReportList(ctx context.Context, cmd *cli.Command) error {
@@ -94,6 +102,7 @@ func runReportList(ctx context.Context, cmd *cli.Command) error {
 
 	var pages []pageEntry
 	var reports []divergenceEntry
+	var digests []digestEntry
 
 	for {
 		resp, err := lister.ListObjectsV2(ctx, input)
@@ -112,6 +121,9 @@ func runReportList(ctx context.Context, cmd *cli.Command) error {
 			} else if m := divergenceReportRe.FindStringSubmatch(key); len(m) >= 2 {
 				height, _ := strconv.ParseInt(m[1], 10, 64)
 				reports = append(reports, divergenceEntry{Key: key, Height: height})
+			} else if m := endpointDigestRe.FindStringSubmatch(key); len(m) >= 3 {
+				height, _ := strconv.ParseInt(m[1], 10, 64)
+				digests = append(digests, digestEntry{Key: key, Height: height, Normalization: m[2]})
 			}
 		}
 		if !aws.ToBool(resp.IsTruncated) {
@@ -122,6 +134,12 @@ func runReportList(ctx context.Context, cmd *cli.Command) error {
 
 	sort.Slice(pages, func(i, j int) bool { return pages[i].StartHeight < pages[j].StartHeight })
 	sort.Slice(reports, func(i, j int) bool { return reports[i].Height < reports[j].Height })
+	sort.Slice(digests, func(i, j int) bool {
+		if digests[i].Height != digests[j].Height {
+			return digests[i].Height < digests[j].Height
+		}
+		return digests[i].Normalization < digests[j].Normalization
+	})
 
 	var totalBlocks int64
 	for _, p := range pages {
@@ -131,6 +149,7 @@ func runReportList(ctx context.Context, cmd *cli.Command) error {
 	out := listOutput{
 		Pages:             pages,
 		DivergenceReports: reports,
+		DigestRecords:     digests,
 		TotalBlocks:       totalBlocks,
 	}
 	if out.Pages == nil {
@@ -138,6 +157,9 @@ func runReportList(ctx context.Context, cmd *cli.Command) error {
 	}
 	if out.DivergenceReports == nil {
 		out.DivergenceReports = []divergenceEntry{}
+	}
+	if out.DigestRecords == nil {
+		out.DigestRecords = []digestEntry{}
 	}
 
 	if cmd.Bool("json") {
@@ -147,10 +169,10 @@ func runReportList(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Human-readable output.
-	fmt.Fprintf(os.Stderr, "%d comparison page(s), %d divergence report(s), %d blocks covered\n\n",
-		len(pages), len(reports), totalBlocks)
+	fmt.Fprintf(os.Stderr, "%d comparison page(s), %d divergence report(s), %d digest record(s), %d blocks covered\n\n",
+		len(pages), len(reports), len(digests), totalBlocks)
 
-	if len(pages) == 0 && len(reports) == 0 {
+	if len(pages) == 0 && len(reports) == 0 && len(digests) == 0 {
 		fmt.Fprintln(os.Stderr, "no data found")
 		return nil
 	}
@@ -162,6 +184,9 @@ func runReportList(ctx context.Context, cmd *cli.Command) error {
 	}
 	for _, r := range reports {
 		fmt.Fprintf(w, "divergence\t%d\t-\n", r.Height)
+	}
+	for _, d := range digests {
+		fmt.Fprintf(w, "digest (%s)\t%d\t-\n", d.Normalization, d.Height)
 	}
 	w.Flush()
 	return nil

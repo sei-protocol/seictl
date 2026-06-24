@@ -141,6 +141,10 @@ func (d *EvmLogicalDigester) run(ctx context.Context, req EvmLogicalDigestReques
 		if err != nil {
 			return seis3.ClassifyS3Error("evm-logical-digest", req.Bucket, key, req.Region, err)
 		}
+		// After the publish succeeds: the run/mismatch counters count records
+		// that actually landed in S3, so a failed upload can't leave the
+		// oracle-liveness signal looking healthy while no artifact was written.
+		recordDigestMetrics(record)
 
 		evmDigestLog.Info("published endpoint digest",
 			"height", req.Height,
