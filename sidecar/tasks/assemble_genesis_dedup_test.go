@@ -74,10 +74,10 @@ func writeGentxFixtureWithPubKey(t *testing.T, dir, filename, delegator string, 
 	}
 }
 
-// TestVerifyAssembledGentxs_DuplicateDelegator is the regression test for
-// PLT-773: two gentx files for the same delegator (the failure that panicked
-// InitChain with "account sequence mismatch, expected 1, got 0") must be
-// rejected up front rather than producing a chain-wedging genesis.
+// TestVerifyAssembledGentxs_DuplicateDelegator: two gentxs for the same
+// delegator (the failure that panicked InitChain with "account sequence
+// mismatch, expected 1, got 0") must be rejected up front rather than producing
+// a chain-wedging genesis.
 func TestVerifyAssembledGentxs_DuplicateDelegator(t *testing.T) {
 	homeDir := t.TempDir()
 	a := NewGenesisAssembler(homeDir, "b", "r", "chain", nil, nil)
@@ -96,10 +96,9 @@ func TestVerifyAssembledGentxs_DuplicateDelegator(t *testing.T) {
 	}
 }
 
-// TestVerifyAssembledGentxs_DuplicateConsensusPubKey covers the copied-key
-// case (N1): distinct delegators that share one consensus pubkey would abort
-// InitChain in x/staking, so the guard must reject it even though the
-// delegator addresses differ.
+// TestVerifyAssembledGentxs_DuplicateConsensusPubKey covers the copied-key case:
+// distinct delegators that share one consensus pubkey would abort InitChain in
+// x/staking, so the guard must reject it even though the delegators differ.
 func TestVerifyAssembledGentxs_DuplicateConsensusPubKey(t *testing.T) {
 	homeDir := t.TempDir()
 	a := NewGenesisAssembler(homeDir, "b", "r", "chain", nil, nil)

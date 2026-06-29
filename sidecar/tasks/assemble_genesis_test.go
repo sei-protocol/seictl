@@ -66,7 +66,7 @@ func TestAssembler_DownloadsGentxFiles(t *testing.T) {
 	}
 
 	// Isolation guarantee: the assembler must never touch config/gentx/, which
-	// generate-gentx and upload-genesis-artifacts use. See PLT-773.
+	// generate-gentx and upload-genesis-artifacts use.
 	if _, err := os.Stat(filepath.Join(homeDir, "config", "gentx")); !os.IsNotExist(err) {
 		t.Errorf("assembler must not create or populate config/gentx/; stat err = %v (want IsNotExist)", err)
 	}

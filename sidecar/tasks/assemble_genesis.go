@@ -33,19 +33,13 @@ var assembleLog = seilog.NewLogger("seictl", "task", "assemble-genesis")
 
 const assembleMarkerFile = ".sei-sidecar-assemble-done"
 
-// assembledGentxSubdir is an isolated directory, under the node's config dir,
-// that the assembler builds from exactly the downloaded per-node gentx files.
-// It is kept distinct from config/gentx/ — which generate-gentx (this node's
-// own gentx, named gentx-<nodeID>.json) and upload-genesis-artifacts also use —
-// so the collect step can never pick up this node's own gentx-<nodeID>.json
-// alongside the downloaded gentx-<nodeName>.json for the same validator (the
-// same MsgCreateValidator twice, which panics InitChain into a network-wide
-// CrashLoopBackOff). See PLT-773.
+// assembledGentxSubdir holds the assembler's downloaded gentxs, kept separate
+// from config/gentx/ (which generate-gentx and upload-genesis-artifacts use) so
+// the assembler can't collect its own gentx-<nodeID>.json twice.
 const assembledGentxSubdir = "gentx-assembled"
 
-// maxGentxBytes bounds a single gentx download. A gentx is a few KB; the cap
-// guards the sidecar against an oversized or wrong object under the (shared)
-// genesis-artifacts prefix being read fully into memory.
+// maxGentxBytes caps a single gentx download (a gentx is a few KB) so a wrong or
+// oversized S3 object can't be read wholesale into memory.
 const maxGentxBytes = 1 << 20 // 1 MiB
 
 // GenesisAssembler downloads per-node gentx files from S3, calls
@@ -198,19 +192,15 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 	})
 }
 
-// assembledGentxDir is the isolated directory the assembler builds from the
-// downloaded per-node gentx files. See assembledGentxSubdir for why this is
-// kept separate from config/gentx/.
+// assembledGentxDir is the isolated dir the assembler collects from; see
+// assembledGentxSubdir.
 func (a *GenesisAssembler) assembledGentxDir() string {
 	return filepath.Join(a.homeDir, "config", assembledGentxSubdir)
 }
 
-// downloadGentxFiles fetches each node's gentx.json from S3 into a freshly
-// rebuilt, isolated assemble directory (see assembledGentxSubdir). The
-// directory is wiped and recreated on every run, then populated with exactly
-// one file per node, so the collect step always reads precisely the downloaded
-// set — never this node's own generate-gentx output or a leftover from a
-// previous run.
+// downloadGentxFiles wipes the assemble dir and refills it with exactly one
+// gentx per node from S3, so collect reads precisely the downloaded set — never
+// this node's own generate-gentx output or a leftover from a prior run.
 func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleGenesisRequest, nodes []string) error {
 	s3Client, err := a.s3ClientFactory(ctx, a.region)
 	if err != nil {
@@ -258,28 +248,22 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleG
 	return nil
 }
 
-// verifyAssembledGentxs decodes the gentx for every expected node and fails
-// loudly unless the assemble directory holds exactly one MsgCreateValidator per
-// node, each for a distinct validator. Iterating the expected node names (rather
-// than the directory) also asserts the 1:1 mapping by name — a missing node's
-// gentx is caught here. gentxs are self-delegating by construction, so a
-// validator is identified equivalently by its delegator account, its operator
-// address, and its consensus pubkey; a collision on any of the three means the
-// same validator would be created twice in InitChain. A duplicate delegator
-// fails the ante-handler sequence check ("account sequence mismatch, expected
-// 1, got 0"); a duplicate consensus pubkey or operator address aborts InitChain
-// in x/staking. Either way the chain wedges in permanent CrashLoopBackOff, so
-// rejecting it here — before genesis is mutated — turns an opaque, network-wide
-// boot failure into a clear, actionable assemble error.
+// verifyAssembledGentxs requires exactly one MsgCreateValidator per expected
+// node, all for distinct validators, before genesis is mutated. Iterating node
+// names also catches a missing gentx. gentxs are self-delegating, so a validator
+// is identified equally by delegator, operator address, and consensus pubkey;
+// any collision means it'd be created twice, which panics/aborts InitChain and
+// wedges the chain. Rejecting here yields a clear error instead.
 func (a *GenesisAssembler) verifyAssembledGentxs(nodes []string) error {
 	_, txCfg := makeCodec()
 	ensureBech32()
 
 	gentxDir := a.assembledGentxDir()
 
-	seenDelegator := make(map[string]string, len(nodes)) // delegator address -> node name
-	seenValidator := make(map[string]string, len(nodes)) // operator address  -> node name
-	seenPubKey := make(map[string]string, len(nodes))    // consensus pubkey  -> node name
+	// Each map records identity -> node name, so a collision names both nodes.
+	seenDelegator := make(map[string]string, len(nodes))
+	seenValidator := make(map[string]string, len(nodes))
+	seenPubKey := make(map[string]string, len(nodes))
 	for _, nodeName := range nodes {
 		data, err := os.ReadFile(filepath.Join(gentxDir, fmt.Sprintf("gentx-%s.json", nodeName)))
 		if err != nil {
@@ -298,8 +282,7 @@ func (a *GenesisAssembler) verifyAssembledGentxs(nodes []string) error {
 			return fmt.Errorf("assemble-genesis: gentx for node %s is not a MsgCreateValidator", nodeName)
 		}
 
-		// A consensus pubkey is always present in a well-formed gentx; guard
-		// nil so a malformed one can't panic before x/staking rejects it.
+		// Guard nil so a malformed gentx can't panic before x/staking rejects it.
 		pubKey := ""
 		if msg.Pubkey != nil {
 			pubKey = msg.Pubkey.String()
