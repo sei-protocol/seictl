@@ -31,7 +31,12 @@ func newTestComparisonLoop(t *testing.T, continueOnDivergence bool, latest int64
 		exporter:     exporter,
 		comparator:   shadow.NewComparator(shadowSrv.URL, canonicalSrv.URL),
 		uploader:     rec,
-		cfg:          ResultExportRequest{Bucket: "bkt", Region: "us-east-1", Prefix: "p/", ContinueOnDivergence: continueOnDivergence},
+		cfg: ResultExportRequest{
+			Bucket: "bkt", Region: "us-east-1", Prefix: "p/",
+			RPCEndpoint:          shadowSrv.URL,
+			CanonicalRPC:         canonicalSrv.URL,
+			ContinueOnDivergence: continueOnDivergence,
+		},
 		prefix:       "p/",
 		height:       1,
 		pollInterval: time.Millisecond,
@@ -122,7 +127,7 @@ func TestCompareSurveyMode_BoundsMemory(t *testing.T) {
 
 // TestCompareSurveyMode_RunCompletesOnCancel: survey mode never returns
 // diverged=true, so run() only exits when stopped. A clean context cancellation
-// is the survey's terminus and must complete the task (return nil), not fail it.
+// is the survey's natural end and must complete the task (return nil), not fail it.
 func TestCompareSurveyMode_RunCompletesOnCancel(t *testing.T) {
 	loop, _ := newTestComparisonLoop(t, true, 3)
 
@@ -132,19 +137,54 @@ func TestCompareSurveyMode_RunCompletesOnCancel(t *testing.T) {
 
 	// Give the survey a moment to process the few available blocks and begin
 	// tailing, then stop it the way a sidecar shutdown would. (Reading loop
-	// state here would race run()'s goroutine; a cancel maps to a clean
-	// terminus whether the loop is tailing or mid-survey, so a brief wait is
-	// enough — the assertion is on the exit verdict, not on catch-up.)
+	// state here would race run()'s goroutine; a cancel completes cleanly
+	// whether the loop is tailing or mid-survey, so a brief wait is enough —
+	// the assertion is on the exit verdict, not on catch-up.)
 	time.Sleep(20 * time.Millisecond)
 	cancel()
 
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("survey run on clean cancel = %v, want nil (a stop is the terminus, not a failure)", err)
+			t.Fatalf("survey run on clean cancel = %v, want nil (a stop completes, not fails)", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("run did not return after context cancellation")
+	}
+}
+
+// TestCompareSurveyMode_FlushesTrailingPageOnStop: when a survey is stopped
+// with a partial page buffered (fewer than comparePageSize blocks), that page
+// must be flushed to S3 before the task completes — otherwise up to
+// comparePageSize-1 compared blocks are silently dropped while the task reports
+// success. latest < comparePageSize, so the only page is the trailing partial.
+func TestCompareSurveyMode_FlushesTrailingPageOnStop(t *testing.T) {
+	loop, rec := newTestComparisonLoop(t, true, 50)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- loop.run(ctx) }()
+
+	// Survey the available blocks and begin tailing, then stop the survey.
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("survey run on clean stop = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not return after context cancellation")
+	}
+
+	// Safe to read rec.keys: the run goroutine's writes happen-before the done
+	// receive, and it has returned.
+	if n := countKeys(rec, ".compare.ndjson.gz"); n != 1 {
+		t.Errorf("trailing compare page not flushed on stop: got %d compare pages, want 1", n)
+	}
+	if n := countKeys(rec, ".report"); n != 0 {
+		t.Errorf("survey mode must upload no per-block divergence report, got %d", n)
 	}
 }
 

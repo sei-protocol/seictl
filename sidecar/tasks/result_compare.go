@@ -15,6 +15,12 @@ import (
 const (
 	comparePollInterval = 5 * time.Second
 	comparePageSize     = 100
+
+	// finalFlushTimeout bounds the best-effort flush of the trailing compare
+	// page when a survey is stopped. The loop's context is already cancelled at
+	// that point, so the flush runs on a fresh deadline; the pod's termination
+	// grace period must accommodate it.
+	finalFlushTimeout = 10 * time.Second
 )
 
 // Guard the external contract Comparator.Close relies on: *ethclient.Client must
@@ -42,7 +48,7 @@ type comparisonLoop struct {
 // DivergenceReport alongside the comparison pages. In survey mode
 // (cfg.ContinueOnDivergence) a divergence never halts the run: the comparison
 // tails the chain until the context is cancelled, and a clean cancellation
-// completes the task — being stopped is the survey's terminus, not a failure.
+// completes the task — being stopped is the survey's natural end, not a failure.
 func (e *ResultExporter) ExportAndCompare(ctx context.Context, cfg ResultExportRequest) error {
 	loop, err := e.newComparisonLoop(ctx, cfg)
 	if err != nil {
@@ -110,17 +116,17 @@ func (e *ResultExporter) newComparisonLoop(ctx context.Context, cfg ResultExport
 func (l *comparisonLoop) run(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
-			return l.terminus(err)
+			return l.finalize(err)
 		}
 
 		latestHeight, err := l.waitForBlocks(ctx)
 		if err != nil {
-			return l.terminus(err)
+			return l.finalize(err)
 		}
 
 		diverged, err := l.compareBlocksUpTo(ctx, latestHeight)
 		if err != nil {
-			return l.terminus(err)
+			return l.finalize(err)
 		}
 		if diverged {
 			return nil
@@ -128,17 +134,45 @@ func (l *comparisonLoop) run(ctx context.Context) error {
 	}
 }
 
-// terminus maps the loop's exit error to a task verdict. Survey mode has no
-// divergence-halt, so being stopped is its terminus: a clean context
+// finalize maps the loop's exit error to a task verdict. Survey mode has no
+// divergence-halt, so being stopped is its natural end: a clean context
 // cancellation (e.g. sidecar shutdown) completes the task rather than failing
 // it. Any other error — and any error in the default halt-on-divergence mode —
 // propagates and fails the run.
-func (l *comparisonLoop) terminus(err error) error {
+//
+// Before completing, the trailing partial page (blocks compared since the last
+// full-page boundary) is flushed — otherwise those blocks would be silently
+// absent from S3 while the task reports success, and a completed task is not
+// re-run. If that final flush fails the run fails instead, so a restart
+// re-surveys the trailing blocks from the last persisted height.
+func (l *comparisonLoop) finalize(err error) error {
 	if l.cfg.ContinueOnDivergence && errors.Is(err, context.Canceled) {
+		flushCtx, cancel := context.WithTimeout(context.Background(), finalFlushTimeout)
+		defer cancel()
+		if ferr := l.flushFinalPage(flushCtx); ferr != nil {
+			return fmt.Errorf("flushing final survey page on shutdown: %w", ferr)
+		}
 		exportLog.Info("survey stopped; completing", "last-height", l.height)
 		return nil
 	}
 	return err
+}
+
+// flushFinalPage uploads whatever remains in the page buffer (a partial page
+// below comparePageSize) and persists the height of its last block, so a
+// stopped survey loses no compared blocks. It keys the persisted height off the
+// buffer's last entry rather than l.height, which has already advanced past it.
+func (l *comparisonLoop) flushFinalPage(ctx context.Context) error {
+	if len(l.pageBuf) == 0 {
+		return nil
+	}
+	lastHeight := l.pageBuf[len(l.pageBuf)-1].Height
+	if err := flushComparePage(ctx, l.uploader, l.cfg.Bucket, l.prefix, l.pageBuf); err != nil {
+		return err
+	}
+	l.exporter.persistHeight(lastHeight)
+	l.pageBuf = l.pageBuf[:0]
+	return nil
 }
 
 func (l *comparisonLoop) waitForBlocks(ctx context.Context) (int64, error) {
