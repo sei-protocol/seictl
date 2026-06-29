@@ -159,7 +159,18 @@ func (l *comparisonLoop) compareBlocksUpTo(ctx context.Context, latestHeight int
 		l.pageBuf = append(l.pageBuf, *result)
 
 		if result.Diverged() {
-			return true, l.handleDivergence(ctx, *result)
+			if !l.cfg.ContinueOnDivergence {
+				return true, l.handleDivergence(ctx, *result)
+			}
+			// Survey mode: the divergent block is already appended to the compare
+			// page (its authentic per-block verdict); record it and fall through to
+			// the normal page-flush + height++ discipline. Unlike handleDivergence we
+			// upload NO per-block DivergenceReport — that re-fetches block +
+			// block_results from both chains and writes an S3 object per block, which
+			// would overload the sidecar over a multi-million-block sweep. The page
+			// (flushed and truncated at comparePageSize, so memory stays bounded) is
+			// the survey record; seictl report classifies benign vs real downstream.
+			l.recordDivergence(*result)
 		}
 
 		if err := l.flushPageIfFull(ctx); err != nil {
@@ -194,6 +205,22 @@ func (l *comparisonLoop) handleDivergence(ctx context.Context, result shadow.Com
 
 	l.exporter.persistHeight(l.height)
 	return nil
+}
+
+// recordDivergence notes a divergent block under ContinueOnDivergence (survey
+// mode): it increments the divergence metric and logs, but — unlike
+// handleDivergence — uploads no per-block DivergenceReport and forces no early
+// page flush. The block is already in the page; it rides the normal
+// flushPageIfFull boundary, so the in-memory buffer stays bounded over a long
+// sweep and the run continues instead of halting.
+func (l *comparisonLoop) recordDivergence(result shadow.CompareResult) {
+	layer := "0"
+	if result.DivergenceLayer != nil {
+		layer = fmt.Sprintf("%d", *result.DivergenceLayer)
+	}
+	shadow.Divergences.WithLabelValues(l.exporter.chainID, l.exporter.podName, layer).Inc()
+	exportLog.Info("divergence recorded; continuing (survey mode)",
+		"height", l.height, "divergence-layer", layer)
 }
 
 func (l *comparisonLoop) uploadDivergenceReport(ctx context.Context, result shadow.CompareResult) error {
