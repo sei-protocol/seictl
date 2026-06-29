@@ -57,12 +57,55 @@ func TestAssembler_DownloadsGentxFiles(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	gentxDir := filepath.Join(homeDir, "config", "gentx")
+	gentxDir := filepath.Join(homeDir, "config", assembledGentxSubdir)
 	for _, node := range []string{"val-0", "val-1"} {
 		path := filepath.Join(gentxDir, fmt.Sprintf("gentx-%s.json", node))
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("expected gentx file %s to exist", path)
 		}
+	}
+
+	// Isolation guarantee: the assembler must never touch config/gentx/, which
+	// generate-gentx and upload-genesis-artifacts use.
+	if _, err := os.Stat(filepath.Join(homeDir, "config", "gentx")); !os.IsNotExist(err) {
+		t.Errorf("assembler must not create or populate config/gentx/; stat err = %v (want IsNotExist)", err)
+	}
+}
+
+// TestAssembler_DownloadClearsStaleFiles verifies the assemble dir is wiped on
+// every run, so a leftover gentx from a crashed prior attempt can't inflate the
+// collected set on a retry.
+func TestAssembler_DownloadClearsStaleFiles(t *testing.T) {
+	homeDir := t.TempDir()
+
+	s3Objects := &mockS3GetObject{objects: map[string][]byte{
+		"genesis/val-0/gentx.json": []byte(`{"gentx":"val0"}`),
+	}}
+	s3Factory := func(_ context.Context, _ string) (S3GetObjectAPI, error) {
+		return s3Objects, nil
+	}
+	assembler := NewGenesisAssembler(homeDir, "my-bucket", "us-west-2", "genesis", s3Factory, mockUploaderFactory(newMockS3Uploader()))
+
+	// Pre-seed a stale file in the assemble dir as if a prior run had crashed.
+	gentxDir := assembler.assembledGentxDir()
+	if err := os.MkdirAll(gentxDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stale := filepath.Join(gentxDir, "gentx-stale.json")
+	if err := os.WriteFile(stale, []byte(`{"stale":true}`), 0o644); err != nil {
+		t.Fatalf("write stale: %v", err)
+	}
+
+	cfg := AssembleGenesisRequest{AccountBalance: "10000000usei", Namespace: "default", Nodes: []AssembleNodeEntry{{Name: "val-0"}}}
+	if err := assembler.downloadGentxFiles(context.Background(), cfg, cfg.nodeNames()); err != nil {
+		t.Fatalf("downloadGentxFiles: %v", err)
+	}
+
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale gentx file survived download; stat err = %v (want IsNotExist)", err)
+	}
+	if _, err := os.Stat(filepath.Join(gentxDir, "gentx-val-0.json")); err != nil {
+		t.Errorf("expected downloaded gentx-val-0.json to exist: %v", err)
 	}
 }
 

@@ -33,6 +33,15 @@ var assembleLog = seilog.NewLogger("seictl", "task", "assemble-genesis")
 
 const assembleMarkerFile = ".sei-sidecar-assemble-done"
 
+// assembledGentxSubdir holds the assembler's downloaded gentxs, kept separate
+// from config/gentx/ (which generate-gentx and upload-genesis-artifacts use) so
+// the assembler can't collect its own gentx-<nodeID>.json twice.
+const assembledGentxSubdir = "gentx-assembled"
+
+// maxGentxBytes caps a single gentx download (a gentx is a few KB) so a wrong or
+// oversized S3 object can't be read wholesale into memory.
+const maxGentxBytes = 1 << 20 // 1 MiB
+
 // GenesisAssembler downloads per-node gentx files from S3, calls
 // genutil.GenAppStateFromConfig (the same function as seid collect-gentxs)
 // to produce the final genesis.json, and uploads it back to S3 for all
@@ -141,6 +150,10 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return err
 		}
 
+		if err := a.verifyAssembledGentxs(nodes); err != nil {
+			return err
+		}
+
 		if err := a.addMissingGenesisAccounts(cfg.AccountBalance); err != nil {
 			return err
 		}
@@ -179,22 +192,31 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 	})
 }
 
-// downloadGentxFiles fetches each node's gentx.json from S3 and writes
-// it to the local config/gentx/ directory.
+// assembledGentxDir is the isolated dir the assembler collects from; see
+// assembledGentxSubdir.
+func (a *GenesisAssembler) assembledGentxDir() string {
+	return filepath.Join(a.homeDir, "config", assembledGentxSubdir)
+}
+
+// downloadGentxFiles wipes the assemble dir and refills it with exactly one
+// gentx per node from S3, so collect reads precisely the downloaded set — never
+// this node's own generate-gentx output or a leftover from a prior run.
 func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleGenesisRequest, nodes []string) error {
 	s3Client, err := a.s3ClientFactory(ctx, a.region)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: building S3 client: %w", err)
 	}
 
-	gentxDir := filepath.Join(a.homeDir, "config", "gentx")
+	gentxDir := a.assembledGentxDir()
+	if err := os.RemoveAll(gentxDir); err != nil {
+		return fmt.Errorf("assemble-genesis: clearing assemble dir: %w", err)
+	}
 	if err := os.MkdirAll(gentxDir, 0o755); err != nil {
-		return fmt.Errorf("assemble-genesis: creating gentx dir: %w", err)
+		return fmt.Errorf("assemble-genesis: creating assemble dir: %w", err)
 	}
 
 	prefix := a.chainID + "/"
 
-	downloaded := make(map[string]bool, len(nodes))
 	for _, nodeName := range nodes {
 		key := fmt.Sprintf("%s%s/gentx.json", prefix, nodeName)
 		assembleLog.Info("downloading gentx", "node", nodeName, "key", key)
@@ -207,31 +229,89 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleG
 			return seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
 		}
 
-		data, err := io.ReadAll(output.Body)
+		data, err := io.ReadAll(io.LimitReader(output.Body, maxGentxBytes+1))
 		_ = output.Body.Close()
 		if err != nil {
 			return fmt.Errorf("assemble-genesis: reading %s: %w", key, err)
 		}
+		if len(data) > maxGentxBytes {
+			return fmt.Errorf("assemble-genesis: gentx %s exceeds %d bytes", key, maxGentxBytes)
+		}
 
-		filename := fmt.Sprintf("gentx-%s.json", nodeName)
-		destPath := filepath.Join(gentxDir, filename)
+		destPath := filepath.Join(gentxDir, fmt.Sprintf("gentx-%s.json", nodeName))
 		if err := os.WriteFile(destPath, data, 0o644); err != nil {
 			return fmt.Errorf("assemble-genesis: writing %s: %w", destPath, err)
-		}
-		downloaded[filename] = true
-	}
-
-	entries, err := os.ReadDir(gentxDir)
-	if err != nil {
-		return fmt.Errorf("assemble-genesis: reading gentx dir: %w", err)
-	}
-	for _, e := range entries {
-		if !e.IsDir() && !downloaded[e.Name()] {
-			_ = os.Remove(filepath.Join(gentxDir, e.Name()))
 		}
 	}
 
 	assembleLog.Info("all gentx files downloaded", "count", len(nodes))
+	return nil
+}
+
+// verifyAssembledGentxs requires exactly one MsgCreateValidator per expected
+// node, all for distinct validators, before genesis is mutated. Iterating node
+// names also catches a missing gentx. gentxs are self-delegating, so a validator
+// is identified equally by delegator, operator address, and consensus pubkey;
+// any collision means it'd be created twice, which panics/aborts InitChain and
+// wedges the chain. Rejecting here yields a clear error instead.
+func (a *GenesisAssembler) verifyAssembledGentxs(nodes []string) error {
+	_, txCfg := makeCodec()
+	ensureBech32()
+
+	gentxDir := a.assembledGentxDir()
+
+	// Each map records identity -> node name, so a collision names both nodes.
+	seenDelegator := make(map[string]string, len(nodes))
+	seenValidator := make(map[string]string, len(nodes))
+	seenPubKey := make(map[string]string, len(nodes))
+	for _, nodeName := range nodes {
+		data, err := os.ReadFile(filepath.Join(gentxDir, fmt.Sprintf("gentx-%s.json", nodeName)))
+		if err != nil {
+			return fmt.Errorf("assemble-genesis: reading gentx for node %s: %w", nodeName, err)
+		}
+		tx, err := txCfg.TxJSONDecoder()(data)
+		if err != nil {
+			return fmt.Errorf("assemble-genesis: decoding gentx for node %s: %w", nodeName, err)
+		}
+		msgs := tx.GetMsgs()
+		if len(msgs) != 1 {
+			return fmt.Errorf("assemble-genesis: gentx for node %s has %d messages, want exactly 1 MsgCreateValidator", nodeName, len(msgs))
+		}
+		msg, ok := msgs[0].(*stakingtypes.MsgCreateValidator)
+		if !ok {
+			return fmt.Errorf("assemble-genesis: gentx for node %s is not a MsgCreateValidator", nodeName)
+		}
+
+		// Guard nil so a malformed gentx can't panic before x/staking rejects it.
+		pubKey := ""
+		if msg.Pubkey != nil {
+			pubKey = msg.Pubkey.String()
+		}
+
+		dedupe := func(kind, key string, seen map[string]string) error {
+			if key == "" {
+				return nil
+			}
+			if prev, dup := seen[key]; dup {
+				return fmt.Errorf("assemble-genesis: duplicate %s %q (nodes %s and %s); "+
+					"the same validator would be created twice and abort InitChain",
+					kind, key, prev, nodeName)
+			}
+			seen[key] = nodeName
+			return nil
+		}
+		if err := dedupe("delegator", msg.DelegatorAddress, seenDelegator); err != nil {
+			return err
+		}
+		if err := dedupe("validator operator address", msg.ValidatorAddress, seenValidator); err != nil {
+			return err
+		}
+		if err := dedupe("consensus pubkey", pubKey, seenPubKey); err != nil {
+			return err
+		}
+	}
+
+	assembleLog.Info("assembled gentxs verified", "count", len(nodes))
 	return nil
 }
 
@@ -244,10 +324,10 @@ func (a *GenesisAssembler) addMissingGenesisAccounts(accountBalance string) erro
 	cdc, txCfg := makeCodec()
 	ensureBech32()
 
-	gentxDir := filepath.Join(a.homeDir, "config", "gentx")
+	gentxDir := a.assembledGentxDir()
 	entries, err := os.ReadDir(gentxDir)
 	if err != nil {
-		return fmt.Errorf("assemble-genesis: reading gentx dir: %w", err)
+		return fmt.Errorf("assemble-genesis: reading assemble dir: %w", err)
 	}
 
 	genFile := filepath.Join(a.homeDir, "config", "genesis.json")
@@ -399,7 +479,7 @@ func (a *GenesisAssembler) collectGentxs() error {
 		return fmt.Errorf("assemble-genesis: reading genesis: %w", err)
 	}
 
-	gentxsDir := filepath.Join(a.homeDir, "config", "gentx")
+	gentxsDir := a.assembledGentxDir()
 	initCfg := genutiltypes.NewInitConfig(genDoc.ChainID, gentxsDir, nodeID, valPubKey)
 
 	genBalIterator := banktypes.GenesisBalancesIterator{}
