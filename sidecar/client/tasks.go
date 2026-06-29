@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -38,12 +39,12 @@ type TaskBuilder interface {
 // Task type constants re-exported from engine for external consumers.
 const (
 	TaskTypeSnapshotRestore    = string(engine.TaskSnapshotRestore)
-	TaskTypeDiscoverPeers      = string(engine.TaskDiscoverPeers)
 	TaskTypeConfigPatch        = string(engine.TaskConfigPatch)
 	TaskTypeConfigApply        = string(engine.TaskConfigApply)
 	TaskTypeConfigValidate     = string(engine.TaskConfigValidate)
 	TaskTypeConfigReload       = string(engine.TaskConfigReload)
 	TaskTypeMarkReady          = string(engine.TaskMarkReady)
+	TaskTypeRestartSeid        = string(engine.TaskRestartSeid)
 	TaskTypeConfigureGenesis   = string(engine.TaskConfigureGenesis)
 	TaskTypeConfigureStateSync = string(engine.TaskConfigureStateSync)
 	TaskTypeSnapshotUpload     = string(engine.TaskSnapshotUpload)
@@ -58,6 +59,7 @@ const (
 
 	TaskTypeGovVote            = string(engine.TaskGovVote)
 	TaskTypeGovSoftwareUpgrade = string(engine.TaskGovSoftwareUpgrade)
+	TaskTypeGovParamChange     = string(engine.TaskGovParamChange)
 )
 
 // Known condition and action values for AwaitConditionTask.
@@ -88,19 +90,6 @@ func (t SnapshotRestoreTask) ToTaskRequest() TaskRequest {
 	return req
 }
 
-// SnapshotRestoreTaskFromParams reconstructs a SnapshotRestoreTask from
-// a generic params map. Useful for round-trip testing.
-func SnapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestoreTask {
-	var t SnapshotRestoreTask
-	switch h := params["targetHeight"].(type) {
-	case float64:
-		t.TargetHeight = int64(h)
-	case int64:
-		t.TargetHeight = h
-	}
-	return t
-}
-
 // SnapshotUploadTask archives and streams a local snapshot to S3.
 // S3 coordinates are derived by the sidecar from its environment.
 type SnapshotUploadTask struct {
@@ -115,17 +104,17 @@ func (t SnapshotUploadTask) ToTaskRequest() TaskRequest {
 	return req
 }
 
-// SnapshotUploadTaskFromParams reconstructs a SnapshotUploadTask from
-// a generic params map.
-func SnapshotUploadTaskFromParams(_ map[string]interface{}) SnapshotUploadTask {
-	return SnapshotUploadTask{}
-}
-
 // ConfigureGenesisTask instructs the sidecar to resolve and write genesis.json.
 // The sidecar resolves genesis from its chain ID: embedded config is checked
 // first, then S3 fallback at {bucket}/{chainID}/genesis.json using env vars.
-// No parameters are needed from the controller.
+//
+// ExpectedGenesisHash is the bare SHA-256 hex digest (no "sha256:" prefix) the
+// downloaded genesis.json must match. When set it gates the S3 download and the
+// sidecar fails closed on mismatch. When empty the download is unverified —
+// callers that omit it (and the field is omitted from the wire request) keep
+// the sidecar's pre-verification behavior.
 type ConfigureGenesisTask struct {
+	ExpectedGenesisHash string
 }
 
 func (t ConfigureGenesisTask) TaskType() string { return TaskTypeConfigureGenesis }
@@ -133,155 +122,11 @@ func (t ConfigureGenesisTask) TaskType() string { return TaskTypeConfigureGenesi
 func (t ConfigureGenesisTask) Validate() error { return nil }
 
 func (t ConfigureGenesisTask) ToTaskRequest() TaskRequest {
-	req := TaskRequest{Type: t.TaskType()}
-	return req
-}
-
-// ConfigureGenesisTaskFromParams reconstructs a ConfigureGenesisTask from
-// a generic params map.
-func ConfigureGenesisTaskFromParams(_ map[string]interface{}) ConfigureGenesisTask {
-	return ConfigureGenesisTask{}
-}
-
-// PeerSourceType identifies the peer discovery mechanism.
-type PeerSourceType string
-
-const (
-	PeerSourceEC2Tags      PeerSourceType = "ec2Tags"
-	PeerSourceStatic       PeerSourceType = "static"
-	PeerSourceDNSEndpoints PeerSourceType = "dnsEndpoints"
-)
-
-// PeerSource is a single peer discovery source.
-type PeerSource struct {
-	Type      PeerSourceType    `json:"type"`
-	Region    string            `json:"region,omitempty"`
-	Tags      map[string]string `json:"tags,omitempty"`
-	Addresses []string          `json:"addresses,omitempty"`
-	Endpoints []string          `json:"endpoints,omitempty"`
-}
-
-// DiscoverPeersTask resolves peers from one or more sources.
-type DiscoverPeersTask struct {
-	Sources []PeerSource
-}
-
-func (t DiscoverPeersTask) TaskType() string { return TaskTypeDiscoverPeers }
-
-func (t DiscoverPeersTask) Validate() error {
-	if len(t.Sources) == 0 {
-		return fmt.Errorf("discover-peers: at least one source is required")
+	if t.ExpectedGenesisHash == "" {
+		return TaskRequest{Type: t.TaskType()}
 	}
-	for i, src := range t.Sources {
-		switch src.Type {
-		case PeerSourceEC2Tags:
-			if src.Region == "" {
-				return fmt.Errorf("discover-peers: source[%d] ec2Tags missing required field Region", i)
-			}
-			if len(src.Tags) == 0 {
-				return fmt.Errorf("discover-peers: source[%d] ec2Tags missing required field Tags", i)
-			}
-		case PeerSourceStatic:
-			if len(src.Addresses) == 0 {
-				return fmt.Errorf("discover-peers: source[%d] static missing required field Addresses", i)
-			}
-		case PeerSourceDNSEndpoints:
-			if len(src.Endpoints) == 0 {
-				return fmt.Errorf("discover-peers: source[%d] dnsEndpoints missing required field Endpoints", i)
-			}
-		default:
-			return fmt.Errorf("discover-peers: source[%d] unknown type %q", i, src.Type)
-		}
-	}
-	return nil
-}
-
-func (t DiscoverPeersTask) ToTaskRequest() TaskRequest {
-	sources := make([]interface{}, len(t.Sources))
-	for i, src := range t.Sources {
-		m := map[string]interface{}{"type": string(src.Type)}
-		switch src.Type {
-		case PeerSourceEC2Tags:
-			m["region"] = src.Region
-			tags := make(map[string]interface{}, len(src.Tags))
-			for k, v := range src.Tags {
-				tags[k] = v
-			}
-			m["tags"] = tags
-		case PeerSourceStatic:
-			addrs := make([]interface{}, len(src.Addresses))
-			for j, a := range src.Addresses {
-				addrs[j] = a
-			}
-			m["addresses"] = addrs
-		case PeerSourceDNSEndpoints:
-			eps := make([]interface{}, len(src.Endpoints))
-			for j, e := range src.Endpoints {
-				eps[j] = e
-			}
-			m["endpoints"] = eps
-		}
-		sources[i] = m
-	}
-	p := map[string]interface{}{"sources": sources}
-	req := TaskRequest{Type: t.TaskType(), Params: &p}
-	return req
-}
-
-// DiscoverPeersTaskFromParams reconstructs a DiscoverPeersTask from
-// a generic params map.
-func DiscoverPeersTaskFromParams(params map[string]interface{}) (DiscoverPeersTask, error) {
-	rawSources, ok := params["sources"]
-	if !ok {
-		return DiscoverPeersTask{}, fmt.Errorf("missing 'sources' key")
-	}
-	items, ok := rawSources.([]interface{})
-	if !ok {
-		return DiscoverPeersTask{}, fmt.Errorf("sources is not a list")
-	}
-
-	var sources []PeerSource
-	for i, item := range items {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			return DiscoverPeersTask{}, fmt.Errorf("source[%d] is not an object", i)
-		}
-		typ, _ := m["type"].(string)
-		src := PeerSource{Type: PeerSourceType(typ)}
-
-		switch PeerSourceType(typ) {
-		case PeerSourceEC2Tags:
-			src.Region, _ = m["region"].(string)
-			if rawTags, ok := m["tags"].(map[string]interface{}); ok {
-				src.Tags = make(map[string]string, len(rawTags))
-				for k, v := range rawTags {
-					src.Tags[k], _ = v.(string)
-				}
-			}
-		case PeerSourceStatic:
-			if rawAddrs, ok := m["addresses"].([]interface{}); ok {
-				src.Addresses = make([]string, 0, len(rawAddrs))
-				for _, a := range rawAddrs {
-					if s, ok := a.(string); ok {
-						src.Addresses = append(src.Addresses, s)
-					}
-				}
-			}
-		case PeerSourceDNSEndpoints:
-			if rawEps, ok := m["endpoints"].([]interface{}); ok {
-				src.Endpoints = make([]string, 0, len(rawEps))
-				for _, e := range rawEps {
-					if s, ok := e.(string); ok {
-						src.Endpoints = append(src.Endpoints, s)
-					}
-				}
-			}
-		default:
-			return DiscoverPeersTask{}, fmt.Errorf("source[%d] unknown type %q", i, typ)
-		}
-		sources = append(sources, src)
-	}
-	return DiscoverPeersTask{Sources: sources}, nil
+	p := map[string]interface{}{"expectedGenesisHash": t.ExpectedGenesisHash}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
 
 // ConfigPatchTask applies generic TOML merge-patches to seid config files.
@@ -317,6 +162,7 @@ type ConfigureStateSyncTask struct {
 	UseLocalSnapshot bool
 	TrustPeriod      string
 	BackfillBlocks   int64
+	RpcServers       []string
 }
 
 func (t ConfigureStateSyncTask) TaskType() string { return TaskTypeConfigureStateSync }
@@ -332,6 +178,9 @@ func (t ConfigureStateSyncTask) ToTaskRequest() TaskRequest {
 	}
 	if t.BackfillBlocks > 0 {
 		p["backfillBlocks"] = t.BackfillBlocks
+	}
+	if len(t.RpcServers) > 0 {
+		p["rpcServers"] = t.RpcServers
 	}
 	var req TaskRequest
 	if len(p) == 0 {
@@ -349,6 +198,19 @@ func (t MarkReadyTask) TaskType() string { return TaskTypeMarkReady }
 func (t MarkReadyTask) Validate() error  { return nil }
 
 func (t MarkReadyTask) ToTaskRequest() TaskRequest {
+	req := TaskRequest{Type: t.TaskType()}
+	return req
+}
+
+// RestartSeidTask restarts the co-located seid process in place so it
+// re-reads config.toml without bouncing the sidecar. The task completes
+// once seid's local RPC is serving again.
+type RestartSeidTask struct{}
+
+func (t RestartSeidTask) TaskType() string { return TaskTypeRestartSeid }
+func (t RestartSeidTask) Validate() error  { return nil }
+
+func (t RestartSeidTask) ToTaskRequest() TaskRequest {
 	req := TaskRequest{Type: t.TaskType()}
 	return req
 }
@@ -400,32 +262,6 @@ func (t ConfigApplyTask) ToTaskRequest() TaskRequest {
 	return req
 }
 
-// ConfigApplyTaskFromParams reconstructs a ConfigApplyTask from a generic
-// params map.
-func ConfigApplyTaskFromParams(params map[string]interface{}) ConfigApplyTask {
-	s := func(k string) string { v, _ := params[k].(string); return v }
-	inc, _ := params["incremental"].(bool)
-	tv := 0
-	if raw, ok := params["targetVersion"].(float64); ok {
-		tv = int(raw)
-	}
-	var overrides map[string]string
-	if raw, ok := params["overrides"].(map[string]interface{}); ok {
-		overrides = make(map[string]string, len(raw))
-		for k, v := range raw {
-			overrides[k], _ = v.(string)
-		}
-	}
-	return ConfigApplyTask{
-		Intent: seiconfig.ConfigIntent{
-			Mode:          seiconfig.NodeMode(s("mode")),
-			Overrides:     overrides,
-			Incremental:   inc,
-			TargetVersion: tv,
-		},
-	}
-}
-
 // ConfigValidateTask reads on-disk config and returns validation diagnostics.
 type ConfigValidateTask struct{}
 
@@ -460,19 +296,6 @@ func (t ConfigReloadTask) ToTaskRequest() TaskRequest {
 	p := map[string]interface{}{"fields": fields}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
-}
-
-// ConfigReloadTaskFromParams reconstructs a ConfigReloadTask from a generic
-// params map.
-func ConfigReloadTaskFromParams(params map[string]interface{}) ConfigReloadTask {
-	var fields map[string]string
-	if raw, ok := params["fields"].(map[string]interface{}); ok {
-		fields = make(map[string]string, len(raw))
-		for k, v := range raw {
-			fields[k], _ = v.(string)
-		}
-	}
-	return ConfigReloadTask{Fields: fields}
 }
 
 // ResultExportTask queries the local seid RPC for block results and uploads
@@ -513,18 +336,6 @@ func (t ResultExportTask) ToTaskRequest() TaskRequest {
 	return req
 }
 
-// ResultExportTaskFromParams reconstructs a ResultExportTask from
-// a generic params map.
-func ResultExportTaskFromParams(params map[string]interface{}) ResultExportTask {
-	s := func(k string) string { v, _ := params[k].(string); return v }
-	return ResultExportTask{
-		Bucket:       s("bucket"),
-		Prefix:       s("prefix"),
-		Region:       s("region"),
-		CanonicalRPC: s("canonicalRpc"),
-	}
-}
-
 // GenerateIdentityTask creates validator identity (keys, node ID).
 type GenerateIdentityTask struct {
 	ChainID string
@@ -559,7 +370,6 @@ type GenerateGentxTask struct {
 	ChainID        string
 	StakingAmount  string
 	AccountBalance string
-	GenesisParams  string
 }
 
 func (t GenerateGentxTask) TaskType() string { return TaskTypeGenerateGentx }
@@ -582,9 +392,6 @@ func (t GenerateGentxTask) ToTaskRequest() TaskRequest {
 		"chainId":        t.ChainID,
 		"stakingAmount":  t.StakingAmount,
 		"accountBalance": t.AccountBalance,
-	}
-	if t.GenesisParams != "" {
-		p["genesisParams"] = t.GenesisParams
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
@@ -654,11 +461,24 @@ func validateGenesisAccounts(prefix string, accounts []GenesisAccountEntry) erro
 
 // AssembleAndUploadGenesisTask collects per-node artifacts and produces final genesis.json.
 // S3 coordinates are derived by the sidecar from its environment.
+//
+// Overrides is a flat map of dotted-path keys into genesis.app_state to raw
+// JSON values, applied to the assembled genesis after collect-gentxs runs.
+// The controller validates keys (immutability post-bootstrap) via CEL; the
+// sidecar applies them verbatim and fails loudly on bad paths.
+//
+// RESULT: this task produces the assembled genesis.json's bare SHA-256 hex
+// digest (the value the controller writes to status.genesisHash and plumbs
+// into followers' ConfigureGenesisTask.ExpectedGenesisHash). The digest is
+// returned in-band on the task result as {"genesisHash":"<bare-hex>"}, which
+// the controller reads over the trusted GET /v0/tasks/{id} channel. It is
+// never written to S3, where the prefix is attacker-writable.
 type AssembleAndUploadGenesisTask struct {
 	AccountBalance string
 	Namespace      string
 	Nodes          []GenesisNodeParam
 	Accounts       []GenesisAccountEntry
+	Overrides      map[string]json.RawMessage
 }
 
 func (t AssembleAndUploadGenesisTask) TaskType() string { return TaskTypeAssembleGenesis }
@@ -688,6 +508,13 @@ func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
 	}
 	if accounts := genesisAccountsToWire(t.Accounts); accounts != nil {
 		p["accounts"] = accounts
+	}
+	if len(t.Overrides) > 0 {
+		overrides := make(map[string]interface{}, len(t.Overrides))
+		for k, v := range t.Overrides {
+			overrides[k] = v
+		}
+		p["overrides"] = overrides
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
@@ -852,6 +679,106 @@ func (t GovSoftwareUpgradeTask) ToTaskRequest() TaskRequest {
 	}
 	if t.UpgradeInfo != "" {
 		p["upgradeInfo"] = t.UpgradeInfo
+	}
+	if t.Memo != "" {
+		p["memo"] = t.Memo
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// ParamChangeInput is one (subspace, key, value) entry of a
+// ParameterChangeProposal. Value is raw JSON of whatever shape the
+// param's registered type expects — a scalar (100), a string
+// ("86400000000000"), a bool, or an object. It is carried as
+// json.RawMessage and stringified exactly ONCE in the handler
+// (gov_param_change.go); a pre-escaped string would double-encode and
+// fail at apply time. Integer-valued params must be JSON strings (e.g.
+// "100"), not bare numbers — the sidecar decode is float64-based and
+// loses precision above 2^53 (Sei large-integer params are string-encoded
+// by convention).
+type ParamChangeInput struct {
+	Subspace string          `json:"subspace"`
+	Key      string          `json:"key"`
+	Value    json.RawMessage `json:"value"`
+}
+
+// GovParamChangeTask submits a gov v1beta1 ParameterChangeProposal. The
+// chain auto-assigns proposalID; it is not returned via the task result
+// (operators correlate via the memo's taskID= tag).
+//
+// REHYDRATION WARNING: MsgSubmitProposal is NOT chain-idempotent, and —
+// unlike a software upgrade, which the upgrade module applies once at a
+// named height — a param-change has no "applies once" safety net: a
+// rehydration double-submit produces two real proposals and two
+// deposits. See the handler doc in sidecar/tasks/gov_param_change.go
+// and #174.
+type GovParamChangeTask struct {
+	ChainID string
+	KeyName string
+
+	Title       string
+	Description string
+
+	Changes []ParamChangeInput
+
+	InitialDeposit string
+
+	Memo string
+	Fees string
+	Gas  uint64
+}
+
+func (t GovParamChangeTask) TaskType() string { return TaskTypeGovParamChange }
+
+func (t GovParamChangeTask) Validate() error {
+	if t.ChainID == "" {
+		return errors.New("gov-param-change: chainId required")
+	}
+	if t.KeyName == "" {
+		return errors.New("gov-param-change: keyName required")
+	}
+	if t.Title == "" {
+		return errors.New("gov-param-change: title required")
+	}
+	if t.Description == "" {
+		return errors.New("gov-param-change: description required")
+	}
+	if len(t.Changes) == 0 {
+		return errors.New("gov-param-change: at least one change required")
+	}
+	for i, c := range t.Changes {
+		if c.Subspace == "" {
+			return fmt.Errorf("gov-param-change: changes[%d].subspace required", i)
+		}
+		if c.Key == "" {
+			return fmt.Errorf("gov-param-change: changes[%d].key required", i)
+		}
+		if len(c.Value) == 0 {
+			return fmt.Errorf("gov-param-change: changes[%d].value required", i)
+		}
+	}
+	if t.InitialDeposit == "" {
+		return errors.New("gov-param-change: initialDeposit required")
+	}
+	if t.Fees == "" {
+		return errors.New("gov-param-change: fees required")
+	}
+	if t.Gas == 0 {
+		return errors.New("gov-param-change: gas required (must be > 0)")
+	}
+	return nil
+}
+
+func (t GovParamChangeTask) ToTaskRequest() TaskRequest {
+	p := map[string]interface{}{
+		"chainId":        t.ChainID,
+		"keyName":        t.KeyName,
+		"title":          t.Title,
+		"description":    t.Description,
+		"changes":        t.Changes,
+		"initialDeposit": t.InitialDeposit,
+		"fees":           t.Fees,
+		"gas":            t.Gas,
 	}
 	if t.Memo != "" {
 		p["memo"] = t.Memo

@@ -70,13 +70,14 @@ func (s *SQLiteStore) Save(r *TaskResult) error {
 
 	_, err = s.db.Exec(`
 		INSERT OR REPLACE INTO task_results
-			(id, type, status, run, params, error, submitted_at, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			(id, type, status, run, params, result, error, submitted_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID,
 		r.Type,
 		string(r.Status),
 		r.Run,
 		string(params),
+		nullableRawJSON(r.Result),
 		r.Error,
 		r.SubmittedAt.UTC().Format(time.RFC3339Nano),
 		formatNullableTime(r.CompletedAt),
@@ -125,7 +126,7 @@ func (s *SQLiteStore) Close() error {
 // --- query helpers ---
 
 const selectColumns = `
-	SELECT id, type, status, run, params, error, submitted_at, completed_at
+	SELECT id, type, status, run, params, result, error, submitted_at, completed_at
 	FROM task_results`
 
 // queryMany executes a query and scans all rows into TaskResults.
@@ -157,12 +158,13 @@ func scanTaskResult(s rowScanner) (*TaskResult, error) {
 		r           TaskResult
 		status      string
 		paramsJSON  string
+		resultJSON  sql.NullString
 		submittedAt string
 		completedAt sql.NullString
 	)
 
 	if err := s.Scan(
-		&r.ID, &r.Type, &status, &r.Run, &paramsJSON,
+		&r.ID, &r.Type, &status, &r.Run, &paramsJSON, &resultJSON,
 		&r.Error, &submittedAt, &completedAt,
 	); err != nil {
 		return nil, err
@@ -174,6 +176,10 @@ func scanTaskResult(s rowScanner) (*TaskResult, error) {
 		if err := json.Unmarshal([]byte(paramsJSON), &r.Params); err != nil {
 			return nil, fmt.Errorf("unmarshal params: %w", err)
 		}
+	}
+
+	if resultJSON.Valid && resultJSON.String != "" {
+		r.Result = json.RawMessage(resultJSON.String)
 	}
 
 	t, err := time.Parse(time.RFC3339Nano, submittedAt)
@@ -198,4 +204,13 @@ func formatNullableTime(t *time.Time) any {
 		return nil
 	}
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// nullableRawJSON binds a result payload as SQL NULL when empty so the
+// common no-result case stores NULL rather than an empty string.
+func nullableRawJSON(r json.RawMessage) any {
+	if len(r) == 0 {
+		return nil
+	}
+	return string(r)
 }

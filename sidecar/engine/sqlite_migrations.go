@@ -90,5 +90,29 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	if version < 4 {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		// result holds a handler's structured output as raw JSON; NULL
+		// for the common case of a handler that emits no result.
+		if _, err := tx.Exec(`
+			ALTER TABLE task_results ADD COLUMN result TEXT;
+		`); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 4"); err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

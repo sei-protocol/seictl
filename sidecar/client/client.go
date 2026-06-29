@@ -261,13 +261,6 @@ func (c *SidecarClient) SubmitConfigureGenesisTask(ctx context.Context, task Con
 	return c.SubmitTask(ctx, task.ToTaskRequest())
 }
 
-func (c *SidecarClient) SubmitDiscoverPeersTask(ctx context.Context, task DiscoverPeersTask) (uuid.UUID, error) {
-	if err := task.Validate(); err != nil {
-		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
-	}
-	return c.SubmitTask(ctx, task.ToTaskRequest())
-}
-
 func (c *SidecarClient) SubmitConfigPatchTask(ctx context.Context, task ConfigPatchTask) (uuid.UUID, error) {
 	if err := task.Validate(); err != nil {
 		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
@@ -297,6 +290,13 @@ func (c *SidecarClient) SubmitConfigReloadTask(ctx context.Context, task ConfigR
 }
 
 func (c *SidecarClient) SubmitMarkReadyTask(ctx context.Context, task MarkReadyTask) (uuid.UUID, error) {
+	if err := task.Validate(); err != nil {
+		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
+	}
+	return c.SubmitTask(ctx, task.ToTaskRequest())
+}
+
+func (c *SidecarClient) SubmitRestartSeidTask(ctx context.Context, task RestartSeidTask) (uuid.UUID, error) {
 	if err := task.Validate(); err != nil {
 		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
 	}

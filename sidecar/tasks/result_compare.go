@@ -1,15 +1,11 @@
 package tasks
 
 import (
-	"compress/gzip"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	"github.com/ethereum/go-ethereum/ethclient"
 
 	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
 	"github.com/sei-protocol/seictl/sidecar/shadow"
@@ -19,6 +15,12 @@ const (
 	comparePollInterval = 5 * time.Second
 	comparePageSize     = 100
 )
+
+// Guard the external contract Comparator.Close relies on: *ethclient.Client must
+// expose a no-return Close(). If a go-ethereum upgrade changed it to Close()
+// error, the no-return assertion in Comparator.Close would silently skip it
+// (the leak we already fixed once) — this fails the build instead.
+var _ interface{ Close() } = (*ethclient.Client)(nil)
 
 // comparisonLoop holds the state for a running block comparison session.
 type comparisonLoop struct {
@@ -40,6 +42,7 @@ func (e *ResultExporter) ExportAndCompare(ctx context.Context, cfg ResultExportR
 	if err != nil {
 		return err
 	}
+	defer loop.comparator.Close()
 
 	exportLog.Info("starting block comparison",
 		"start-height", loop.height,
@@ -55,10 +58,41 @@ func (e *ResultExporter) newComparisonLoop(ctx context.Context, cfg ResultExport
 		return nil, fmt.Errorf("building S3 uploader: %w", err)
 	}
 
+	var compOpts []shadow.Option
+	if cfg.MigrationMode {
+		compOpts = append(compOpts, shadow.WithMigrationMode())
+	}
+
+	// Layer 2 (logical state diff) is enabled when both EVM JSON-RPC endpoints
+	// are configured. Touched keys come from a prestate trace on TraceRPC
+	// (defaults to the canonical endpoint).
+	if cfg.ShadowEVMRPC != "" && cfg.CanonicalEVMRPC != "" {
+		shadowState, err := ethclient.Dial(cfg.ShadowEVMRPC)
+		if err != nil {
+			return nil, fmt.Errorf("dialing shadow EVM RPC: %w", err)
+		}
+		canonicalState, err := ethclient.Dial(cfg.CanonicalEVMRPC)
+		if err != nil {
+			shadowState.Close()
+			return nil, fmt.Errorf("dialing canonical EVM RPC: %w", err)
+		}
+		traceRPC := cfg.TraceRPC
+		if traceRPC == "" {
+			traceRPC = cfg.CanonicalEVMRPC
+		}
+		keySource, err := shadow.NewTraceKeySource(traceRPC)
+		if err != nil {
+			shadowState.Close()
+			canonicalState.Close()
+			return nil, fmt.Errorf("building trace key source: %w", err)
+		}
+		compOpts = append(compOpts, shadow.WithLayer2(shadowState, canonicalState, keySource))
+	}
+
 	last := e.readExportState()
 	return &comparisonLoop{
 		exporter:     e,
-		comparator:   shadow.NewComparator(cfg.RPCEndpoint, cfg.CanonicalRPC),
+		comparator:   shadow.NewComparator(cfg.RPCEndpoint, cfg.CanonicalRPC, compOpts...),
 		uploader:     uploader,
 		cfg:          cfg,
 		prefix:       normalizePrefix(cfg.Prefix),
@@ -169,7 +203,8 @@ func (l *comparisonLoop) uploadDivergenceReport(ctx context.Context, result shad
 	}
 
 	key := fmt.Sprintf("%sdivergence-%d.report.json.gz", l.prefix, l.height)
-	return uploadGzipJSON(ctx, l.uploader, l.cfg.Bucket, key, report)
+	_, err = seis3.StreamGzipJSON(ctx, l.uploader, l.cfg.Bucket, key, report)
+	return err
 }
 
 func (l *comparisonLoop) flushPageIfFull(ctx context.Context) error {
@@ -206,106 +241,8 @@ func flushComparePage(ctx context.Context, uploader seis3.Uploader, bucket, pref
 	key := fmt.Sprintf("%s%d-%d.compare.ndjson.gz", prefix, start, end)
 
 	exportLog.Info("flushing comparison page", "key", key, "blocks", len(results))
-	return streamGzipNDJSON(ctx, uploader, bucket, key, results)
-}
-
-func streamGzipNDJSON(ctx context.Context, uploader seis3.Uploader, bucket, key string, results []shadow.CompareResult) error {
-	pr, pw := io.Pipe()
-
-	writeErr := make(chan error, 1)
-	go func() {
-		writeErr <- writeGzipNDJSON(results, pw)
-	}()
-
-	_, uploadErr := uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket:      aws.String(bucket),
-		Key:         aws.String(key),
-		Body:        pr,
-		ContentType: aws.String("application/gzip"),
-	})
-	if uploadErr != nil {
-		pr.CloseWithError(uploadErr)
-	}
-
-	wErr := <-writeErr
-	if uploadErr != nil {
-		return uploadErr
-	}
-	return wErr
-}
-
-func writeGzipNDJSON(results []shadow.CompareResult, wc io.WriteCloser) (retErr error) {
-	defer func() {
-		if retErr != nil {
-			wc.(*io.PipeWriter).CloseWithError(retErr)
-		} else {
-			_ = wc.Close()
-		}
-	}()
-
-	gw := gzip.NewWriter(wc)
-	defer func() {
-		if err := gw.Close(); err != nil && retErr == nil {
-			retErr = fmt.Errorf("closing gzip writer: %w", err)
-		}
-	}()
-
-	for _, r := range results {
-		line, err := json.Marshal(r)
-		if err != nil {
-			return fmt.Errorf("marshaling comparison at height %d: %w", r.Height, err)
-		}
-		if _, err := gw.Write(append(line, '\n')); err != nil {
-			return fmt.Errorf("writing comparison at height %d: %w", r.Height, err)
-		}
-	}
-	return nil
-}
-
-func uploadGzipJSON(ctx context.Context, uploader seis3.Uploader, bucket, key string, v any) error {
-	pr, pw := io.Pipe()
-
-	writeErr := make(chan error, 1)
-	go func() {
-		writeErr <- writeGzipSingleJSON(v, pw)
-	}()
-
-	_, uploadErr := uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket:      aws.String(bucket),
-		Key:         aws.String(key),
-		Body:        pr,
-		ContentType: aws.String("application/gzip"),
-	})
-	if uploadErr != nil {
-		pr.CloseWithError(uploadErr)
-	}
-
-	wErr := <-writeErr
-	if uploadErr != nil {
-		return uploadErr
-	}
-	return wErr
-}
-
-func writeGzipSingleJSON(v any, wc io.WriteCloser) (retErr error) {
-	defer func() {
-		if retErr != nil {
-			wc.(*io.PipeWriter).CloseWithError(retErr)
-		} else {
-			_ = wc.Close()
-		}
-	}()
-
-	gw := gzip.NewWriter(wc)
-	defer func() {
-		if err := gw.Close(); err != nil && retErr == nil {
-			retErr = fmt.Errorf("closing gzip writer: %w", err)
-		}
-	}()
-
-	enc := json.NewEncoder(gw)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
+	_, err := seis3.StreamGzipNDJSON(ctx, uploader, bucket, key, results)
+	return err
 }
 
 func sleep(ctx context.Context, d time.Duration) error {

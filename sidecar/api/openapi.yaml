@@ -234,6 +234,14 @@ components:
         params:
           type: object
           additionalProperties: true
+        result:
+          type: object
+          additionalProperties: true
+          description: |
+            Handler's structured result, present only when the task
+            succeeded and emitted one (e.g. assemble-and-upload-genesis
+            returns {"genesisHash":"<bare-hex>"}). Delivered over this
+            trusted channel rather than via shared storage.
         error:
           type: string
           description: Error message if the task failed.

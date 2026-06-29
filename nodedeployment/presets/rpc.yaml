@@ -1,9 +1,0 @@
-apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
-spec:
-  replicas: 2
-  template:
-    spec:
-      fullNode: {}
-  updateStrategy:
-    type: InPlace

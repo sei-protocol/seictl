@@ -11,7 +11,7 @@ ifneq ($(VERSION_OK),ok)
 $(error version.json's .version ($(VERSION)) does not match ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$$)
 endif
 
-LDFLAGS := -X 'github.com/sei-protocol/seictl/nodedeployment.version=$(VERSION)'
+LDFLAGS := -X 'github.com/sei-protocol/seictl/internal/cliutil.Version=$(VERSION)'
 
 .PHONY: build install run test lint fmt generate clean
 

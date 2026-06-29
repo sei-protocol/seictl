@@ -106,12 +106,12 @@ var serveCmd = cli.Command{
 
 		handlers := map[engine.TaskType]engine.TaskHandler{
 			engine.TaskSnapshotRestore:          snapshotRestorer.Handler(),
-			engine.TaskDiscoverPeers:            tasks.NewPeerDiscoverer(homeDir, nil, nil).Handler(),
 			engine.TaskConfigPatch:              tasks.NewConfigPatcher(homeDir).Handler(),
 			engine.TaskConfigApply:              tasks.NewConfigApplier(homeDir).Handler(),
 			engine.TaskConfigValidate:           tasks.NewConfigValidator(homeDir).Handler(),
 			engine.TaskConfigReload:             tasks.NewConfigReloader(homeDir).Handler(),
 			engine.TaskMarkReady:                tasks.MarkReadyHandler(),
+			engine.TaskRestartSeid:              tasks.NewRestartSeider().Handler(),
 			engine.TaskConfigureGenesis:         tasks.NewGenesisFetcher(homeDir, chainID, genesisBucket, genesisRegion, nil).Handler(),
 			engine.TaskConfigureStateSync:       tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
 			engine.TaskSnapshotUpload:           snapshotUploader.Handler(),
@@ -124,6 +124,8 @@ var serveCmd = cli.Command{
 			engine.TaskSetGenesisPeers:          tasks.NewGenesisPeersSetter(homeDir, genesisBucket, genesisRegion, chainID, nil).Handler(),
 			engine.TaskGovVote:                  tasks.NewGovVoter(execCfg).Handler(),
 			engine.TaskGovSoftwareUpgrade:       tasks.NewGovSoftwareUpgrader(execCfg).Handler(),
+			engine.TaskGovParamChange:           tasks.NewGovParamChanger(execCfg).Handler(),
+			engine.TaskEvmLogicalDigest:         tasks.NewEvmLogicalDigester(nil).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)

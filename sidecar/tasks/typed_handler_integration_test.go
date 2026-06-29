@@ -30,36 +30,6 @@ func TestDeserialize_SnapshotRestore(t *testing.T) {
 	}
 }
 
-// TestDeserialize_DiscoverPeers verifies that the discover-peers handler
-// correctly deserializes nested sources arrays from the wire format.
-func TestDeserialize_DiscoverPeers(t *testing.T) {
-	homeDir := t.TempDir()
-	ensureConfigDir(t, homeDir)
-
-	discoverer := NewPeerDiscoverer(homeDir, nil, nil)
-	handler := discoverer.Handler()
-
-	params := map[string]any{
-		"sources": []any{
-			map[string]any{
-				"type":      "static",
-				"addresses": []any{"abc@1.2.3.4:26656"},
-			},
-		},
-	}
-
-	err := handler(context.Background(), params)
-	if err != nil {
-		t.Fatalf("discover-peers handler returned error: %v", err)
-	}
-
-	// Verify the peers were written to config.
-	got := readPeersFromConfigTOML(t, homeDir)
-	if got != "abc@1.2.3.4:26656" {
-		t.Errorf("peers = %q, want %q", got, "abc@1.2.3.4:26656")
-	}
-}
-
 // TestDeserialize_ConfigPatch verifies that the config-patch handler
 // correctly deserializes nested map[string]map[string]any from the wire format.
 func TestDeserialize_ConfigPatch(t *testing.T) {

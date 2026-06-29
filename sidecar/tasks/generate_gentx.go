@@ -51,7 +51,6 @@ type GenerateGentxRequest struct {
 	ChainID        string `json:"chainId"`
 	StakingAmount  string `json:"stakingAmount"`
 	AccountBalance string `json:"accountBalance"`
-	GenesisParams  string `json:"genesisParams"`
 }
 
 // GentxGenerator produces a genesis transaction by calling the same SDK
@@ -72,8 +71,7 @@ func NewGentxGenerator(homeDir string) *GentxGenerator {
 //	{
 //	  "chainId":        "my-chain",
 //	  "stakingAmount":  "1000000usei",
-//	  "accountBalance": "10000000usei",
-//	  "genesisParams":  "" (optional, reserved for future genesis customization)
+//	  "accountBalance": "10000000usei"
 //	}
 func (g *GentxGenerator) Handler() engine.TaskHandler {
 	return engine.TypedHandler(func(ctx context.Context, params GenerateGentxRequest) error {

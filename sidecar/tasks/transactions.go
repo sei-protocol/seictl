@@ -20,6 +20,7 @@ import (
 	authtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/types"
 	banktypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/bank/types"
 	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
+	proposal "github.com/sei-protocol/sei-chain/sei-cosmos/x/params/types/proposal"
 	stakingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/staking/types"
 	upgradetypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/upgrade/types"
 
@@ -156,6 +157,9 @@ func newSignTxInterfaceRegistry() codectypes.InterfaceRegistry {
 	stakingtypes.RegisterInterfaces(registry)
 	govtypes.RegisterInterfaces(registry)
 	upgradetypes.RegisterInterfaces(registry)
+	// x/params ParameterChangeProposal as a gov Content impl (gov-param-change
+	// task). proposal does not pull x/wasm, so CGO_ENABLED=0 builds stay clean.
+	proposal.RegisterInterfaces(registry)
 	return registry
 }
 

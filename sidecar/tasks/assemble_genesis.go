@@ -3,6 +3,8 @@ package tasks
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,13 +58,30 @@ type GenesisAccountEntry struct {
 	Balance string `json:"balance"`
 }
 
+// AssembleGenesisResult is the task's structured result, emitted in-band over
+// the trusted controller↔sidecar task-result channel. GenesisHash is the bare
+// SHA-256 hex digest (no "sha256:" prefix) of the exact uploaded genesis.json
+// bytes; the controller stamps status.genesisHash from it and plumbs it into
+// followers' ConfigureGenesisTask.ExpectedGenesisHash.
+type AssembleGenesisResult struct {
+	GenesisHash string `json:"genesisHash"`
+}
+
 // AssembleGenesisRequest holds the typed parameters for the assemble-and-upload-genesis task.
 // S3 bucket, region, and prefix are derived from the sidecar's environment.
+//
+// Overrides is a flat map of dotted-path keys into genesis.app_state to
+// raw JSON values. The first dotted token is the cosmos module name (a key
+// in app_state); subsequent tokens walk into that module's JSON tree. The
+// leaf value is replaced verbatim with the supplied json.RawMessage. The
+// controller enforces immutability of these keys post-bootstrap via CEL;
+// the sidecar applies them once during the genesis ceremony.
 type AssembleGenesisRequest struct {
-	AccountBalance string                `json:"accountBalance"`
-	Namespace      string                `json:"namespace"`
-	Nodes          []AssembleNodeEntry   `json:"nodes"`
-	Accounts       []GenesisAccountEntry `json:"accounts,omitempty"`
+	AccountBalance string                     `json:"accountBalance"`
+	Namespace      string                     `json:"namespace"`
+	Nodes          []AssembleNodeEntry        `json:"nodes"`
+	Accounts       []GenesisAccountEntry      `json:"accounts,omitempty"`
+	Overrides      map[string]json.RawMessage `json:"overrides,omitempty"`
 }
 
 // nodeNames returns the list of node name strings from the Nodes entries.
@@ -134,7 +153,12 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return err
 		}
 
-		if err := a.uploadGenesis(ctx, cfg); err != nil {
+		if err := a.applyOverrides(cfg.Overrides); err != nil {
+			return err
+		}
+
+		genesisHash, err := a.uploadGenesis(ctx, cfg)
+		if err != nil {
 			return err
 		}
 
@@ -142,7 +166,15 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return err
 		}
 
-		assembleLog.Info("genesis assembled and uploaded", "nodes", len(nodes))
+		// Hand the hash to the controller over the trusted task-result
+		// channel (GET /v0/tasks/{id}); never via shared S3.
+		result, err := json.Marshal(AssembleGenesisResult{GenesisHash: genesisHash})
+		if err != nil {
+			return fmt.Errorf("assemble-genesis: marshaling result: %w", err)
+		}
+		engine.SetTaskResult(ctx, result)
+
+		assembleLog.Info("genesis assembled and uploaded", "nodes", len(nodes), "genesisHash", genesisHash)
 		return writeMarker(a.homeDir, assembleMarkerFile)
 	})
 }
@@ -380,22 +412,71 @@ func (a *GenesisAssembler) collectGentxs() error {
 	return nil
 }
 
+// applyOverrides re-reads the assembled genesis.json, applies the
+// caller-supplied app_state overrides, and writes the file back. This runs
+// after collectGentxs so the dispatched MsgCreateValidator data and
+// derived persistent peers are already baked into app_state — overrides
+// are an in-place patch on the final assembled doc.
+func (a *GenesisAssembler) applyOverrides(overrides map[string]json.RawMessage) error {
+	if len(overrides) == 0 {
+		return nil
+	}
+
+	genFile := filepath.Join(a.homeDir, "config", "genesis.json")
+	genDoc, err := tmtypes.GenesisDocFromFile(genFile)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: reading genesis for overrides: %w", err)
+	}
+
+	var appState map[string]json.RawMessage
+	if err := json.Unmarshal(genDoc.AppState, &appState); err != nil {
+		return fmt.Errorf("assemble-genesis: parsing app_state for overrides: %w", err)
+	}
+
+	if err := applyGenesisOverrides(appState, overrides); err != nil {
+		return fmt.Errorf("assemble-genesis: %w", err)
+	}
+
+	appStateJSON, err := json.Marshal(appState)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: marshaling overridden app_state: %w", err)
+	}
+	genDoc.AppState = appStateJSON
+
+	if err := genutil.ExportGenesisFile(genDoc, genFile); err != nil {
+		return fmt.Errorf("assemble-genesis: writing genesis after overrides: %w", err)
+	}
+
+	assembleLog.Info("applied genesis overrides", "count", len(overrides))
+	return nil
+}
+
 // uploadGenesis reads the assembled genesis.json and uploads it to S3
-// at <prefix>/genesis.json where all validators will fetch it from.
-func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg AssembleGenesisRequest) error {
+// at <prefix>/genesis.json where all validators will fetch it from. It
+// returns the bare SHA-256 hex digest (no "sha256:" prefix) computed over the
+// exact bytes uploaded — the same []byte handed to PutObject, not a re-read or
+// re-serialized form — so the digest matches what a follower will download and
+// verify. The digest travels to the controller only in-band, over the trusted
+// task-result channel; it is never written to S3, where the prefix is
+// attacker-writable and a sibling hash would let a poisoned genesis carry its
+// own matching digest.
+func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg AssembleGenesisRequest) (string, error) {
 	genesisPath := filepath.Join(a.homeDir, "config", "genesis.json")
 	data, err := os.ReadFile(genesisPath)
 	if err != nil {
-		return fmt.Errorf("assemble-genesis: reading genesis.json: %w", err)
+		return "", fmt.Errorf("assemble-genesis: reading genesis.json: %w", err)
 	}
+
+	sum := sha256.Sum256(data)
+	genesisHash := hex.EncodeToString(sum[:])
 
 	uploader, err := a.s3UploaderFactory(ctx, a.region)
 	if err != nil {
-		return fmt.Errorf("assemble-genesis: building S3 uploader: %w", err)
+		return "", fmt.Errorf("assemble-genesis: building S3 uploader: %w", err)
 	}
 
 	key := a.chainID + "/" + "genesis.json"
-	assembleLog.Info("uploading assembled genesis", "key", key)
+	assembleLog.Info("uploading assembled genesis", "key", key, "sha256", genesisHash)
 
 	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket:      aws.String(a.bucket),
@@ -404,9 +485,10 @@ func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg AssembleGenesi
 		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
-		return seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
+		return "", seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
 	}
-	return nil
+
+	return genesisHash, nil
 }
 
 // uploadPeers builds a peers.json from each node's identity.json and uploads

@@ -33,10 +33,22 @@ var (
 		},
 		[]string{"type"},
 	)
+
+	// taskPanics counts handler panics recovered by the engine. A non-zero
+	// value means a handler crashed and was converted to a failed task rather
+	// than taking the sidecar down; it also increments taskFailures.
+	taskPanics = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "seictl_task_panics_total",
+			Help: "Total number of task handler panics recovered by the engine.",
+		},
+		[]string{"type"},
+	)
 )
 
 func init() {
 	prometheus.MustRegister(taskDuration)
 	prometheus.MustRegister(taskSubmissions)
 	prometheus.MustRegister(taskFailures)
+	prometheus.MustRegister(taskPanics)
 }

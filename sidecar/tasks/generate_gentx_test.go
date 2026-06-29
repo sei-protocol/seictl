@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -42,13 +41,4 @@ func TestGentxGenerator_NoMarkerOnFailure(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(homeDir, gentxMarkerFile)); err == nil {
 		t.Fatal("marker file should not exist after failure")
 	}
-}
-
-func contains(s []string, substr string) bool {
-	for _, v := range s {
-		if strings.Contains(v, substr) {
-			return true
-		}
-	}
-	return false
 }

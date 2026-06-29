@@ -15,7 +15,7 @@ Dual-purpose tool: CLI for Sei node operators and HTTP sidecar server for the se
 - **OpenAPI spec**: `sidecar/api/openapi.yaml` — source of truth for the sidecar HTTP contract
 - **Internal**: `internal/patch/` — TOML/JSON merge-patch logic
 
-**Engineer-harness surface**: being rebuilt around `node` / `nodedeployment` verbs with preset-driven defaults.
+**Engineer-harness surface**: two preset-driven command trees over the SeiNetwork + SeiNode CRDs — `seictl network {apply,get,list,delete,watch}` (genesis networks) and `seictl node {…}` (followers/RPC). Shared internals in `internal/cliutil` (output/errors/client/parse/watch) and `internal/seiapi` (GVK plumbing). The legacy `nodedeployment`/`nd` verb and `internal/snd` were removed in the SeiNodeDeployment clean-break (v0.1.0).
 
 ## Code Standards
 

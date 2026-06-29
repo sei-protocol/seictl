@@ -27,41 +27,6 @@ func genConfigureGenesisTask() gopter.Gen {
 	return gen.Const(ConfigureGenesisTask{})
 }
 
-func genEC2TagsSource() gopter.Gen {
-	return gopter.CombineGens(
-		genNonEmptyString(),
-		genNonEmptyString(),
-		genNonEmptyString(),
-	).Map(func(v []interface{}) PeerSource {
-		return PeerSource{
-			Type:   PeerSourceEC2Tags,
-			Region: v[0].(string),
-			Tags:   map[string]string{v[1].(string): v[2].(string)},
-		}
-	})
-}
-
-func genStaticSource() gopter.Gen {
-	return genNonEmptyString().Map(func(v string) PeerSource {
-		return PeerSource{
-			Type:      PeerSourceStatic,
-			Addresses: []string{v},
-		}
-	})
-}
-
-func genPeerSource() gopter.Gen {
-	return gen.OneGenOf(genEC2TagsSource(), genStaticSource())
-}
-
-func genDiscoverPeersTask() gopter.Gen {
-	return gen.SliceOfN(3, genPeerSource()).SuchThat(func(v []PeerSource) bool {
-		return len(v) > 0
-	}).Map(func(v []PeerSource) DiscoverPeersTask {
-		return DiscoverPeersTask{Sources: v}
-	})
-}
-
 func genConfigPatchTask() gopter.Gen {
 	return gopter.CombineGens(
 		genNonEmptyString(),
@@ -94,7 +59,7 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 			if task.TargetHeight == 0 {
 				return req.Params == nil
 			}
-			rebuilt := SnapshotRestoreTaskFromParams(*req.Params)
+			rebuilt := snapshotRestoreTaskFromParams(*req.Params)
 			return rebuilt.TargetHeight == task.TargetHeight
 		},
 		genSnapshotRestoreTask(),
@@ -128,60 +93,6 @@ func TestConfigureGenesisRoundTrip_S3(t *testing.T) {
 			return req.Type == TaskTypeConfigureGenesis && req.Params == nil
 		},
 		genConfigureGenesisTask(),
-	))
-	properties.TestingRun(t)
-}
-
-func TestDiscoverPeersRoundTrip(t *testing.T) {
-	properties := gopter.NewProperties(gopter.DefaultTestParameters())
-	properties.Property("DiscoverPeersTask round-trips through TaskRequest", prop.ForAll(
-		func(task DiscoverPeersTask) bool {
-			if err := task.Validate(); err != nil {
-				return false
-			}
-			req := task.ToTaskRequest()
-			if req.Type != TaskTypeDiscoverPeers {
-				return false
-			}
-			rebuilt, err := DiscoverPeersTaskFromParams(*req.Params)
-			if err != nil {
-				return false
-			}
-			if len(rebuilt.Sources) != len(task.Sources) {
-				return false
-			}
-			for i, src := range task.Sources {
-				r := rebuilt.Sources[i]
-				if r.Type != src.Type {
-					return false
-				}
-				switch src.Type {
-				case PeerSourceEC2Tags:
-					if r.Region != src.Region {
-						return false
-					}
-					if len(r.Tags) != len(src.Tags) {
-						return false
-					}
-					for k, v := range src.Tags {
-						if r.Tags[k] != v {
-							return false
-						}
-					}
-				case PeerSourceStatic:
-					if len(r.Addresses) != len(src.Addresses) {
-						return false
-					}
-					for j, a := range src.Addresses {
-						if r.Addresses[j] != a {
-							return false
-						}
-					}
-				}
-			}
-			return true
-		},
-		genDiscoverPeersTask(),
 	))
 	properties.TestingRun(t)
 }
@@ -226,6 +137,31 @@ func TestConfigureStateSyncRoundTrip(t *testing.T) {
 	}
 	if req.Params != nil {
 		t.Errorf("Params = %v, want nil", req.Params)
+	}
+}
+
+// Wire contract the controller depends on: RpcServers must surface verbatim
+// under the "rpcServers" params key the sidecar handler reads.
+func TestConfigureStateSyncRpcServersWire(t *testing.T) {
+	witnesses := []string{
+		"syncer-0-0-0.syncer-0-0.arctic-1.svc.cluster.local:26657",
+		"syncer-0-1-0.syncer-0-1.arctic-1.svc.cluster.local:26657",
+	}
+	req := ConfigureStateSyncTask{RpcServers: witnesses}.ToTaskRequest()
+	if req.Params == nil {
+		t.Fatal("Params = nil, want rpcServers populated")
+	}
+	got, ok := (*req.Params)["rpcServers"].([]string)
+	if !ok {
+		t.Fatalf("params[rpcServers] = %T, want []string", (*req.Params)["rpcServers"])
+	}
+	if len(got) != len(witnesses) {
+		t.Fatalf("rpcServers = %v, want %v", got, witnesses)
+	}
+	for i := range witnesses {
+		if got[i] != witnesses[i] {
+			t.Errorf("rpcServers[%d] = %q, want %q", i, got[i], witnesses[i])
+		}
 	}
 }
 
@@ -286,33 +222,6 @@ func TestConfigureGenesisValidation(t *testing.T) {
 	task := ConfigureGenesisTask{}
 	if err := task.Validate(); err != nil {
 		t.Errorf("expected no error, got %v", err)
-	}
-}
-
-func TestDiscoverPeersValidation(t *testing.T) {
-	cases := []struct {
-		name string
-		task DiscoverPeersTask
-		ok   bool
-	}{
-		{"empty sources", DiscoverPeersTask{}, false},
-		{"ec2Tags missing region", DiscoverPeersTask{Sources: []PeerSource{{Type: PeerSourceEC2Tags, Tags: map[string]string{"k": "v"}}}}, false},
-		{"ec2Tags missing tags", DiscoverPeersTask{Sources: []PeerSource{{Type: PeerSourceEC2Tags, Region: "us-east-1"}}}, false},
-		{"static missing addresses", DiscoverPeersTask{Sources: []PeerSource{{Type: PeerSourceStatic}}}, false},
-		{"unknown type", DiscoverPeersTask{Sources: []PeerSource{{Type: "unknown"}}}, false},
-		{"valid ec2Tags", DiscoverPeersTask{Sources: []PeerSource{{Type: PeerSourceEC2Tags, Region: "us-east-1", Tags: map[string]string{"k": "v"}}}}, true},
-		{"valid static", DiscoverPeersTask{Sources: []PeerSource{{Type: PeerSourceStatic, Addresses: []string{"addr1"}}}}, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.task.Validate()
-			if tc.ok && err != nil {
-				t.Errorf("expected no error, got %v", err)
-			}
-			if !tc.ok && err == nil {
-				t.Error("expected validation error, got nil")
-			}
-		})
 	}
 }
 
@@ -421,7 +330,6 @@ func TestTaskRequestJSONRoundTrip(t *testing.T) {
 		},
 		gen.OneConstOf(
 			TaskTypeSnapshotRestore,
-			TaskTypeDiscoverPeers,
 			TaskTypeConfigPatch,
 			TaskTypeMarkReady,
 			TaskTypeConfigureGenesis,
@@ -444,7 +352,7 @@ func TestResultExportRoundTrip(t *testing.T) {
 			if req.Type != TaskTypeResultExport {
 				return false
 			}
-			rebuilt := ResultExportTaskFromParams(*req.Params)
+			rebuilt := resultExportTaskFromParams(*req.Params)
 			return rebuilt.Bucket == task.Bucket &&
 				rebuilt.Region == task.Region
 		},
@@ -491,7 +399,7 @@ func TestResultExportTask_WithCanonicalRPC(t *testing.T) {
 		t.Errorf("canonicalRpc = %v, want %q", p["canonicalRpc"], "http://canonical-rpc:26657")
 	}
 
-	rebuilt := ResultExportTaskFromParams(p)
+	rebuilt := resultExportTaskFromParams(p)
 	if rebuilt.CanonicalRPC != task.CanonicalRPC {
 		t.Errorf("round-trip CanonicalRPC = %q, want %q", rebuilt.CanonicalRPC, task.CanonicalRPC)
 	}
@@ -599,5 +507,30 @@ func TestAwaitConditionJSONRoundTrip(t *testing.T) {
 	// JSON numbers decode as float64.
 	if p["targetHeight"] != float64(8000) {
 		t.Errorf("targetHeight = %v (type %T), want 8000", p["targetHeight"], p["targetHeight"])
+	}
+}
+
+// snapshotRestoreTaskFromParams reconstructs a SnapshotRestoreTask from
+// a generic params map. Useful for round-trip testing.
+func snapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestoreTask {
+	var t SnapshotRestoreTask
+	switch h := params["targetHeight"].(type) {
+	case float64:
+		t.TargetHeight = int64(h)
+	case int64:
+		t.TargetHeight = h
+	}
+	return t
+}
+
+// resultExportTaskFromParams reconstructs a ResultExportTask from
+// a generic params map.
+func resultExportTaskFromParams(params map[string]interface{}) ResultExportTask {
+	s := func(k string) string { v, _ := params[k].(string); return v }
+	return ResultExportTask{
+		Bucket:       s("bucket"),
+		Prefix:       s("prefix"),
+		Region:       s("region"),
+		CanonicalRPC: s("canonicalRpc"),
 	}
 }

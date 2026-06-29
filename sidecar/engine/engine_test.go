@@ -2,12 +2,15 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func newTestEngine(t *testing.T, handlers map[TaskType]TaskHandler) *Engine {
@@ -72,6 +75,81 @@ func TestSubmitAccepts(t *testing.T) {
 	}
 	if id == "" {
 		t.Fatal("expected non-empty ID")
+	}
+}
+
+func TestSubmitCapturesInBandResult(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
+			SetTaskResult(ctx, json.RawMessage(`{"genesisHash":"deadbeef"}`))
+			return nil
+		},
+	})
+
+	id, err := eng.Submit(Task{Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	result := waitForResult(t, eng, id)
+	if result.Status != TaskStatusCompleted {
+		t.Fatalf("status = %q, want completed", result.Status)
+	}
+	if string(result.Result) != `{"genesisHash":"deadbeef"}` {
+		t.Fatalf("result payload = %q, want in-band genesisHash", string(result.Result))
+	}
+}
+
+func TestSubmitNoResultPayloadIsNil(t *testing.T) {
+	// Backward-compat: a handler that emits nothing leaves Result nil and
+	// the field is omitted from the wire, so the deployed controller is
+	// unaffected.
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+	})
+
+	id, err := eng.Submit(Task{Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	result := waitForResult(t, eng, id)
+	if result.Status != TaskStatusCompleted {
+		t.Fatalf("status = %q, want completed", result.Status)
+	}
+	if result.Result != nil {
+		t.Fatalf("result payload = %q, want nil for a handler that emits nothing", string(result.Result))
+	}
+	out, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(out), `"result"`) {
+		t.Fatalf("nil result must be omitted from the wire; got %s", out)
+	}
+}
+
+func TestSubmitFailedTaskDropsResult(t *testing.T) {
+	// A partial result from a failed run must not be stamped as
+	// authoritative.
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
+			SetTaskResult(ctx, json.RawMessage(`{"genesisHash":"partial"}`))
+			return errors.New("boom")
+		},
+	})
+
+	id, err := eng.Submit(Task{Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	result := waitForResult(t, eng, id)
+	if result.Status != TaskStatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Result != nil {
+		t.Fatalf("failed task must not carry a result; got %q", string(result.Result))
 	}
 }
 
@@ -734,5 +812,33 @@ func TestTaskErrorProducesRichErrorString(t *testing.T) {
 	}
 	if !strings.Contains(r.Error, "hint:") {
 		t.Errorf("error should contain hint, got: %s", r.Error)
+	}
+}
+
+func TestSubmitHandlerPanicBecomesFailedTask(t *testing.T) {
+	before := testutil.ToFloat64(taskPanics.WithLabelValues(string(TaskConfigPatch)))
+
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+			panic("kaboom")
+		},
+	})
+
+	id, err := eng.Submit(Task{Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	r := waitForResult(t, eng, id)
+	if r.Status != TaskStatusFailed {
+		t.Fatalf("panicking handler should produce Failed, got %s", r.Status)
+	}
+	if !strings.Contains(r.Error, "panicked") || !strings.Contains(r.Error, "kaboom") {
+		t.Errorf("error should describe the panic, got: %s", r.Error)
+	}
+
+	after := testutil.ToFloat64(taskPanics.WithLabelValues(string(TaskConfigPatch)))
+	if after != before+1 {
+		t.Errorf("taskPanics delta = %v, want 1", after-before)
 	}
 }
