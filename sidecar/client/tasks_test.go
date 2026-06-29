@@ -372,6 +372,10 @@ func TestResultExportValidation(t *testing.T) {
 		{"missing bucket", ResultExportTask{Region: "r"}, false},
 		{"missing region", ResultExportTask{Bucket: "b"}, false},
 		{"all empty", ResultExportTask{}, false},
+		{"comparison fields with canonicalRpc", ResultExportTask{Bucket: "b", Region: "r", CanonicalRPC: "http://c:26657", MigrationMode: true, ContinueOnDivergence: true}, true},
+		{"continueOnDivergence without canonicalRpc", ResultExportTask{Bucket: "b", Region: "r", ContinueOnDivergence: true}, false},
+		{"migrationMode without canonicalRpc", ResultExportTask{Bucket: "b", Region: "r", MigrationMode: true}, false},
+		{"evmRpc without canonicalRpc", ResultExportTask{Bucket: "b", Region: "r", ShadowEVMRPC: "http://s:8545"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -414,6 +418,42 @@ func TestResultExportTask_WithoutCanonicalRPC_OmitsParam(t *testing.T) {
 	p := *req.Params
 	if _, ok := p["canonicalRpc"]; ok {
 		t.Errorf("expected canonicalRpc to be absent, got %v", p["canonicalRpc"])
+	}
+	// Comparison-mode keys are omitted entirely at their zero value.
+	for _, k := range []string{"migrationMode", "continueOnDivergence", "shadowEvmRpc", "canonicalEvmRpc", "traceRpc"} {
+		if _, ok := p[k]; ok {
+			t.Errorf("expected %q to be absent at zero value, got %v", k, p[k])
+		}
+	}
+}
+
+func TestResultExportTask_ComparisonTuningParams(t *testing.T) {
+	task := ResultExportTask{
+		Bucket:               "b",
+		Region:               "eu-central-1",
+		CanonicalRPC:         "http://canonical-rpc:26657",
+		MigrationMode:        true,
+		ContinueOnDivergence: true,
+		ShadowEVMRPC:         "http://shadow:8545",
+		CanonicalEVMRPC:      "http://canonical:8545",
+		TraceRPC:             "http://trace:8545",
+	}
+	p := *task.ToTaskRequest().Params
+
+	if p["migrationMode"] != true {
+		t.Errorf("migrationMode = %v, want true", p["migrationMode"])
+	}
+	if p["continueOnDivergence"] != true {
+		t.Errorf("continueOnDivergence = %v, want true", p["continueOnDivergence"])
+	}
+	if p["shadowEvmRpc"] != task.ShadowEVMRPC {
+		t.Errorf("shadowEvmRpc = %v, want %q", p["shadowEvmRpc"], task.ShadowEVMRPC)
+	}
+	if p["canonicalEvmRpc"] != task.CanonicalEVMRPC {
+		t.Errorf("canonicalEvmRpc = %v, want %q", p["canonicalEvmRpc"], task.CanonicalEVMRPC)
+	}
+	if p["traceRpc"] != task.TraceRPC {
+		t.Errorf("traceRpc = %v, want %q", p["traceRpc"], task.TraceRPC)
 	}
 }
 

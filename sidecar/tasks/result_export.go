@@ -57,7 +57,8 @@ type ResultExportRequest struct {
 	// the first divergence. Default false preserves the production tripwire. The
 	// comparator's verdict is unchanged — every field is compared authentically;
 	// this only decides whether a divergence stops the run. Classifying benign vs
-	// real divergences is the downstream `seictl report` step's job.
+	// real divergences is the downstream `seictl report` step's job. Has no
+	// effect outside comparison mode (it requires CanonicalRPC).
 	ContinueOnDivergence bool `json:"continueOnDivergence,omitempty"`
 
 	// ShadowEVMRPC and CanonicalEVMRPC are the EVM JSON-RPC endpoints for the

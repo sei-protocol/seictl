@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -13,11 +14,12 @@ import (
 // newTestComparisonLoop wires a comparison loop against two RPC servers whose
 // blocks diverge at Layer 0 (different app_hash, matching results, no per-tx
 // detail) so every compared block is a divergence, with a recording uploader.
-// continueOnDivergence selects survey mode vs the default halt-on-first.
-func newTestComparisonLoop(t *testing.T, continueOnDivergence bool) (*comparisonLoop, *recordingUploader) {
+// continueOnDivergence selects survey mode vs the default halt-on-first; latest
+// is the height the servers report via /status (drives waitForBlocks in run()).
+func newTestComparisonLoop(t *testing.T, continueOnDivergence bool, latest int64) (*comparisonLoop, *recordingUploader) {
 	t.Helper()
-	shadowSrv := fakeRPCAndBlockServer(1<<30, "SHADOW", "RES", nil)
-	canonicalSrv := fakeRPCAndBlockServer(1<<30, "CANONICAL", "RES", nil)
+	shadowSrv := fakeRPCAndBlockServer(latest, "SHADOW", "RES", nil)
+	canonicalSrv := fakeRPCAndBlockServer(latest, "CANONICAL", "RES", nil)
 	t.Cleanup(shadowSrv.Close)
 	t.Cleanup(canonicalSrv.Close)
 
@@ -50,7 +52,7 @@ func countKeys(rec *recordingUploader, substr string) int {
 // first divergent block trips the loop — it reports diverged, uploads a
 // per-block divergence report, and does not advance past the divergent height.
 func TestCompareDefaultMode_HaltsOnDivergence(t *testing.T) {
-	loop, rec := newTestComparisonLoop(t, false)
+	loop, rec := newTestComparisonLoop(t, false, 5)
 
 	diverged, err := loop.compareBlocksUpTo(context.Background(), 5)
 	if err != nil {
@@ -71,7 +73,7 @@ func TestCompareDefaultMode_HaltsOnDivergence(t *testing.T) {
 // the loop surveys every divergent block to the end of the range, advances the
 // height, and uploads NO per-block divergence report (the page is the record).
 func TestCompareSurveyMode_ContinuesPastDivergence(t *testing.T) {
-	loop, rec := newTestComparisonLoop(t, true)
+	loop, rec := newTestComparisonLoop(t, true, 5)
 
 	diverged, err := loop.compareBlocksUpTo(context.Background(), 5)
 	if err != nil {
@@ -94,7 +96,7 @@ func TestCompareSurveyMode_ContinuesPastDivergence(t *testing.T) {
 // exhausting the sidecar. Two full pages flush; the buffer holds only the
 // trailing remainder.
 func TestCompareSurveyMode_BoundsMemory(t *testing.T) {
-	loop, rec := newTestComparisonLoop(t, true)
+	loop, rec := newTestComparisonLoop(t, true, 2*comparePageSize+50)
 
 	const blocks = 2*comparePageSize + 50
 	diverged, err := loop.compareBlocksUpTo(context.Background(), blocks)
@@ -115,5 +117,52 @@ func TestCompareSurveyMode_BoundsMemory(t *testing.T) {
 	}
 	if n := countKeys(rec, ".report"); n != 0 {
 		t.Errorf("survey mode must upload no per-block divergence report, got %d", n)
+	}
+}
+
+// TestCompareSurveyMode_RunCompletesOnCancel: survey mode never returns
+// diverged=true, so run() only exits when stopped. A clean context cancellation
+// is the survey's terminus and must complete the task (return nil), not fail it.
+func TestCompareSurveyMode_RunCompletesOnCancel(t *testing.T) {
+	loop, _ := newTestComparisonLoop(t, true, 3)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- loop.run(ctx) }()
+
+	// Give the survey a moment to process the few available blocks and begin
+	// tailing, then stop it the way a sidecar shutdown would. (Reading loop
+	// state here would race run()'s goroutine; a cancel maps to a clean
+	// terminus whether the loop is tailing or mid-survey, so a brief wait is
+	// enough — the assertion is on the exit verdict, not on catch-up.)
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("survey run on clean cancel = %v, want nil (a stop is the terminus, not a failure)", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not return after context cancellation")
+	}
+}
+
+// TestCompareSurveyMode_FlushFailureFailsBounded: a persistent flush failure on
+// a never-halting survey must fail the run (so the task restarts and resumes)
+// rather than silently swallow the error and let pageBuf grow unbounded.
+func TestCompareSurveyMode_FlushFailureFailsBounded(t *testing.T) {
+	loop, _ := newTestComparisonLoop(t, true, 5*comparePageSize)
+	loop.uploader = drainingFailingUploader{err: errors.New("s3 unavailable")}
+
+	diverged, err := loop.compareBlocksUpTo(context.Background(), 5*comparePageSize)
+	if err == nil {
+		t.Fatal("a persistent flush failure must fail the run, not be swallowed")
+	}
+	if diverged {
+		t.Fatal("a flush failure is an error, not a divergence-halt")
+	}
+	if len(loop.pageBuf) > comparePageSize {
+		t.Errorf("pageBuf grew to %d past comparePageSize (%d) on flush failure — the buffer must stay bounded", len(loop.pageBuf), comparePageSize)
 	}
 }

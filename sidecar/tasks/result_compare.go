@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -35,8 +36,13 @@ type comparisonLoop struct {
 }
 
 // ExportAndCompare runs a continuous comparison between the local shadow node
-// and a canonical chain. It completes successfully when app-hash divergence is
-// detected, uploading a DivergenceReport alongside the comparison pages.
+// and a canonical chain.
+//
+// By default it completes successfully on the first divergence, uploading a
+// DivergenceReport alongside the comparison pages. In survey mode
+// (cfg.ContinueOnDivergence) a divergence never halts the run: the comparison
+// tails the chain until the context is cancelled, and a clean cancellation
+// completes the task — being stopped is the survey's terminus, not a failure.
 func (e *ResultExporter) ExportAndCompare(ctx context.Context, cfg ResultExportRequest) error {
 	loop, err := e.newComparisonLoop(ctx, cfg)
 	if err != nil {
@@ -104,22 +110,35 @@ func (e *ResultExporter) newComparisonLoop(ctx context.Context, cfg ResultExport
 func (l *comparisonLoop) run(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return l.terminus(err)
 		}
 
 		latestHeight, err := l.waitForBlocks(ctx)
 		if err != nil {
-			return err
+			return l.terminus(err)
 		}
 
 		diverged, err := l.compareBlocksUpTo(ctx, latestHeight)
 		if err != nil {
-			return err
+			return l.terminus(err)
 		}
 		if diverged {
 			return nil
 		}
 	}
+}
+
+// terminus maps the loop's exit error to a task verdict. Survey mode has no
+// divergence-halt, so being stopped is its terminus: a clean context
+// cancellation (e.g. sidecar shutdown) completes the task rather than failing
+// it. Any other error — and any error in the default halt-on-divergence mode —
+// propagates and fails the run.
+func (l *comparisonLoop) terminus(err error) error {
+	if l.cfg.ContinueOnDivergence && errors.Is(err, context.Canceled) {
+		exportLog.Info("survey stopped; completing", "last-height", l.height)
+		return nil
+	}
+	return err
 }
 
 func (l *comparisonLoop) waitForBlocks(ctx context.Context) (int64, error) {
@@ -183,11 +202,7 @@ func (l *comparisonLoop) compareBlocksUpTo(ctx context.Context, latestHeight int
 }
 
 func (l *comparisonLoop) handleDivergence(ctx context.Context, result shadow.CompareResult) error {
-	layer := "0"
-	if result.DivergenceLayer != nil {
-		layer = fmt.Sprintf("%d", *result.DivergenceLayer)
-	}
-	shadow.Divergences.WithLabelValues(l.exporter.chainID, l.exporter.podName, layer).Inc()
+	layer := l.incDivergenceMetric(result)
 
 	exportLog.Info("app-hash divergence detected",
 		"height", l.height,
@@ -214,13 +229,22 @@ func (l *comparisonLoop) handleDivergence(ctx context.Context, result shadow.Com
 // flushPageIfFull boundary, so the in-memory buffer stays bounded over a long
 // sweep and the run continues instead of halting.
 func (l *comparisonLoop) recordDivergence(result shadow.CompareResult) {
+	layer := l.incDivergenceMetric(result)
+	exportLog.Info("divergence recorded; continuing (survey mode)",
+		"height", l.height, "divergence-layer", layer)
+}
+
+// incDivergenceMetric increments the divergence counter under the result's
+// layer label and returns that label. The label encoding (nil DivergenceLayer
+// → "0", else the layer number) is one contract shared by both the
+// halt-on-divergence and survey-mode paths, so it lives in a single place.
+func (l *comparisonLoop) incDivergenceMetric(result shadow.CompareResult) string {
 	layer := "0"
 	if result.DivergenceLayer != nil {
 		layer = fmt.Sprintf("%d", *result.DivergenceLayer)
 	}
 	shadow.Divergences.WithLabelValues(l.exporter.chainID, l.exporter.podName, layer).Inc()
-	exportLog.Info("divergence recorded; continuing (survey mode)",
-		"height", l.height, "divergence-layer", layer)
+	return layer
 }
 
 func (l *comparisonLoop) uploadDivergenceReport(ctx context.Context, result shadow.CompareResult) error {
@@ -239,9 +263,13 @@ func (l *comparisonLoop) flushPageIfFull(ctx context.Context) error {
 		return nil
 	}
 
+	// A flush failure ends the run rather than continuing: the uploader (AWS SDK)
+	// already retries transient faults, so an error here is a real failure, and
+	// swallowing it would leave pageBuf un-truncated and growing every iteration
+	// — unbounded under a persistent S3 fault on a never-halting survey. Failing
+	// lets the task restart and resume from the last persisted (flushed) height.
 	if err := flushComparePage(ctx, l.uploader, l.cfg.Bucket, l.prefix, l.pageBuf); err != nil {
-		exportLog.Warn("page flush failed, will retry", "err", err)
-		return nil
+		return fmt.Errorf("flushing comparison page: %w", err)
 	}
 
 	l.exporter.persistHeight(l.height)
