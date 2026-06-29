@@ -52,6 +52,15 @@ type ResultExportRequest struct {
 	// execution-results equivalence (LastResultsHash + gas + per-tx receipts).
 	MigrationMode bool `json:"migrationMode,omitempty"`
 
+	// ContinueOnDivergence selects survey mode: the comparison records each
+	// divergent block to the compare page and keeps going instead of halting on
+	// the first divergence. Default false preserves the production tripwire. The
+	// comparator's verdict is unchanged — every field is compared authentically;
+	// this only decides whether a divergence stops the run. Classifying benign vs
+	// real divergences is the downstream `seictl report` step's job. Has no
+	// effect outside comparison mode (it requires CanonicalRPC).
+	ContinueOnDivergence bool `json:"continueOnDivergence,omitempty"`
+
 	// ShadowEVMRPC and CanonicalEVMRPC are the EVM JSON-RPC endpoints for the
 	// shadow and canonical chains. When both are set, Layer 2 (logical state
 	// diff) is enabled, comparing storage/code/nonce for the keys each block
