@@ -43,6 +43,11 @@ const assembleMarkerFile = ".sei-sidecar-assemble-done"
 // CrashLoopBackOff). See PLT-773.
 const assembledGentxSubdir = "gentx-assembled"
 
+// maxGentxBytes bounds a single gentx download. A gentx is a few KB; the cap
+// guards the sidecar against an oversized or wrong object under the (shared)
+// genesis-artifacts prefix being read fully into memory.
+const maxGentxBytes = 1 << 20 // 1 MiB
+
 // GenesisAssembler downloads per-node gentx files from S3, calls
 // genutil.GenAppStateFromConfig (the same function as seid collect-gentxs)
 // to produce the final genesis.json, and uploads it back to S3 for all
@@ -151,7 +156,7 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return err
 		}
 
-		if err := a.verifyAssembledGentxs(len(nodes)); err != nil {
+		if err := a.verifyAssembledGentxs(nodes); err != nil {
 			return err
 		}
 
@@ -234,10 +239,13 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleG
 			return seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
 		}
 
-		data, err := io.ReadAll(output.Body)
+		data, err := io.ReadAll(io.LimitReader(output.Body, maxGentxBytes+1))
 		_ = output.Body.Close()
 		if err != nil {
 			return fmt.Errorf("assemble-genesis: reading %s: %w", key, err)
+		}
+		if len(data) > maxGentxBytes {
+			return fmt.Errorf("assemble-genesis: gentx %s exceeds %d bytes", key, maxGentxBytes)
 		}
 
 		destPath := filepath.Join(gentxDir, fmt.Sprintf("gentx-%s.json", nodeName))
@@ -250,9 +258,11 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleG
 	return nil
 }
 
-// verifyAssembledGentxs decodes every gentx in the assemble directory and
-// fails loudly unless it holds exactly one MsgCreateValidator per node, each
-// for a distinct validator. gentxs are self-delegating by construction, so a
+// verifyAssembledGentxs decodes the gentx for every expected node and fails
+// loudly unless the assemble directory holds exactly one MsgCreateValidator per
+// node, each for a distinct validator. Iterating the expected node names (rather
+// than the directory) also asserts the 1:1 mapping by name — a missing node's
+// gentx is caught here. gentxs are self-delegating by construction, so a
 // validator is identified equivalently by its delegator account, its operator
 // address, and its consensus pubkey; a collision on any of the three means the
 // same validator would be created twice in InitChain. A duplicate delegator
@@ -261,41 +271,31 @@ func (a *GenesisAssembler) downloadGentxFiles(ctx context.Context, cfg AssembleG
 // in x/staking. Either way the chain wedges in permanent CrashLoopBackOff, so
 // rejecting it here — before genesis is mutated — turns an opaque, network-wide
 // boot failure into a clear, actionable assemble error.
-func (a *GenesisAssembler) verifyAssembledGentxs(expected int) error {
+func (a *GenesisAssembler) verifyAssembledGentxs(nodes []string) error {
 	_, txCfg := makeCodec()
 	ensureBech32()
 
 	gentxDir := a.assembledGentxDir()
-	entries, err := os.ReadDir(gentxDir)
-	if err != nil {
-		return fmt.Errorf("assemble-genesis: reading assemble dir: %w", err)
-	}
 
-	seenDelegator := make(map[string]string, expected) // delegator address  -> source filename
-	seenValidator := make(map[string]string, expected) // operator address   -> source filename
-	seenPubKey := make(map[string]string, expected)    // consensus pubkey   -> source filename
-	count := 0
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		count++
-
-		data, err := os.ReadFile(filepath.Join(gentxDir, entry.Name()))
+	seenDelegator := make(map[string]string, len(nodes)) // delegator address -> node name
+	seenValidator := make(map[string]string, len(nodes)) // operator address  -> node name
+	seenPubKey := make(map[string]string, len(nodes))    // consensus pubkey  -> node name
+	for _, nodeName := range nodes {
+		data, err := os.ReadFile(filepath.Join(gentxDir, fmt.Sprintf("gentx-%s.json", nodeName)))
 		if err != nil {
-			return fmt.Errorf("assemble-genesis: reading %s: %w", entry.Name(), err)
+			return fmt.Errorf("assemble-genesis: reading gentx for node %s: %w", nodeName, err)
 		}
 		tx, err := txCfg.TxJSONDecoder()(data)
 		if err != nil {
-			return fmt.Errorf("assemble-genesis: decoding %s: %w", entry.Name(), err)
+			return fmt.Errorf("assemble-genesis: decoding gentx for node %s: %w", nodeName, err)
 		}
 		msgs := tx.GetMsgs()
 		if len(msgs) != 1 {
-			return fmt.Errorf("assemble-genesis: gentx %s has %d messages, want exactly 1 MsgCreateValidator", entry.Name(), len(msgs))
+			return fmt.Errorf("assemble-genesis: gentx for node %s has %d messages, want exactly 1 MsgCreateValidator", nodeName, len(msgs))
 		}
 		msg, ok := msgs[0].(*stakingtypes.MsgCreateValidator)
 		if !ok {
-			return fmt.Errorf("assemble-genesis: gentx %s is not a MsgCreateValidator", entry.Name())
+			return fmt.Errorf("assemble-genesis: gentx for node %s is not a MsgCreateValidator", nodeName)
 		}
 
 		// A consensus pubkey is always present in a well-formed gentx; guard
@@ -310,17 +310,17 @@ func (a *GenesisAssembler) verifyAssembledGentxs(expected int) error {
 				return nil
 			}
 			if prev, dup := seen[key]; dup {
-				return fmt.Errorf("assemble-genesis: duplicate %s %q (in %s and %s); "+
+				return fmt.Errorf("assemble-genesis: duplicate %s %q (nodes %s and %s); "+
 					"the same validator would be created twice and abort InitChain",
-					kind, key, prev, entry.Name())
+					kind, key, prev, nodeName)
 			}
-			seen[key] = entry.Name()
+			seen[key] = nodeName
 			return nil
 		}
 		if err := dedupe("delegator", msg.DelegatorAddress, seenDelegator); err != nil {
 			return err
 		}
-		if err := dedupe("validator", msg.ValidatorAddress, seenValidator); err != nil {
+		if err := dedupe("validator operator address", msg.ValidatorAddress, seenValidator); err != nil {
 			return err
 		}
 		if err := dedupe("consensus pubkey", pubKey, seenPubKey); err != nil {
@@ -328,9 +328,7 @@ func (a *GenesisAssembler) verifyAssembledGentxs(expected int) error {
 		}
 	}
 
-	if count != expected {
-		return fmt.Errorf("assemble-genesis: expected %d gentx files, found %d", expected, count)
-	}
+	assembleLog.Info("assembled gentxs verified", "count", len(nodes))
 	return nil
 }
 

@@ -87,7 +87,7 @@ func TestVerifyAssembledGentxs_DuplicateDelegator(t *testing.T) {
 	writeGentxFixture(t, dir, "gentx-val-0.json", dup)
 	writeGentxFixture(t, dir, "gentx-val-1.json", dup) // same delegator → duplicate
 
-	err := a.verifyAssembledGentxs(2)
+	err := a.verifyAssembledGentxs([]string{"val-0", "val-1"})
 	if err == nil {
 		t.Fatal("expected duplicate-delegator error, got nil")
 	}
@@ -109,7 +109,7 @@ func TestVerifyAssembledGentxs_DuplicateConsensusPubKey(t *testing.T) {
 	writeGentxFixtureWithPubKey(t, dir, "gentx-val-0.json", randomSeiAddr(t), shared)
 	writeGentxFixtureWithPubKey(t, dir, "gentx-val-1.json", randomSeiAddr(t), shared)
 
-	err := a.verifyAssembledGentxs(2)
+	err := a.verifyAssembledGentxs([]string{"val-0", "val-1"})
 	if err == nil {
 		t.Fatal("expected duplicate-consensus-pubkey error, got nil")
 	}
@@ -126,23 +126,25 @@ func TestVerifyAssembledGentxs_DistinctOK(t *testing.T) {
 	writeGentxFixture(t, dir, "gentx-val-0.json", randomSeiAddr(t))
 	writeGentxFixture(t, dir, "gentx-val-1.json", randomSeiAddr(t))
 
-	if err := a.verifyAssembledGentxs(2); err != nil {
+	if err := a.verifyAssembledGentxs([]string{"val-0", "val-1"}); err != nil {
 		t.Fatalf("expected distinct gentxs to pass, got %v", err)
 	}
 }
 
-func TestVerifyAssembledGentxs_CountMismatch(t *testing.T) {
+// TestVerifyAssembledGentxs_MissingGentx covers the by-name 1:1 assertion: an
+// expected node with no gentx in the assemble dir must fail before mutation.
+func TestVerifyAssembledGentxs_MissingGentx(t *testing.T) {
 	homeDir := t.TempDir()
 	a := NewGenesisAssembler(homeDir, "b", "r", "chain", nil, nil)
 	dir := a.assembledGentxDir()
 
-	writeGentxFixture(t, dir, "gentx-val-0.json", randomSeiAddr(t))
+	writeGentxFixture(t, dir, "gentx-val-0.json", randomSeiAddr(t)) // val-1 absent
 
-	err := a.verifyAssembledGentxs(2) // expected 2, only 1 present
+	err := a.verifyAssembledGentxs([]string{"val-0", "val-1"})
 	if err == nil {
-		t.Fatal("expected count-mismatch error, got nil")
+		t.Fatal("expected missing-gentx error, got nil")
 	}
-	if !strings.Contains(err.Error(), "expected 2 gentx files, found 1") {
-		t.Errorf("error = %q, want substring 'expected 2 gentx files, found 1'", err.Error())
+	if !strings.Contains(err.Error(), "reading gentx for node val-1") {
+		t.Errorf("error = %q, want substring 'reading gentx for node val-1'", err.Error())
 	}
 }
