@@ -28,9 +28,9 @@ func newTestComparisonLoop(t *testing.T, continueOnDivergence bool, latest int64
 		return rec, nil
 	})
 	return &comparisonLoop{
-		exporter:     exporter,
-		comparator:   shadow.NewComparator(shadowSrv.URL, canonicalSrv.URL),
-		uploader:     rec,
+		exporter:   exporter,
+		comparator: shadow.NewComparator(shadowSrv.URL, canonicalSrv.URL),
+		uploader:   rec,
 		cfg: ResultExportRequest{
 			Bucket: "bkt", Region: "us-east-1", Prefix: "p/",
 			RPCEndpoint:          shadowSrv.URL,
