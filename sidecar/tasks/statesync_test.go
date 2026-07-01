@@ -590,6 +590,96 @@ func TestStateSyncConfigurer_PrimaryUnreachableFallsThrough(t *testing.T) {
 	}
 }
 
+func TestWitnessScheme(t *testing.T) {
+	cases := []struct {
+		name, endpoint, want string
+	}{
+		{"tls gateway on 443", "archive-0-rpc.arctic-1.platform.sei.io:443", "https"},
+		{"in-cluster rpc on 26657", "syncer-0-internal.arctic-1.svc.cluster.local:26657", "http"},
+		{"bare ip rpc", "1.2.3.4:26657", "http"},
+		{"no port defaults to http", "some-host", "http"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := witnessScheme(tc.endpoint); got != tc.want {
+				t.Errorf("witnessScheme(%q) = %q, want %q", tc.endpoint, got, tc.want)
+			}
+		})
+	}
+}
+
+// Regression guard for the state-sync witness scheme/port mismatch that blocked
+// every new K8s state-syncing node: a canonical syncer resolved to the public
+// Istio HTTPRoute hostname on :443 must be probed and queried over https, not
+// the previously-hardcoded http (which EOFed against the TLS listener). The mock
+// only answers the https URL — an http probe would fall through as an
+// "unexpected request" and the configure would fail.
+func TestStateSyncConfigurer_TLSWitnessUsesHTTPS(t *testing.T) {
+	homeDir := t.TempDir()
+	setupPeersInConfig(t, homeDir, nil)
+
+	const witness = "archive-0-rpc.arctic-1.platform.sei.io:443"
+	hash := generateBlockHash()
+	mock := &mockHTTPDoer{
+		responses: map[string]*http.Response{
+			"https://" + witness + "/status": jsonResponse(wrapResult(`{
+				"sync_info": {"latest_block_height": "10000"}
+			}`)),
+			"https://" + witness + "/block?height=8000": jsonResponse(wrapResult(fmt.Sprintf(`{
+				"block_id": {"hash": %q}
+			}`, hash))),
+		},
+	}
+
+	configurer := NewStateSyncConfigurer(homeDir, mock)
+	if err := configurer.Configure(context.Background(), StateSyncRequest{
+		RpcServers: []string{witness},
+	}); err != nil {
+		t.Fatalf("Configure failed: %v", err)
+	}
+
+	ss := readTOML(t, filepath.Join(homeDir, "config", "config.toml"))["statesync"].(map[string]any)
+	// rpc-servers is written as the bare host:port (seid attaches the scheme).
+	if ss["rpc-servers"] != witness+","+witness {
+		t.Errorf("expected TLS witness padded to two, got %v", ss["rpc-servers"])
+	}
+	if ss["trust-height"] != int64(8000) {
+		t.Errorf("expected trust-height 8000, got %v", ss["trust-height"])
+	}
+}
+
+// The in-cluster plaintext path (a syncer's internal Service on :26657) must
+// stay on http — the forward-compatible counterpart to the TLS guard above.
+func TestStateSyncConfigurer_InternalWitnessUsesHTTP(t *testing.T) {
+	homeDir := t.TempDir()
+	setupPeersInConfig(t, homeDir, nil)
+
+	const witness = "syncer-0-internal.arctic-1.svc.cluster.local:26657"
+	hash := generateBlockHash()
+	mock := &mockHTTPDoer{
+		responses: map[string]*http.Response{
+			"http://" + witness + "/status": jsonResponse(wrapResult(`{
+				"sync_info": {"latest_block_height": "10000"}
+			}`)),
+			"http://" + witness + "/block?height=8000": jsonResponse(wrapResult(fmt.Sprintf(`{
+				"block_id": {"hash": %q}
+			}`, hash))),
+		},
+	}
+
+	configurer := NewStateSyncConfigurer(homeDir, mock)
+	if err := configurer.Configure(context.Background(), StateSyncRequest{
+		RpcServers: []string{witness},
+	}); err != nil {
+		t.Fatalf("Configure failed: %v", err)
+	}
+
+	ss := readTOML(t, filepath.Join(homeDir, "config", "config.toml"))["statesync"].(map[string]any)
+	if ss["trust-height"] != int64(8000) {
+		t.Errorf("expected trust-height 8000, got %v", ss["trust-height"])
+	}
+}
+
 // When no candidate witness is reachable, fail at configure time with a clear
 // error rather than writing a config that makes seid exit on "no witnesses".
 func TestStateSyncConfigurer_NoReachableWitness(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ const (
 	trustHeightOffset   = 2000
 	rpcPort             = "26657"
 	witnessProbeTimeout = 10 * time.Second
+	tlsPort             = "443"
 )
 
 // StateSyncConfig holds the trust point and RPC servers for Tendermint state sync.
@@ -251,9 +253,24 @@ func extractRPCHosts(peers []string, maxHosts int) []string {
 	return hosts
 }
 
-// rpcClientForEndpoint builds an rpc.Client targeting a full "host:port" RPC endpoint.
+// rpcClientForEndpoint builds an rpc.Client targeting a full "host:port" RPC
+// endpoint. The scheme is derived from the port: a :443 witness is a public TLS
+// gateway (Istio HTTPRoute) and must be reached over https; every other port is
+// the plaintext in-cluster CometBFT RPC. Hardcoding http:// here previously made
+// a :443 witness fail the /status probe with an immediate EOF (plaintext request
+// to a TLS listener), which blocked every new state-syncing node.
 func (s *StateSyncConfigurer) rpcClientForEndpoint(endpoint string) *rpc.Client {
-	return rpc.NewClient("http://"+endpoint, s.httpClient)
+	return rpc.NewClient(witnessScheme(endpoint)+"://"+endpoint, s.httpClient)
+}
+
+// witnessScheme returns the URL scheme for a "host:port" witness endpoint:
+// https for :443, http otherwise. An endpoint with no parseable port defaults
+// to http (the in-cluster plaintext form).
+func witnessScheme(endpoint string) string {
+	if _, port, err := net.SplitHostPort(endpoint); err == nil && port == tlsPort {
+		return "https"
+	}
+	return "http"
 }
 
 func (s *StateSyncConfigurer) queryLatestHeight(ctx context.Context, endpoint string) (int64, error) {
