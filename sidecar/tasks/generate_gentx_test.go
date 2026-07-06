@@ -21,7 +21,7 @@ func TestGentxGenerator_MissingParams(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := handler(context.Background(), tt.params)
+			_, err := handler(context.Background(), tt.params)
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -34,7 +34,7 @@ func TestGentxGenerator_NoMarkerOnFailure(t *testing.T) {
 	handler := NewGentxGenerator(homeDir).Handler()
 
 	// This will fail because there's no genesis.json to work with
-	_ = handler(context.Background(), map[string]any{
+	_, _ = handler(context.Background(), map[string]any{
 		"chainId": "c", "stakingAmount": "1000usei", "accountBalance": "10000usei",
 	})
 

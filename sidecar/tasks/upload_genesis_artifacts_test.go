@@ -27,7 +27,7 @@ func TestArtifactUploader_UploadsGentxAndIdentity(t *testing.T) {
 	uploader := NewGenesisArtifactUploader(homeDir, "test-bucket", "us-east-2", "test-chain", mockUploaderFactory(mock))
 	handler := uploader.Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"nodeName": "val-0",
 	})
 	if err != nil {
@@ -63,12 +63,12 @@ func TestArtifactUploader_Idempotent(t *testing.T) {
 	params := map[string]any{
 		"nodeName": "n",
 	}
-	if err := handler(context.Background(), params); err != nil {
+	if _, err := handler(context.Background(), params); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	firstUploads := len(mock.uploads)
 
-	if err := handler(context.Background(), params); err != nil {
+	if _, err := handler(context.Background(), params); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	if len(mock.uploads) != firstUploads {
@@ -88,7 +88,7 @@ func TestArtifactUploader_MissingParams(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := handler(context.Background(), tt.params); err == nil {
+			if _, err := handler(context.Background(), tt.params); err == nil {
 				t.Fatal("expected error")
 			}
 		})
@@ -107,7 +107,7 @@ func TestArtifactUploader_NoGentxFile(t *testing.T) {
 	mock := newMockS3Uploader()
 	handler := NewGenesisArtifactUploader(homeDir, "test-bucket", "us-east-2", "test-chain", mockUploaderFactory(mock)).Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"nodeName": "n",
 	})
 	if err == nil {

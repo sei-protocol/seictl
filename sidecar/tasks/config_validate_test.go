@@ -15,7 +15,7 @@ func TestConfigValidator_ValidConfig(t *testing.T) {
 	validator := NewConfigValidator(homeDir)
 	handler := validator.Handler()
 
-	err := handler(context.Background(), nil)
+	_, err := handler(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error for valid config: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestConfigValidator_AllModes(t *testing.T) {
 			writeDefaultConfig(t, homeDir, mode)
 
 			validator := NewConfigValidator(homeDir)
-			err := validator.Handler()(context.Background(), nil)
+			_, err := validator.Handler()(context.Background(), nil)
 			if err != nil {
 				t.Fatalf("mode %s validation failed: %v", mode, err)
 			}
@@ -45,7 +45,7 @@ func TestConfigValidator_MissingFiles(t *testing.T) {
 	validator := NewConfigValidator(homeDir)
 	handler := validator.Handler()
 
-	err := handler(context.Background(), nil)
+	_, err := handler(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected error for missing config files")
 	}
@@ -65,7 +65,7 @@ func TestConfigValidator_InvalidConfig(t *testing.T) {
 	validator := NewConfigValidator(homeDir)
 	handler := validator.Handler()
 
-	err := handler(context.Background(), nil)
+	_, err := handler(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected error for invalid config")
 	}

@@ -45,7 +45,7 @@ func TestAwaitHeight_ReachesTarget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := handler(ctx, params); err != nil {
+	if _, err := handler(ctx, params); err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
 }
@@ -62,7 +62,7 @@ func TestAwaitHeight_AlreadyPastTarget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := handler(ctx, params); err != nil {
+	if _, err := handler(ctx, params); err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
 }
@@ -73,7 +73,7 @@ func TestAwaitHeight_MissingTargetHeight(t *testing.T) {
 
 	handler := NewConditionWaiter(rpcClient(srv.URL)).Handler()
 	params := map[string]any{"condition": "height"}
-	if err := handler(context.Background(), params); err == nil {
+	if _, err := handler(context.Background(), params); err == nil {
 		t.Fatal("expected error for missing targetHeight")
 	}
 }
@@ -87,7 +87,7 @@ func TestAwaitHeight_ZeroTargetHeight(t *testing.T) {
 		"condition":    "height",
 		"targetHeight": float64(0),
 	}
-	if err := handler(context.Background(), params); err == nil {
+	if _, err := handler(context.Background(), params); err == nil {
 		t.Fatal("expected error for zero targetHeight")
 	}
 }
@@ -101,7 +101,7 @@ func TestAwaitHeight_NegativeTargetHeight(t *testing.T) {
 		"condition":    "height",
 		"targetHeight": float64(-5),
 	}
-	if err := handler(context.Background(), params); err == nil {
+	if _, err := handler(context.Background(), params); err == nil {
 		t.Fatal("expected error for negative targetHeight")
 	}
 }
@@ -156,7 +156,7 @@ func TestAwaitHeight_TransientRPCErrors(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := handler(ctx, params); err != nil {
+	if _, err := handler(ctx, params); err != nil {
 		t.Fatalf("expected success after transient errors, got %v", err)
 	}
 }
@@ -173,7 +173,7 @@ func TestAwaitHeight_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	err := handler(ctx, params)
+	_, err := handler(ctx, params)
 	if err == nil {
 		t.Fatal("expected context error")
 	}
@@ -185,7 +185,7 @@ func TestAwaitHeight_ContextCancellation(t *testing.T) {
 func TestAwaitHeight_MissingCondition(t *testing.T) {
 	handler := NewConditionWaiter(rpcClient("http://unused")).Handler()
 	params := map[string]any{}
-	if err := handler(context.Background(), params); err == nil {
+	if _, err := handler(context.Background(), params); err == nil {
 		t.Fatal("expected error for missing condition")
 	}
 }
@@ -193,7 +193,7 @@ func TestAwaitHeight_MissingCondition(t *testing.T) {
 func TestAwaitHeight_UnknownCondition(t *testing.T) {
 	handler := NewConditionWaiter(rpcClient("http://unused")).Handler()
 	params := map[string]any{"condition": "unknown"}
-	if err := handler(context.Background(), params); err == nil {
+	if _, err := handler(context.Background(), params); err == nil {
 		t.Fatal("expected error for unknown condition")
 	}
 }
@@ -211,7 +211,7 @@ func TestAwaitHeight_UnknownAction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := handler(ctx, params); err == nil {
+	if _, err := handler(ctx, params); err == nil {
 		t.Fatal("expected error for unknown action")
 	}
 }
@@ -228,7 +228,7 @@ func TestAwaitHeight_Int64TargetHeight(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := handler(ctx, params); err != nil {
+	if _, err := handler(ctx, params); err != nil {
 		t.Fatalf("expected success with int64 targetHeight, got %v", err)
 	}
 }
@@ -245,7 +245,7 @@ func TestAwaitHeight_JSONNumberTargetHeight(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := handler(ctx, params); err != nil {
+	if _, err := handler(ctx, params); err != nil {
 		t.Fatalf("expected success with json.Number targetHeight, got %v", err)
 	}
 }

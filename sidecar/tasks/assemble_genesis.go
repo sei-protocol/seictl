@@ -123,72 +123,70 @@ func NewGenesisAssembler(homeDir, bucket, region, chainID string, s3Factory S3Cl
 // Handler returns an engine.TaskHandler for the assemble-and-upload-genesis task type.
 // S3 coordinates are derived from the sidecar's environment.
 func (a *GenesisAssembler) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, cfg AssembleGenesisRequest) error {
+	return engine.TypedHandlerWithResult(func(ctx context.Context, cfg AssembleGenesisRequest) (*AssembleGenesisResult, error) {
 		if markerExists(a.homeDir, assembleMarkerFile) {
 			assembleLog.Debug("already completed, skipping")
-			return nil
+			return nil, nil
 		}
 
 		if cfg.AccountBalance == "" {
-			return fmt.Errorf("assemble-genesis: missing required param 'accountBalance'")
+			return nil, fmt.Errorf("assemble-genesis: missing required param 'accountBalance'")
 		}
 		if cfg.Namespace == "" {
-			return fmt.Errorf("assemble-genesis: missing required param 'namespace'")
+			return nil, fmt.Errorf("assemble-genesis: missing required param 'namespace'")
 		}
 		if len(cfg.Nodes) == 0 {
-			return fmt.Errorf("assemble-genesis: 'nodes' list is empty")
+			return nil, fmt.Errorf("assemble-genesis: 'nodes' list is empty")
 		}
 		for i, n := range cfg.Nodes {
 			if n.Name == "" {
-				return fmt.Errorf("assemble-genesis: nodes[%d] missing required field 'name'", i)
+				return nil, fmt.Errorf("assemble-genesis: nodes[%d] missing required field 'name'", i)
 			}
 		}
 
 		nodes := cfg.nodeNames()
 
 		if err := a.downloadGentxFiles(ctx, cfg, nodes); err != nil {
-			return err
+			return nil, err
 		}
 
 		if err := a.verifyAssembledGentxs(nodes); err != nil {
-			return err
+			return nil, err
 		}
 
 		if err := a.addMissingGenesisAccounts(cfg.AccountBalance); err != nil {
-			return err
+			return nil, err
 		}
 
 		if err := a.addExternalGenesisAccounts(cfg.Accounts); err != nil {
-			return err
+			return nil, err
 		}
 
 		if err := a.collectGentxs(); err != nil {
-			return err
+			return nil, err
 		}
 
 		if err := a.applyOverrides(cfg.Overrides); err != nil {
-			return err
+			return nil, err
 		}
 
 		genesisHash, err := a.uploadGenesis(ctx, cfg)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if err := a.uploadPeers(ctx, cfg, nodes); err != nil {
-			return err
+			return nil, err
+		}
+
+		if err := writeMarker(a.homeDir, assembleMarkerFile); err != nil {
+			return nil, err
 		}
 
 		// Hand the hash to the controller over the trusted task-result
 		// channel (GET /v0/tasks/{id}); never via shared S3.
-		result, err := json.Marshal(AssembleGenesisResult{GenesisHash: genesisHash})
-		if err != nil {
-			return fmt.Errorf("assemble-genesis: marshaling result: %w", err)
-		}
-		engine.SetTaskResult(ctx, result)
-
 		assembleLog.Info("genesis assembled and uploaded", "nodes", len(nodes), "genesisHash", genesisHash)
-		return writeMarker(a.homeDir, assembleMarkerFile)
+		return &AssembleGenesisResult{GenesisHash: genesisHash}, nil
 	})
 }
 

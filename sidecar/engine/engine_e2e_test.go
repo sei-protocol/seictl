@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -45,15 +46,15 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 
 	var handlerCalls atomic.Int32
 	handlers := map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, params map[string]any) error {
+		TaskConfigPatch: func(_ context.Context, params map[string]any) (json.RawMessage, error) {
 			handlerCalls.Add(1)
 			if params["fail"] == true {
-				return errors.New("intentional failure")
+				return nil, errors.New("intentional failure")
 			}
-			return nil
+			return nil, nil
 		},
-		TaskMarkReady: func(_ context.Context, _ map[string]any) error {
-			return nil
+		TaskMarkReady: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+			return nil, nil
 		},
 	}
 
@@ -245,7 +246,7 @@ func TestE2E_StaleTaskRehydration(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	handlers := map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	}
 	eng := NewEngine(ctx, handlers, store2)
 	eng.RehydrateStaleTasks()
@@ -264,10 +265,10 @@ func TestE2E_ConcurrentSubmit(t *testing.T) {
 
 	var execCount atomic.Int32
 	handlers := map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
 			execCount.Add(1)
 			time.Sleep(10 * time.Millisecond)
-			return nil
+			return nil, nil
 		},
 	}
 

@@ -274,7 +274,7 @@ func TestExportHandler_MissingParams(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := handler(context.Background(), tc.params)
+			_, err := handler(context.Background(), tc.params)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -323,7 +323,7 @@ func TestHandlerRouting_WithCanonicalRPC_CallsExportAndCompare(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	err := e.Handler()(ctx, map[string]any{
+	_, err := e.Handler()(ctx, map[string]any{
 		"bucket":       "test-bucket",
 		"region":       "us-east-1",
 		"rpcEndpoint":  srv.URL,
@@ -341,7 +341,7 @@ func TestHandlerRouting_WithoutCanonicalRPC_CallsExport(t *testing.T) {
 	tmpDir := t.TempDir()
 	e := NewResultExporter(tmpDir, "test-1", "test-pod-0", mockResultUploaderFactory())
 
-	err := e.Handler()(context.Background(), map[string]any{
+	_, err := e.Handler()(context.Background(), map[string]any{
 		"bucket":      "test-bucket",
 		"region":      "us-east-1",
 		"rpcEndpoint": srv.URL,

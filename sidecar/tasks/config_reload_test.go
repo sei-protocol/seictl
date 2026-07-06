@@ -15,7 +15,7 @@ func TestConfigReloader_HotReloadableField(t *testing.T) {
 	reloader := NewConfigReloader(homeDir)
 	handler := reloader.Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"fields": map[string]any{
 			"logging.level": "debug",
 		},
@@ -40,7 +40,7 @@ func TestConfigReloader_NonHotReloadableField(t *testing.T) {
 	reloader := NewConfigReloader(homeDir)
 	handler := reloader.Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"fields": map[string]any{
 			"storage.db_backend": "rocksdb",
 		},
@@ -60,7 +60,7 @@ func TestConfigReloader_UnknownField(t *testing.T) {
 	reloader := NewConfigReloader(homeDir)
 	handler := reloader.Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"fields": map[string]any{
 			"nonexistent.field": "value",
 		},
@@ -78,7 +78,7 @@ func TestConfigReloader_EmptyFields(t *testing.T) {
 	reloader := NewConfigReloader(homeDir)
 	handler := reloader.Handler()
 
-	err := handler(context.Background(), map[string]any{})
+	_, err := handler(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for empty fields")
 	}

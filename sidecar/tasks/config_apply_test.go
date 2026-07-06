@@ -23,7 +23,7 @@ func TestConfigApplier_FullGeneration(t *testing.T) {
 	applier := NewConfigApplier(homeDir)
 	handler := applier.Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"mode":        "validator",
 		"incremental": false,
 	})
@@ -48,7 +48,7 @@ func TestConfigApplier_FullWithOverrides(t *testing.T) {
 	applier := NewConfigApplier(homeDir)
 	handler := applier.Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"mode":        "full",
 		"incremental": false,
 		"overrides": map[string]any{
@@ -73,7 +73,7 @@ func TestConfigApplier_FullMissingMode(t *testing.T) {
 	applier := NewConfigApplier(homeDir)
 	handler := applier.Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"incremental": false,
 	})
 	if err == nil {
@@ -89,7 +89,7 @@ func TestConfigApplier_FullInvalidMode(t *testing.T) {
 	applier := NewConfigApplier(homeDir)
 	handler := applier.Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"mode":        "bogus",
 		"incremental": false,
 	})
@@ -108,7 +108,7 @@ func TestConfigApplier_Incremental(t *testing.T) {
 	applier := NewConfigApplier(homeDir)
 	handler := applier.Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"incremental": true,
 		"overrides": map[string]any{
 			"evm.http_port": "9999",
@@ -140,7 +140,7 @@ func TestConfigApplier_IncrementalPreservesExisting(t *testing.T) {
 	applier := NewConfigApplier(homeDir)
 	handler := applier.Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"incremental": true,
 		"overrides": map[string]any{
 			"evm.http_port": "7777",
@@ -161,7 +161,7 @@ func TestConfigApplier_WritesFiles(t *testing.T) {
 	applier := NewConfigApplier(homeDir)
 	handler := applier.Handler()
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"mode":        "full",
 		"incremental": false,
 	})
@@ -190,7 +190,7 @@ func TestConfigApplier_AllModes(t *testing.T) {
 			applier := NewConfigApplier(homeDir)
 			handler := applier.Handler()
 
-			err := handler(context.Background(), map[string]any{
+			_, err := handler(context.Background(), map[string]any{
 				"mode":        mode,
 				"incremental": false,
 			})
