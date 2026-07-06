@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
@@ -148,6 +149,17 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 		// sign-tx memo tagging).
 		ctx := WithTaskID(e.ctx, id)
 		result, err := e.executeRecovered(ctx, taskType, handler, params)
+
+		// Engine shutdown truncated the task — leave it 'running' so
+		// RehydrateStaleTasks resumes it on restart, rather than persisting a
+		// spurious Failed (which would strand an in-flight sign-tx). Safe: this
+		// path uses e.ctx directly (no per-task deadline), so context.Canceled
+		// here is only shutdown.
+		if errors.Is(err, context.Canceled) {
+			log.Info("task truncated by shutdown; left running for rehydration",
+				"type", taskType, "id", id, "run", run)
+			return
+		}
 
 		t := time.Now().UTC()
 		tr := &TaskResult{

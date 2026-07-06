@@ -99,6 +99,37 @@ func TestSubmitCapturesInBandResult(t *testing.T) {
 	}
 }
 
+// A ctx-cancelled run (engine shutdown mid-task) must be left 'running' for
+// RehydrateStaleTasks, not persisted as Failed — else an in-flight sign-tx is
+// stranded (its result/marker never revisited).
+func TestRunTaskCtxCancel_LeavesRunningForRehydrate(t *testing.T) {
+	ran := make(chan struct{})
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+			close(ran)
+			return nil, context.Canceled // simulates a poll truncated by shutdown
+		},
+	})
+
+	id, err := eng.Submit(Task{Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	<-ran
+	time.Sleep(50 * time.Millisecond) // let runTask's post-handler guard run
+
+	r := eng.GetResult(id)
+	if r == nil {
+		t.Fatal("task row missing")
+	}
+	if r.Status != TaskStatusRunning {
+		t.Fatalf("ctx-cancelled task must stay running for rehydration, got %q", r.Status)
+	}
+	if r.CompletedAt != nil {
+		t.Fatal("truncated task must not be marked terminal")
+	}
+}
+
 func TestSubmitNoResultPayloadIsNil(t *testing.T) {
 	// Backward-compat: a handler that emits nothing leaves Result nil and
 	// the field is omitted from the wire, so the deployed controller is
