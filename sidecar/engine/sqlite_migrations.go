@@ -121,10 +121,9 @@ func migrate(db *sql.DB) error {
 		}
 		defer tx.Rollback()
 
-		// tx_markers is the pre-broadcast idempotency record for sign-tx
-		// tasks: the signed tx bytes are persisted before broadcast so a
-		// crashed task re-adopts (or re-broadcasts) the identical tx on re-run
-		// instead of re-signing. Engine-owned; distinct from task_results.
+		// tx_markers: pre-broadcast signed-tx bytes so a crashed sign-tx task
+		// re-adopts the identical tx instead of re-signing. Engine-owned. A
+		// pre-v5 downgrade leaves markers unread (the guard degrades).
 		if _, err := tx.Exec(`
 			CREATE TABLE IF NOT EXISTS tx_markers (
 				task_id        TEXT PRIMARY KEY,

@@ -171,9 +171,7 @@ func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClie
 		return nil, err
 	}
 
-	// Adopt an in-flight tx from a prior (crashed) run rather than signing a
-	// new one. The marker carries the exact signed bytes, so re-broadcast can
-	// never create a second tx (CometBFT dedups by hash).
+	// Adopt an in-flight tx from a prior crashed run instead of signing anew.
 	if cfg.Checkpointer != nil && in.TaskID != "" {
 		marker, err := cfg.Checkpointer.GetTxMarker(in.TaskID)
 		if err != nil {
@@ -218,8 +216,7 @@ func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClie
 
 	txHash := fmt.Sprintf("%X", sha256.Sum256(txBytes))
 
-	// Persist the marker BEFORE broadcasting so a crash between broadcast and
-	// result-persist re-adopts this exact tx instead of signing a second one.
+	// Marker must be durable before broadcast so a crash re-adopts this tx.
 	if cfg.Checkpointer != nil && in.TaskID != "" {
 		if err := cfg.Checkpointer.SaveTxMarker(&engine.TxMarker{
 			TaskID:        in.TaskID,
@@ -239,35 +236,36 @@ func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClie
 	signTxLog.Info("broadcasting tx",
 		"taskId", in.TaskID, "chainId", in.ChainID,
 		"sequence", seq, "accountNumber", accNum, "gas", in.Gas, "fees", in.Fees)
-	return broadcastAndPoll(ctx, tc, txBytes, accNum, seq, in.ChainID)
+	return broadcastAndPoll(ctx, tc, txBytes, txHash, accNum, seq, in.ChainID)
 }
 
 // adoptReQueryTimeout bounds the re-query after an adopt re-broadcast is
-// CheckTx-rejected (see adoptMarker). Var so tests can shorten it.
+// CheckTx-rejected. Var so tests can shorten it.
 var adoptReQueryTimeout = 5 * time.Second
 
-// adoptMarker resumes a prior run's tx. Three cases:
-//   - already on chain → build the result from it (no re-broadcast);
-//   - QueryTx transport error → unknown state; return a non-terminal error so
-//     the run is retried when RPC recovers, rather than re-broadcasting blind;
-//   - not indexed yet → re-broadcast the identical signed bytes (never re-sign
-//     — CometBFT dedups by hash, so this cannot create a second tx).
-//
-// The /tx index lags commit, so a "not found" may be a committed-but-unindexed
-// tx; if the re-broadcast is then CheckTx-rejected (e.g. the sequence was
-// already consumed by the committed tx), re-query before declaring failure —
-// that rejection is near-certain evidence the tx already landed.
+// adoptMarker resumes a prior run's tx: already on chain → build from it; query
+// error → report undetermined (retry, don't re-broadcast blind); not indexed →
+// re-broadcast the identical bytes (never re-sign; CometBFT dedups by hash).
+// The /tx index lags commit, so a CheckTx rejection on that re-broadcast likely
+// means the tx already landed — re-query before failing.
 func adoptMarker(ctx context.Context, tc txClient, m *engine.TxMarker) (*SignAndBroadcastResult, error) {
 	resp, found, err := tc.QueryTx(ctx, m.TxHash)
 	if err != nil {
-		return nil, fmt.Errorf("query in-flight tx %s: %w", m.TxHash, err)
+		// Unknown state — report undetermined so the caller re-checks; the
+		// durable marker makes a later re-broadcast safe.
+		signTxLog.Warn("adopt query transport error; reporting inclusion-undetermined",
+			"txHash", m.TxHash, "err", err)
+		return &SignAndBroadcastResult{
+			TxHash: m.TxHash, AccountNumber: m.AccountNumber, Sequence: m.Sequence,
+			ChainID: m.ChainID, BroadcastedAt: time.Now().UTC(), IncludedAt: nil,
+		}, nil
 	}
 	if found {
 		now := time.Now().UTC()
 		return resultFromTxResponse(resp, m.AccountNumber, m.Sequence, m.ChainID, now, &now), nil
 	}
 
-	out, berr := broadcastAndPoll(ctx, tc, m.TxBytes, m.AccountNumber, m.Sequence, m.ChainID)
+	out, berr := broadcastAndPoll(ctx, tc, m.TxBytes, m.TxHash, m.AccountNumber, m.Sequence, m.ChainID)
 	if berr != nil && IsTerminal(berr) {
 		if included, qerr := pollForInclusion(ctx, tc, m.TxHash, adoptReQueryTimeout, inclusionPollInterval); qerr == nil && included != nil {
 			now := time.Now().UTC()
@@ -277,14 +275,23 @@ func adoptMarker(ctx context.Context, tc txClient, m *engine.TxMarker) (*SignAnd
 	return out, berr
 }
 
-// broadcastAndPoll broadcasts signed tx bytes, rejects a CheckTx failure as
-// terminal, then polls for inclusion. Shared by the fresh-sign and marker
-// re-broadcast paths.
-func broadcastAndPoll(ctx context.Context, tc txClient, txBytes []byte, accNum, seq uint64, chainID string) (*SignAndBroadcastResult, error) {
+// broadcastAndPoll broadcasts signed tx bytes and polls for inclusion; shared
+// by the fresh-sign and re-broadcast paths. A CheckTx rejection is terminal; a
+// transport error or poll timeout returns an undetermined result (IncludedAt
+// nil) so the caller classifies it as pending and re-checks — a bare error
+// would look terminal and strand a possibly-live tx.
+func broadcastAndPoll(ctx context.Context, tc txClient, txBytes []byte, txHash string, accNum, seq uint64, chainID string) (*SignAndBroadcastResult, error) {
 	broadcastedAt := time.Now().UTC()
+	undetermined := &SignAndBroadcastResult{
+		TxHash: txHash, Sequence: seq, AccountNumber: accNum,
+		ChainID: chainID, BroadcastedAt: broadcastedAt, IncludedAt: nil,
+	}
+
 	resp, err := tc.BroadcastSync(ctx, txBytes)
 	if err != nil {
-		return nil, fmt.Errorf("broadcast: %w", err)
+		signTxLog.Warn("broadcast transport error; reporting inclusion-undetermined",
+			"txHash", txHash, "err", err)
+		return undetermined, nil
 	}
 	if resp.Code != 0 {
 		return nil, Terminal(fmt.Errorf("checkTx rejected: code=%d codespace=%q log=%s",
@@ -293,15 +300,14 @@ func broadcastAndPoll(ctx context.Context, tc txClient, txBytes []byte, accNum, 
 
 	included, perr := pollForInclusion(ctx, tc, resp.TxHash, inclusionPollTimeout, inclusionPollInterval)
 	if perr != nil {
-		// ctx cancellation: don't synthesize "completed" on a truncated task.
+		// ctx cancellation (shutdown) — propagate; a poll timeout is (nil,nil).
 		return nil, perr
 	}
-	out := resultFromTxResponse(resp, accNum, seq, chainID, broadcastedAt, nil)
 	if included != nil {
 		now := time.Now().UTC()
-		out = resultFromTxResponse(included, accNum, seq, chainID, broadcastedAt, &now)
+		return resultFromTxResponse(included, accNum, seq, chainID, broadcastedAt, &now), nil
 	}
-	return out, nil
+	return resultFromTxResponse(resp, accNum, seq, chainID, broadcastedAt, nil), nil
 }
 
 // taskIDMemoPrefix is the literal tag prefix written into the on-chain

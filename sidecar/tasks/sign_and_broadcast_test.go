@@ -624,9 +624,10 @@ func TestAdopt_NotFound_RebroadcastsIdenticalBytes(t *testing.T) {
 	}
 }
 
-// Test 3 (M1): adopt with a QueryTx transport error — non-terminal error,
-// must NOT re-broadcast into uncertainty.
-func TestAdopt_QueryTransportError_NonTerminal_NoRebroadcast(t *testing.T) {
+// Test 3 (M1/B1): adopt with a QueryTx transport error — report pending
+// (inclusion-undetermined), never re-broadcast into uncertainty, never a bare
+// error the controller can't distinguish from terminal.
+func TestAdopt_QueryTransportError_ReportsPending_NoRebroadcast(t *testing.T) {
 	shortenPolls(t)
 	tc := &fakeTxClient{queryErr: errors.New("rpc down")}
 	cfg, addr, cp := markerCfg(t, "pacific-1", tc)
@@ -634,15 +635,34 @@ func TestAdopt_QueryTransportError_NonTerminal_NoRebroadcast(t *testing.T) {
 		TaskID: "task-1", TxHash: "ABCD", TxBytes: []byte{9, 9, 9}, ChainID: "pacific-1",
 	}
 
-	_, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
-	if err == nil {
-		t.Fatal("expected an error on QueryTx transport failure")
+	res, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err != nil {
+		t.Fatalf("transport error should report pending, not error: %v", err)
 	}
-	if IsTerminal(err) {
-		t.Fatalf("transport error must be retryable (non-terminal), got Terminal: %v", err)
+	if res == nil || res.IncludedAt != nil {
+		t.Fatalf("expected an undetermined (pending) result, got %+v", res)
+	}
+	if res.TxHash != "ABCD" {
+		t.Fatalf("pending result must carry the marker txHash, got %q", res.TxHash)
 	}
 	if tc.broadcasts != 0 {
 		t.Fatalf("must NOT re-broadcast on unknown state; saw %d", tc.broadcasts)
+	}
+}
+
+// B1: a broadcast transport error on the fresh path reports pending (the marker
+// is durable, the tx may be in flight), not a bare error.
+func TestBroadcastTransportError_ReportsPending(t *testing.T) {
+	shortenPolls(t)
+	tc := &fakeTxClient{broadcastErr: errors.New("rpc down")}
+	cfg, addr, _ := markerCfg(t, "pacific-1", tc)
+
+	res, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err != nil {
+		t.Fatalf("broadcast transport error should report pending, not error: %v", err)
+	}
+	if res == nil || res.IncludedAt != nil || res.TxHash == "" {
+		t.Fatalf("expected an undetermined (pending) result with a txHash, got %+v", res)
 	}
 }
 

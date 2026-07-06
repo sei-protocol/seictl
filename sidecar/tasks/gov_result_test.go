@@ -5,6 +5,7 @@ import (
 	"time"
 
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
+	abci "github.com/sei-protocol/sei-chain/sei-tendermint/abci/types"
 )
 
 func TestClassifyGovResult_CommittedOK(t *testing.T) {
@@ -59,5 +60,19 @@ func TestParseProposalID(t *testing.T) {
 	}
 	if got := parseProposalID(&sdk.TxResponse{}); got != 0 {
 		t.Fatalf("absent event should yield 0, got %d", got)
+	}
+}
+
+// B2: a /tx response may carry the event as raw ABCI events with byte-keyed
+// attributes (SDK-version dependent) rather than parsed Logs.
+func TestParseProposalID_FromRawEvents(t *testing.T) {
+	resp := &sdk.TxResponse{Events: []abci.Event{{
+		Type: "submit_proposal",
+		Attributes: []abci.EventAttribute{
+			{Key: []byte("proposal_id"), Value: []byte("42")},
+		},
+	}}}
+	if got := parseProposalID(resp); got != 42 {
+		t.Fatalf("proposal id from raw events = %d, want 42", got)
 	}
 }

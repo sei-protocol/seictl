@@ -145,8 +145,7 @@ func (e *Engine) Submit(task Task) (string, error) {
 func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
 	go func() {
 		// Thread the task id through ctx for handlers that need it (e.g.
-		// sign-tx memo tagging). The handler returns its structured result,
-		// which the engine persists on both paths below.
+		// sign-tx memo tagging).
 		ctx := WithTaskID(e.ctx, id)
 		result, err := e.executeRecovered(ctx, taskType, handler, params)
 
@@ -159,9 +158,8 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 			SubmittedAt: submittedAt,
 			CompletedAt: &t,
 		}
-		// Stamp the result on both paths: an error return may still carry a
-		// meaningful result (e.g. a tx hash for an inclusion-undetermined gov
-		// submit). A panic yields a nil result, so nothing partial is stamped.
+		// Stamp on both paths — a failed run may still carry a result (e.g. a
+		// tx hash); a panic yields nil, so nothing partial is stamped.
 		tr.Result = result
 		if err != nil {
 			tr.Error = err.Error()
@@ -186,7 +184,6 @@ func (e *Engine) executeRecovered(ctx context.Context, taskType TaskType, handle
 			log.Error("task handler panicked", "type", taskType, "panic", r, "stack", string(debug.Stack()))
 			taskPanics.WithLabelValues(string(taskType)).Inc()
 			taskFailures.WithLabelValues(string(taskType)).Inc()
-			// result stays nil on panic — a partial result is never stamped.
 			err = fmt.Errorf("task handler panicked: %v", r)
 		}
 	}()

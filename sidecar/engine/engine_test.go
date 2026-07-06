@@ -313,8 +313,10 @@ func TestMarkReadySetsHealthz(t *testing.T) {
 
 func TestHealthzMonotonicity(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskMarkReady:   func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, context.DeadlineExceeded },
+		TaskMarkReady: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+			return nil, context.DeadlineExceeded
+		},
 	})
 
 	id, _ := eng.Submit(Task{Type: TaskMarkReady})

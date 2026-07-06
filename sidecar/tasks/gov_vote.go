@@ -73,7 +73,7 @@ func (g *GovVoter) Handler() engine.TaskHandler {
 		if err != nil {
 			return nil, err
 		}
-		out, cerr := classifyGovResult(string(engine.TaskGovVote), result)
+		out, cerr := classifyGovResult(engine.TaskGovVote, result)
 		govVoteLog.Info("vote broadcast",
 			"taskId", engine.TaskIDFromContext(ctx),
 			"chainId", params.ChainID,

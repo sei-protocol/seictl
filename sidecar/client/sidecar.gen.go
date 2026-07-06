@@ -73,9 +73,10 @@ type TaskResult struct {
 	Id     openapi_types.UUID      `json:"id"`
 	Params *map[string]interface{} `json:"params,omitempty"`
 
-	// Result Handler's structured result, present only when the task
-	// succeeded and emitted one (e.g. assemble-and-upload-genesis
-	// returns {"genesisHash":"<bare-hex>"}). Delivered over this
+	// Result Handler's structured result, present on any task that emits one —
+	// on both success and failure (e.g. assemble-and-upload-genesis returns
+	// {"genesisHash":"<bare-hex>"} on success; a gov submit stamps
+	// txHash/inclusionStatus even when the task fails). Delivered over this
 	// trusted channel rather than via shared storage.
 	Result *map[string]interface{} `json:"result,omitempty"`
 

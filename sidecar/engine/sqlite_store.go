@@ -114,12 +114,9 @@ func (s *SQLiteStore) Delete(id string) (bool, error) {
 	return n > 0, nil
 }
 
-// SaveTxMarker persists a pre-broadcast marker and forces it to disk before
-// returning. Callers MUST let this return before broadcasting so the marker
-// survives a crash. The store runs synchronous=NORMAL (a plain WAL commit is
-// not fsync'd), so we checkpoint to fsync the WAL — closing the power-loss /
-// PVC-detach double-submit window for the (rare) sign-tx path without paying
-// that cost on every other write.
+// SaveTxMarker persists a pre-broadcast marker and fsyncs it (via checkpoint,
+// since the store runs synchronous=NORMAL) before returning, so it survives a
+// crash. Callers MUST let it return before broadcasting.
 func (s *SQLiteStore) SaveTxMarker(m *TxMarker) error {
 	if _, err := s.db.Exec(`
 		INSERT OR REPLACE INTO tx_markers
@@ -130,13 +127,14 @@ func (s *SQLiteStore) SaveTxMarker(m *TxMarker) error {
 	); err != nil {
 		return err
 	}
+	// Ignoring FULL's busy row is safe only under SetMaxOpenConns(1) (no
+	// concurrent readers); if that's raised, use TRUNCATE or assert busy==0.
 	if _, err := s.db.Exec("PRAGMA wal_checkpoint(FULL)"); err != nil {
 		return fmt.Errorf("checkpoint tx marker: %w", err)
 	}
 	return nil
 }
 
-// GetTxMarker returns (nil, nil) when no marker exists for taskID.
 func (s *SQLiteStore) GetTxMarker(taskID string) (*TxMarker, error) {
 	row := s.db.QueryRow(
 		`SELECT task_id, tx_hash, tx_bytes, account_number, sequence, chain_id

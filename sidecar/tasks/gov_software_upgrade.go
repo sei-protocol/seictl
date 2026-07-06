@@ -5,17 +5,13 @@
 // SEI_SIDECAR_AUTHN_MODE; see sidecar/server/auth.go for the
 // deployment guidance.
 //
-// REHYDRATION WARNING — sei-protocol/seictl#174
+// REHYDRATION — sei-protocol/seictl#174
 //
-// MsgSubmitProposal is NOT chain-idempotent: a crash between
-// BroadcastSync and task-result persist re-runs this handler on
-// pod restart, which re-signs at sequence+1 and broadcasts a SECOND
-// proposal with identical content. The operator pays InitialDeposit
-// twice and two near-identical proposals appear on chain. Each future
-// proposal-type handler is a separate file deliberately — that file
-// MUST evaluate its own rehydration impact before shipping. #174
-// tracks the pre-broadcast txHash marker that closes this window for
-// all sign-tx handlers.
+// MsgSubmitProposal is NOT chain-idempotent. Crash-idempotency is provided by
+// the pre-broadcast TxMarker + rehydrate-adopt in SignAndBroadcast: a re-run
+// adopts the in-flight tx (re-broadcasting the identical signed bytes) rather
+// than re-signing, so a crash between broadcast and result-persist no longer
+// produces a second proposal.
 
 package tasks
 
@@ -66,13 +62,9 @@ func NewGovSoftwareUpgrader(cfg engine.ExecutionConfig) *GovSoftwareUpgrader {
 	return &GovSoftwareUpgrader{cfg: cfg}
 }
 
-// Handler delegates to SignAndBroadcast after MsgSubmitProposal
-// construction. See the REHYDRATION WARNING at the top of this file:
-// a crash between broadcast and result-persist re-submits a second
-// proposal with identical content. Acceptable for software-upgrade
-// (the upgrade module applies once at the named height) but the
-// pattern must not be reused for other proposal types without first
-// wiring the pre-broadcast txHash marker from #174.
+// Handler delegates to SignAndBroadcast (which owns the crash-idempotency
+// marker — see the REHYDRATION note at the top of this file) and classifies
+// the outcome via classifyGovResult.
 func (g *GovSoftwareUpgrader) Handler() engine.TaskHandler {
 	return engine.TypedHandlerWithResult(func(ctx context.Context, params GovSoftwareUpgradeRequest) (*GovTxResult, error) {
 		msg, err := buildSoftwareUpgradeMsg(g.cfg, params)
@@ -91,7 +83,7 @@ func (g *GovSoftwareUpgrader) Handler() engine.TaskHandler {
 		if err != nil {
 			return nil, err
 		}
-		out, cerr := classifyGovResult(string(engine.TaskGovSoftwareUpgrade), result)
+		out, cerr := classifyGovResult(engine.TaskGovSoftwareUpgrade, result)
 		govSoftwareUpgradeLog.Info("proposal broadcast",
 			"taskId", engine.TaskIDFromContext(ctx),
 			"chainId", params.ChainID,
