@@ -93,6 +93,9 @@ var serveCmd = cli.Command{
 		if err != nil {
 			return fmt.Errorf("open result store: %w", err)
 		}
+		// The store also backs the pre-broadcast idempotency marker for
+		// sign-tx handlers (must be set before the handlers copy execCfg).
+		execCfg.Checkpointer = store
 
 		snapshotRestorer, err := tasks.NewSnapshotRestorer(homeDir, snapshotBucket, snapshotRegion, chainID, nil, nil)
 		if err != nil {

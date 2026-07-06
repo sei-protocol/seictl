@@ -323,3 +323,67 @@ func TestStoreNullableFields(t *testing.T) {
 		t.Fatal("expected nil CompletedAt")
 	}
 }
+
+// TestTxMarkerRoundTrip covers the pre-broadcast idempotency marker store:
+// save+get is byte-identical, a missing key returns (nil, nil), and a second
+// save for the same TaskID (INSERT OR REPLACE) overwrites cleanly.
+func TestTxMarkerRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+
+	m := &TxMarker{
+		TaskID:        "task-round-trip",
+		TxHash:        "ABCDEF0123456789",
+		TxBytes:       []byte{0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0xFF},
+		AccountNumber: 17,
+		Sequence:      42,
+		ChainID:       "pacific-1",
+	}
+	if err := s.SaveTxMarker(m); err != nil {
+		t.Fatalf("SaveTxMarker: %v", err)
+	}
+
+	got, err := s.GetTxMarker(m.TaskID)
+	if err != nil {
+		t.Fatalf("GetTxMarker: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected marker, got nil")
+	}
+	if string(got.TxBytes) != string(m.TxBytes) {
+		t.Fatalf("TxBytes not byte-identical: got %x want %x", got.TxBytes, m.TxBytes)
+	}
+	if got.TxHash != m.TxHash || got.AccountNumber != m.AccountNumber ||
+		got.Sequence != m.Sequence || got.ChainID != m.ChainID {
+		t.Fatalf("marker fields differ: got %+v want %+v", got, m)
+	}
+
+	// Missing key → (nil, nil).
+	miss, err := s.GetTxMarker("missing")
+	if err != nil {
+		t.Fatalf("GetTxMarker(missing): %v", err)
+	}
+	if miss != nil {
+		t.Fatalf("expected nil for missing marker, got %+v", miss)
+	}
+
+	// INSERT OR REPLACE: second save with same TaskID overwrites.
+	m2 := &TxMarker{
+		TaskID:        m.TaskID,
+		TxHash:        "1111111111111111",
+		TxBytes:       []byte{0x11, 0x22},
+		AccountNumber: 100,
+		Sequence:      101,
+		ChainID:       "atlantic-2",
+	}
+	if err := s.SaveTxMarker(m2); err != nil {
+		t.Fatalf("second SaveTxMarker: %v", err)
+	}
+	got2, err := s.GetTxMarker(m.TaskID)
+	if err != nil {
+		t.Fatalf("GetTxMarker after replace: %v", err)
+	}
+	if got2.TxHash != m2.TxHash || string(got2.TxBytes) != string(m2.TxBytes) ||
+		got2.Sequence != m2.Sequence || got2.ChainID != m2.ChainID {
+		t.Fatalf("replace did not overwrite cleanly: got %+v want %+v", got2, m2)
+	}
+}

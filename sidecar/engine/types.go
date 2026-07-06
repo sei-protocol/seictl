@@ -138,4 +138,9 @@ type ExecutionConfig struct {
 	// RPC talks to the co-located seid CometBFT RPC. Sign-tx handlers
 	// use it for the chain-confusion guard and inclusion polling.
 	RPC *rpc.Client
+
+	// Checkpointer persists a pre-broadcast TxMarker so a crashed sign-tx
+	// task re-adopts its in-flight tx on re-run rather than re-signing.
+	// Nil when no durable store is configured.
+	Checkpointer Checkpointer
 }

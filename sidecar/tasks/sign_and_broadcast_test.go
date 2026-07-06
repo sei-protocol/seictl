@@ -2,7 +2,9 @@ package tasks
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,6 +40,12 @@ type fakeTxClient struct {
 	queryDefault *sdk.TxResponse
 	queryErr     error
 	queryCalls   int
+
+	// queryFoundAfter makes the first N QueryTx calls return not-found;
+	// calls after that return queryDefault (found). Zero preserves the
+	// default behavior. Used to model a committed-but-unindexed tx that
+	// the /tx index only surfaces on a later re-query.
+	queryFoundAfter int
 }
 
 func (f *fakeTxClient) AccountNumberSequence(_ context.Context, _ sdk.AccAddress) (uint64, uint64, error) {
@@ -64,12 +72,61 @@ func (f *fakeTxClient) QueryTx(_ context.Context, hash string) (*sdk.TxResponse,
 	if f.queryErr != nil {
 		return nil, false, f.queryErr
 	}
+	if f.queryCalls <= f.queryFoundAfter {
+		return nil, false, nil
+	}
 	if f.queryDefault != nil {
 		resp := *f.queryDefault
 		resp.TxHash = hash
 		return &resp, true, nil
 	}
 	return nil, false, nil
+}
+
+// fakeCheckpointer is an in-memory engine.Checkpointer test double.
+type fakeCheckpointer struct {
+	mu      sync.Mutex
+	markers map[string]*engine.TxMarker
+	saveErr error
+	saves   int
+
+	// tc lets SaveTxMarker record whether a broadcast had already happened
+	// at save time, so tests can assert the marker is persisted BEFORE the
+	// broadcast side effect. saveBroadcasts is tc.broadcasts captured on the
+	// most recent SaveTxMarker call.
+	tc             *fakeTxClient
+	saveBroadcasts int
+}
+
+func newFakeCheckpointer(tc *fakeTxClient) *fakeCheckpointer {
+	return &fakeCheckpointer{markers: map[string]*engine.TxMarker{}, tc: tc}
+}
+
+func (f *fakeCheckpointer) SaveTxMarker(m *engine.TxMarker) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.saves++
+	if f.tc != nil {
+		f.tc.mu.Lock()
+		f.saveBroadcasts = f.tc.broadcasts
+		f.tc.mu.Unlock()
+	}
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	cp := *m
+	f.markers[m.TaskID] = &cp
+	return nil
+}
+
+func (f *fakeCheckpointer) GetTxMarker(taskID string) (*engine.TxMarker, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, ok := f.markers[taskID]
+	if !ok {
+		return nil, nil
+	}
+	return m, nil
 }
 
 // testKeyring returns a memory keyring with one entry under "node_admin".
@@ -475,6 +532,242 @@ func TestMemoCapEnforcedAfterTaskIDAppend(t *testing.T) {
 	}, addr)
 	if !IsTerminal(err) || !strings.Contains(err.Error(), "memo length") {
 		t.Fatalf("want Terminal memo-length error, got %v", err)
+	}
+}
+
+// --- Idempotency marker / adopt tests --------------------------------
+
+// shortenPolls shrinks the poll/re-query timeouts so marker tests that
+// exercise the not-found paths stay fast, restoring them after the test.
+func shortenPolls(t *testing.T) {
+	t.Helper()
+	pt, pi, aq := inclusionPollTimeout, inclusionPollInterval, adoptReQueryTimeout
+	inclusionPollTimeout = 50 * time.Millisecond
+	inclusionPollInterval = 5 * time.Millisecond
+	adoptReQueryTimeout = 50 * time.Millisecond
+	t.Cleanup(func() {
+		inclusionPollTimeout = pt
+		inclusionPollInterval = pi
+		adoptReQueryTimeout = aq
+	})
+}
+
+// markerCfg wires a checkpointer-backed ExecutionConfig around the given fake.
+func markerCfg(t *testing.T, chainID string, tc *fakeTxClient) (engine.ExecutionConfig, sdk.AccAddress, *fakeCheckpointer) {
+	t.Helper()
+	cfg, addr := newGuardCfg(t, chainID)
+	cp := newFakeCheckpointer(tc)
+	cfg.Checkpointer = cp
+	return cfg, addr, cp
+}
+
+func markerInput(t *testing.T, addr sdk.AccAddress) SignAndBroadcastInput {
+	t.Helper()
+	return SignAndBroadcastInput{
+		ChainID: "pacific-1",
+		KeyName: "node_admin",
+		Msg:     makeMsgVote(t, addr),
+		Fees:    "4000usei",
+		Gas:     200_000,
+		TaskID:  "task-1",
+	}
+}
+
+// Test 1: adopt with the tx already on chain — build the result from the
+// chain, never re-broadcast, never re-sign (broadcasts==0 is the proxy).
+func TestAdopt_FoundOnChain_NoRebroadcast(t *testing.T) {
+	shortenPolls(t)
+	tc := &fakeTxClient{queryDefault: &sdk.TxResponse{Code: 0, Height: 9, TxHash: "seed"}}
+	cfg, addr, cp := markerCfg(t, "pacific-1", tc)
+	cp.markers["task-1"] = &engine.TxMarker{
+		TaskID: "task-1", TxHash: "ABCD", TxBytes: []byte{1, 2, 3}, ChainID: "pacific-1",
+	}
+
+	res, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err != nil {
+		t.Fatalf("adopt-found should succeed: %v", err)
+	}
+	if res.Height != 9 {
+		t.Fatalf("result should be built from chain (Height 9), got %d", res.Height)
+	}
+	if tc.broadcasts != 0 {
+		t.Fatalf("adopt-found must not re-broadcast; saw %d", tc.broadcasts)
+	}
+	if tc.queryCalls < 1 {
+		t.Fatalf("expected at least one QueryTx, got %d", tc.queryCalls)
+	}
+}
+
+// Test 2: adopt not-found → re-broadcast the identical marker bytes.
+func TestAdopt_NotFound_RebroadcastsIdenticalBytes(t *testing.T) {
+	shortenPolls(t)
+	tc := &fakeTxClient{
+		queryDefault:  nil, // not found
+		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h"},
+	}
+	cfg, addr, cp := markerCfg(t, "pacific-1", tc)
+	want := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02}
+	cp.markers["task-1"] = &engine.TxMarker{
+		TaskID: "task-1", TxHash: "ABCD", TxBytes: want,
+		AccountNumber: 17, Sequence: 42, ChainID: "pacific-1",
+	}
+
+	_, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err != nil {
+		t.Fatalf("adopt not-found re-broadcast should succeed: %v", err)
+	}
+	if tc.broadcasts != 1 {
+		t.Fatalf("expected exactly 1 re-broadcast, got %d", tc.broadcasts)
+	}
+	if string(tc.lastTxBytes) != string(want) {
+		t.Fatalf("re-broadcast must use the marker's exact bytes; got %x want %x", tc.lastTxBytes, want)
+	}
+}
+
+// Test 3 (M1): adopt with a QueryTx transport error — non-terminal error,
+// must NOT re-broadcast into uncertainty.
+func TestAdopt_QueryTransportError_NonTerminal_NoRebroadcast(t *testing.T) {
+	shortenPolls(t)
+	tc := &fakeTxClient{queryErr: errors.New("rpc down")}
+	cfg, addr, cp := markerCfg(t, "pacific-1", tc)
+	cp.markers["task-1"] = &engine.TxMarker{
+		TaskID: "task-1", TxHash: "ABCD", TxBytes: []byte{9, 9, 9}, ChainID: "pacific-1",
+	}
+
+	_, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err == nil {
+		t.Fatal("expected an error on QueryTx transport failure")
+	}
+	if IsTerminal(err) {
+		t.Fatalf("transport error must be retryable (non-terminal), got Terminal: %v", err)
+	}
+	if tc.broadcasts != 0 {
+		t.Fatalf("must NOT re-broadcast on unknown state; saw %d", tc.broadcasts)
+	}
+}
+
+// Test 4 (H1): adopt not-found → re-broadcast is CheckTx-rejected (seq
+// mismatch → Terminal), but the re-query guard finds the tx actually
+// landed → the guard rescues it into a success.
+func TestAdopt_RebroadcastRejectedButLanded_RequeryGuardRescues(t *testing.T) {
+	shortenPolls(t)
+	tc := &fakeTxClient{
+		queryFoundAfter: 1, // first QueryTx not-found, then found
+		queryDefault:    &sdk.TxResponse{Code: 0, Height: 11, TxHash: "seed"},
+		broadcastResp:   &sdk.TxResponse{Code: 32}, // sequence mismatch → Terminal
+	}
+	cfg, addr, cp := markerCfg(t, "pacific-1", tc)
+	cp.markers["task-1"] = &engine.TxMarker{
+		TaskID: "task-1", TxHash: "ABCD", TxBytes: []byte{1}, ChainID: "pacific-1",
+	}
+
+	res, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err != nil {
+		t.Fatalf("re-query guard should rescue a landed tx from a false Terminal fail: %v", err)
+	}
+	if res == nil || res.Height != 11 {
+		t.Fatalf("result should be built from the re-queried chain tx (Height 11), got %+v", res)
+	}
+	if tc.broadcasts != 1 {
+		t.Fatalf("expected exactly 1 re-broadcast, got %d", tc.broadcasts)
+	}
+}
+
+// Test 5: fresh path persists the marker BEFORE broadcasting.
+func TestFresh_MarkerPersistedBeforeBroadcast(t *testing.T) {
+	shortenPolls(t)
+	tc := &fakeTxClient{
+		accountNumber: 17,
+		sequence:      42,
+		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h"},
+		queryDefault:  &sdk.TxResponse{Code: 0, Height: 7}, // inclusion on first poll
+	}
+	cfg, addr, cp := markerCfg(t, "pacific-1", tc)
+
+	_, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err != nil {
+		t.Fatalf("fresh broadcast should succeed: %v", err)
+	}
+	if cp.saves != 1 {
+		t.Fatalf("expected exactly 1 SaveTxMarker, got %d", cp.saves)
+	}
+	if cp.saveBroadcasts != 0 {
+		t.Fatalf("marker must be saved before broadcast; broadcasts at save time = %d", cp.saveBroadcasts)
+	}
+	if tc.broadcasts != 1 {
+		t.Fatalf("expected 1 broadcast after save, got %d", tc.broadcasts)
+	}
+	if _, ok := cp.markers["task-1"]; !ok {
+		t.Fatal("marker for task-1 must exist in the checkpointer after broadcast")
+	}
+}
+
+// Test 6: SaveTxMarker failure aborts before any broadcast.
+func TestFresh_SaveMarkerFails_NoBroadcast(t *testing.T) {
+	shortenPolls(t)
+	tc := &fakeTxClient{
+		accountNumber: 17,
+		sequence:      42,
+		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h"},
+	}
+	cfg, addr, cp := markerCfg(t, "pacific-1", tc)
+	cp.saveErr = errors.New("disk full")
+
+	_, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err == nil {
+		t.Fatal("expected error when SaveTxMarker fails")
+	}
+	if tc.broadcasts != 0 {
+		t.Fatalf("must never broadcast without a durable marker; saw %d", tc.broadcasts)
+	}
+}
+
+// Test 7: no checkpointer configured (back-compat) — broadcasts once, no panic.
+func TestNoCheckpointer_BroadcastsOnce(t *testing.T) {
+	shortenPolls(t)
+	cfg, addr := newGuardCfg(t, "pacific-1") // no Checkpointer
+	tc := &fakeTxClient{
+		accountNumber: 17,
+		sequence:      42,
+		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h"},
+		queryDefault:  &sdk.TxResponse{Code: 0, Height: 7},
+	}
+
+	res, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err != nil {
+		t.Fatalf("back-compat path should succeed: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected a result")
+	}
+	if tc.broadcasts != 1 {
+		t.Fatalf("expected exactly 1 broadcast, got %d", tc.broadcasts)
+	}
+}
+
+// Test 8 (L1): the persisted marker's TxHash equals sha256 of the exact
+// bytes that were broadcast.
+func TestFresh_MarkerHashMatchesBroadcastBytes(t *testing.T) {
+	shortenPolls(t)
+	tc := &fakeTxClient{
+		accountNumber: 17,
+		sequence:      42,
+		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h"},
+		queryDefault:  &sdk.TxResponse{Code: 0, Height: 7},
+	}
+	cfg, addr, cp := markerCfg(t, "pacific-1", tc)
+
+	_, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err != nil {
+		t.Fatalf("fresh broadcast should succeed: %v", err)
+	}
+	m, ok := cp.markers["task-1"]
+	if !ok {
+		t.Fatal("marker for task-1 missing")
+	}
+	want := fmt.Sprintf("%X", sha256.Sum256(tc.lastTxBytes))
+	if m.TxHash != want {
+		t.Fatalf("marker TxHash %q != sha256 of broadcast bytes %q", m.TxHash, want)
 	}
 }
 

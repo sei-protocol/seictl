@@ -114,5 +114,39 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	if version < 5 {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		// tx_markers is the pre-broadcast idempotency record for sign-tx
+		// tasks: the signed tx bytes are persisted before broadcast so a
+		// crashed task re-adopts (or re-broadcasts) the identical tx on re-run
+		// instead of re-signing. Engine-owned; distinct from task_results.
+		if _, err := tx.Exec(`
+			CREATE TABLE IF NOT EXISTS tx_markers (
+				task_id        TEXT PRIMARY KEY,
+				tx_hash        TEXT    NOT NULL,
+				tx_bytes       BLOB    NOT NULL,
+				account_number INTEGER NOT NULL,
+				sequence       INTEGER NOT NULL,
+				chain_id       TEXT    NOT NULL,
+				created_at     TEXT    NOT NULL
+			);
+		`); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 5"); err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
