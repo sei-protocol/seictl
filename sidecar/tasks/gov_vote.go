@@ -56,10 +56,10 @@ func NewGovVoter(cfg engine.ExecutionConfig) *GovVoter {
 // Stale proposals are rejected by CheckTx and surface as Terminal. We
 // do not pre-check via chain query — that opens a TOCTOU window.
 func (g *GovVoter) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params GovVoteRequest) error {
+	return engine.TypedHandlerWithResult(func(ctx context.Context, params GovVoteRequest) (*GovTxResult, error) {
 		msg, err := buildVoteMsg(g.cfg, params)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		result, err := SignAndBroadcast(ctx, g.cfg, SignAndBroadcastInput{
 			ChainID: params.ChainID,
@@ -71,23 +71,18 @@ func (g *GovVoter) Handler() engine.TaskHandler {
 			TaskID:  engine.TaskIDFromContext(ctx),
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		inclusionStatus := "undetermined"
-		if result.IncludedAt != nil {
-			inclusionStatus = "included"
-		}
+		out, cerr := classifyGovResult(engine.TaskGovVote, result)
 		govVoteLog.Info("vote broadcast",
 			"taskId", engine.TaskIDFromContext(ctx),
 			"chainId", params.ChainID,
-			"keyName", params.KeyName,
 			"proposalId", params.ProposalID,
 			"option", params.Option,
-			"txHash", result.TxHash,
-			"height", result.Height,
-			"sequence", result.Sequence,
-			"inclusionStatus", inclusionStatus)
-		return nil
+			"txHash", out.TxHash,
+			"height", out.Height,
+			"inclusionStatus", out.InclusionStatus)
+		return out, cerr
 	})
 }
 

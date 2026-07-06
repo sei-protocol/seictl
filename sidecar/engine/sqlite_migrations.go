@@ -114,5 +114,38 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	if version < 5 {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		// tx_markers: pre-broadcast signed-tx bytes so a crashed sign-tx task
+		// re-adopts the identical tx instead of re-signing. Engine-owned. A
+		// pre-v5 downgrade leaves markers unread (the guard degrades).
+		if _, err := tx.Exec(`
+			CREATE TABLE IF NOT EXISTS tx_markers (
+				task_id        TEXT PRIMARY KEY,
+				tx_hash        TEXT    NOT NULL,
+				tx_bytes       BLOB    NOT NULL,
+				account_number INTEGER NOT NULL,
+				sequence       INTEGER NOT NULL,
+				chain_id       TEXT    NOT NULL,
+				created_at     TEXT    NOT NULL
+			);
+		`); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 5"); err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

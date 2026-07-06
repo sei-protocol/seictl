@@ -237,10 +237,12 @@ components:
         result:
           type: object
           additionalProperties: true
+          x-go-type: json.RawMessage
           description: |
-            Handler's structured result, present only when the task
-            succeeded and emitted one (e.g. assemble-and-upload-genesis
-            returns {"genesisHash":"<bare-hex>"}). Delivered over this
+            Handler's structured result, present on any task that emits one —
+            on both success and failure (e.g. assemble-and-upload-genesis
+            returns {"genesisHash":"<bare-hex>"} on success; a gov submit stamps
+            txHash/inclusionStatus even when the task fails). Delivered over this
             trusted channel rather than via shared storage.
         error:
           type: string

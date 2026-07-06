@@ -123,7 +123,7 @@ func TestAssembler_MissingParams(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := handler(context.Background(), tt.params); err == nil {
+			if _, err := handler(context.Background(), tt.params); err == nil {
 				t.Fatal("expected error")
 			}
 		})
@@ -137,7 +137,7 @@ func TestAssembler_S3DownloadFailure(t *testing.T) {
 	}
 
 	handler := NewGenesisAssembler(homeDir, "b", "r", "c", s3Factory, nil).Handler()
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"accountBalance": "10000000usei", "namespace": "default",
 		"nodes": []any{map[string]any{"name": "missing-node"}},
 	})

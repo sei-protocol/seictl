@@ -11,6 +11,7 @@ package tasks
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,6 +77,9 @@ type SignAndBroadcastResult struct {
 	AccountNumber uint64    `json:"accountNumber"`
 	ChainID       string    `json:"chainId"`
 	BroadcastedAt time.Time `json:"broadcastedAt"`
+	// ProposalID is parsed from the committed tx's submit_proposal event; 0
+	// for votes, non-gov txs, or a not-yet-included tx.
+	ProposalID uint64 `json:"proposalId,omitempty"`
 	// IncludedAt is nil when inclusion polling timed out after a
 	// successful broadcast. nil means UNDETERMINED — the tx may still
 	// land later. It does NOT mean "not included". Callers must
@@ -167,6 +171,18 @@ func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClie
 		return nil, err
 	}
 
+	// Adopt an in-flight tx from a prior crashed run instead of signing anew.
+	if cfg.Checkpointer != nil && in.TaskID != "" {
+		marker, err := cfg.Checkpointer.GetTxMarker(in.TaskID)
+		if err != nil {
+			return nil, fmt.Errorf("read tx marker: %w", err)
+		}
+		if marker != nil {
+			signTxLog.Info("adopting in-flight tx from marker", "taskId", in.TaskID, "txHash", marker.TxHash)
+			return adoptMarker(ctx, tc, marker)
+		}
+	}
+
 	accNum, seq, err := tc.AccountNumberSequence(ctx, fromAddr)
 	if err != nil {
 		return nil, fmt.Errorf("account retrieve %s: %w", fromAddr.String(), err)
@@ -198,14 +214,84 @@ func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClie
 		return nil, fmt.Errorf("encode tx: %w", err)
 	}
 
-	broadcastedAt := time.Now().UTC()
+	txHash := fmt.Sprintf("%X", sha256.Sum256(txBytes))
+
+	// Marker must be durable before broadcast so a crash re-adopts this tx.
+	if cfg.Checkpointer != nil && in.TaskID != "" {
+		if err := cfg.Checkpointer.SaveTxMarker(&engine.TxMarker{
+			TaskID:        in.TaskID,
+			TxHash:        txHash,
+			TxBytes:       txBytes,
+			AccountNumber: accNum,
+			Sequence:      seq,
+			ChainID:       in.ChainID,
+		}); err != nil {
+			return nil, fmt.Errorf("persist tx marker: %w", err)
+		}
+	} else {
+		signTxLog.Warn("no checkpointer configured; broadcasting without crash-idempotency marker",
+			"taskId", in.TaskID)
+	}
+
 	signTxLog.Info("broadcasting tx",
 		"taskId", in.TaskID, "chainId", in.ChainID,
 		"sequence", seq, "accountNumber", accNum, "gas", in.Gas, "fees", in.Fees)
+	return broadcastAndPoll(ctx, tc, txBytes, txHash, accNum, seq, in.ChainID)
+}
+
+// adoptReQueryTimeout bounds the re-query after an adopt re-broadcast is
+// CheckTx-rejected. Var so tests can shorten it.
+var adoptReQueryTimeout = 5 * time.Second
+
+// adoptMarker resumes a prior run's tx: already on chain → build from it; query
+// error → report undetermined (retry, don't re-broadcast blind); not indexed →
+// re-broadcast the identical bytes (never re-sign; CometBFT dedups by hash).
+// The /tx index lags commit, so a CheckTx rejection on that re-broadcast likely
+// means the tx already landed — re-query before failing.
+func adoptMarker(ctx context.Context, tc txClient, m *engine.TxMarker) (*SignAndBroadcastResult, error) {
+	resp, found, err := tc.QueryTx(ctx, m.TxHash)
+	if err != nil {
+		// Unknown state — report undetermined so the caller re-checks; the
+		// durable marker makes a later re-broadcast safe.
+		signTxLog.Warn("adopt query transport error; reporting inclusion-undetermined",
+			"txHash", m.TxHash, "err", err)
+		return &SignAndBroadcastResult{
+			TxHash: m.TxHash, AccountNumber: m.AccountNumber, Sequence: m.Sequence,
+			ChainID: m.ChainID, BroadcastedAt: time.Now().UTC(), IncludedAt: nil,
+		}, nil
+	}
+	if found {
+		now := time.Now().UTC()
+		return resultFromTxResponse(resp, m.AccountNumber, m.Sequence, m.ChainID, now, &now), nil
+	}
+
+	out, berr := broadcastAndPoll(ctx, tc, m.TxBytes, m.TxHash, m.AccountNumber, m.Sequence, m.ChainID)
+	if berr != nil && IsTerminal(berr) {
+		if included, qerr := pollForInclusion(ctx, tc, m.TxHash, adoptReQueryTimeout, inclusionPollInterval); qerr == nil && included != nil {
+			now := time.Now().UTC()
+			return resultFromTxResponse(included, m.AccountNumber, m.Sequence, m.ChainID, now, &now), nil
+		}
+	}
+	return out, berr
+}
+
+// broadcastAndPoll broadcasts signed tx bytes and polls for inclusion; shared
+// by the fresh-sign and re-broadcast paths. A CheckTx rejection is terminal; a
+// transport error or poll timeout returns an undetermined result (IncludedAt
+// nil) so the caller classifies it as pending and re-checks — a bare error
+// would look terminal and strand a possibly-live tx.
+func broadcastAndPoll(ctx context.Context, tc txClient, txBytes []byte, txHash string, accNum, seq uint64, chainID string) (*SignAndBroadcastResult, error) {
+	broadcastedAt := time.Now().UTC()
+	undetermined := &SignAndBroadcastResult{
+		TxHash: txHash, Sequence: seq, AccountNumber: accNum,
+		ChainID: chainID, BroadcastedAt: broadcastedAt, IncludedAt: nil,
+	}
 
 	resp, err := tc.BroadcastSync(ctx, txBytes)
 	if err != nil {
-		return nil, fmt.Errorf("broadcast: %w", err)
+		signTxLog.Warn("broadcast transport error; reporting inclusion-undetermined",
+			"txHash", txHash, "err", err)
+		return undetermined, nil
 	}
 	if resp.Code != 0 {
 		return nil, Terminal(fmt.Errorf("checkTx rejected: code=%d codespace=%q log=%s",
@@ -214,15 +300,14 @@ func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClie
 
 	included, perr := pollForInclusion(ctx, tc, resp.TxHash, inclusionPollTimeout, inclusionPollInterval)
 	if perr != nil {
-		// ctx cancellation: don't synthesize "completed" on a truncated task.
+		// ctx cancellation (shutdown) — propagate; a poll timeout is (nil,nil).
 		return nil, perr
 	}
-	out := resultFromTxResponse(resp, accNum, seq, in.ChainID, broadcastedAt, nil)
 	if included != nil {
 		now := time.Now().UTC()
-		out = resultFromTxResponse(included, accNum, seq, in.ChainID, broadcastedAt, &now)
+		return resultFromTxResponse(included, accNum, seq, chainID, broadcastedAt, &now), nil
 	}
-	return out, nil
+	return resultFromTxResponse(resp, accNum, seq, chainID, broadcastedAt, nil), nil
 }
 
 // taskIDMemoPrefix is the literal tag prefix written into the on-chain
@@ -385,5 +470,6 @@ func resultFromTxResponse(resp *sdk.TxResponse, accNum, seq uint64, chainID stri
 		ChainID:       chainID,
 		BroadcastedAt: broadcastedAt,
 		IncludedAt:    includedAt,
+		ProposalID:    parseProposalID(resp),
 	}
 }

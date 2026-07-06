@@ -48,8 +48,13 @@ type Task struct {
 }
 
 // TaskHandler executes a specific task type. Handlers MUST be idempotent:
-// the engine may re-execute a handler after a crash recovery.
-type TaskHandler func(ctx context.Context, params map[string]any) error
+// the engine may re-execute a handler after a crash recovery. The returned
+// json.RawMessage is the handler's optional structured result, persisted on
+// TaskResult.Result and surfaced over GET /v0/tasks/{id}; handlers with no
+// result return nil. The engine stamps the result on both the success and
+// error paths (a handler returning an error may still carry a result, e.g. a
+// tx hash for an inclusion-undetermined gov submit).
+type TaskHandler func(ctx context.Context, params map[string]any) (json.RawMessage, error)
 
 type taskIDKey struct{}
 
@@ -67,35 +72,6 @@ func TaskIDFromContext(ctx context.Context) string {
 // calls this in runTask; tests use it to bypass Submit.
 func WithTaskID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, taskIDKey{}, id)
-}
-
-// resultSink is the mutable slot a handler writes its structured result
-// into. The engine threads a sink through ctx (alongside the task ID) so a
-// handler can emit an in-band result without changing the TaskHandler
-// signature. The engine reads sink.payload only after the handler returns,
-// on the same goroutine — no concurrent access, no lock needed.
-type resultSink struct {
-	payload json.RawMessage
-}
-
-type resultSinkKey struct{}
-
-// withResultSink attaches a result sink to ctx. The engine calls this in
-// runTask; tests that exercise SetTaskResult directly use it too.
-func withResultSink(ctx context.Context, sink *resultSink) context.Context {
-	return context.WithValue(ctx, resultSinkKey{}, sink)
-}
-
-// SetTaskResult records a handler's structured result for the current task.
-// It is captured by the engine and persisted on the TaskResult's Result
-// field, then surfaced over the trusted controller↔sidecar task-result
-// channel (GET /v0/tasks/{id}). Handlers that emit no result behave exactly
-// as before. A no-op when ctx carries no sink (e.g. a handler invoked
-// outside the engine in a unit test).
-func SetTaskResult(ctx context.Context, result json.RawMessage) {
-	if sink, ok := ctx.Value(resultSinkKey{}).(*resultSink); ok && sink != nil {
-		sink.payload = result
-	}
 }
 
 // TaskStatus represents the lifecycle state of a task.
@@ -162,4 +138,9 @@ type ExecutionConfig struct {
 	// RPC talks to the co-located seid CometBFT RPC. Sign-tx handlers
 	// use it for the chain-confusion guard and inclusion polling.
 	RPC *rpc.Client
+
+	// Checkpointer persists a pre-broadcast TxMarker so a crashed sign-tx
+	// task re-adopts its in-flight tx on re-run rather than re-signing.
+	// Nil when no durable store is configured.
+	Checkpointer Checkpointer
 }

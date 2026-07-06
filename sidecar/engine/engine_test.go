@@ -66,7 +66,7 @@ func waitForResult(t *testing.T, eng *Engine, id string) *TaskResult {
 
 func TestSubmitAccepts(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskMarkReady: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	id, err := eng.Submit(Task{Type: TaskMarkReady})
@@ -80,9 +80,8 @@ func TestSubmitAccepts(t *testing.T) {
 
 func TestSubmitCapturesInBandResult(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
-			SetTaskResult(ctx, json.RawMessage(`{"genesisHash":"deadbeef"}`))
-			return nil
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+			return json.RawMessage(`{"genesisHash":"deadbeef"}`), nil
 		},
 	})
 
@@ -100,12 +99,43 @@ func TestSubmitCapturesInBandResult(t *testing.T) {
 	}
 }
 
+// A ctx-cancelled run (engine shutdown mid-task) must be left 'running' for
+// RehydrateStaleTasks, not persisted as Failed — else an in-flight sign-tx is
+// stranded (its result/marker never revisited).
+func TestRunTaskCtxCancel_LeavesRunningForRehydrate(t *testing.T) {
+	ran := make(chan struct{})
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+			close(ran)
+			return nil, context.Canceled // simulates a poll truncated by shutdown
+		},
+	})
+
+	id, err := eng.Submit(Task{Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	<-ran
+	time.Sleep(50 * time.Millisecond) // let runTask's post-handler guard run
+
+	r := eng.GetResult(id)
+	if r == nil {
+		t.Fatal("task row missing")
+	}
+	if r.Status != TaskStatusRunning {
+		t.Fatalf("ctx-cancelled task must stay running for rehydration, got %q", r.Status)
+	}
+	if r.CompletedAt != nil {
+		t.Fatal("truncated task must not be marked terminal")
+	}
+}
+
 func TestSubmitNoResultPayloadIsNil(t *testing.T) {
 	// Backward-compat: a handler that emits nothing leaves Result nil and
 	// the field is omitted from the wire, so the deployed controller is
 	// unaffected.
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	id, err := eng.Submit(Task{Type: TaskConfigPatch})
@@ -129,13 +159,12 @@ func TestSubmitNoResultPayloadIsNil(t *testing.T) {
 	}
 }
 
-func TestSubmitFailedTaskDropsResult(t *testing.T) {
-	// A partial result from a failed run must not be stamped as
-	// authoritative.
+func TestSubmitFailedTaskStampsResult(t *testing.T) {
+	// The engine stamps the handler's returned result on both the success
+	// and error paths, so a failed run still carries its (partial) result.
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
-			SetTaskResult(ctx, json.RawMessage(`{"genesisHash":"partial"}`))
-			return errors.New("boom")
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+			return json.RawMessage(`{"genesisHash":"partial"}`), errors.New("boom")
 		},
 	})
 
@@ -148,8 +177,11 @@ func TestSubmitFailedTaskDropsResult(t *testing.T) {
 	if result.Status != TaskStatusFailed {
 		t.Fatalf("status = %q, want failed", result.Status)
 	}
-	if result.Result != nil {
-		t.Fatalf("failed task must not carry a result; got %q", string(result.Result))
+	if result.Error != "boom" {
+		t.Fatalf("error = %q, want boom", result.Error)
+	}
+	if string(result.Result) != `{"genesisHash":"partial"}` {
+		t.Fatalf("failed task should carry its result; got %q", string(result.Result))
 	}
 }
 
@@ -164,7 +196,7 @@ func TestSubmitRejectsUnknownType(t *testing.T) {
 
 func TestSubmitCallerProvidedID(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	const customID = "aaaaaaaa-1111-2222-3333-444444444444"
@@ -184,7 +216,7 @@ func TestSubmitCallerProvidedID(t *testing.T) {
 
 func TestSubmitInvalidIDReturnsTypedError(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	_, err := eng.Submit(Task{ID: "not-a-uuid", Type: TaskConfigPatch})
@@ -202,10 +234,10 @@ func TestSubmitDedupExistingActive(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
 			close(started)
 			<-blocked
-			return nil
+			return nil, nil
 		},
 	}, newTestStore(t))
 
@@ -234,7 +266,7 @@ func TestSubmitDedupExistingActive(t *testing.T) {
 
 func TestSubmitDedupExistingCompleted(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	const dedupID = "cccccccc-1111-2222-3333-444444444444"
@@ -252,7 +284,7 @@ func TestSubmitDedupExistingCompleted(t *testing.T) {
 
 func TestSubmitNoIDGeneratesUUID(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	id1, _ := eng.Submit(Task{Type: TaskConfigPatch})
@@ -269,10 +301,10 @@ func TestSubmitNoIDGeneratesUUID(t *testing.T) {
 func TestSubmitConcurrent(t *testing.T) {
 	var callCount atomic.Int32
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
 			callCount.Add(1)
 			time.Sleep(20 * time.Millisecond)
-			return nil
+			return nil, nil
 		},
 	})
 
@@ -295,7 +327,7 @@ func TestSubmitConcurrent(t *testing.T) {
 
 func TestMarkReadySetsHealthz(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskMarkReady: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	if eng.Healthz() {
@@ -312,8 +344,10 @@ func TestMarkReadySetsHealthz(t *testing.T) {
 
 func TestHealthzMonotonicity(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskMarkReady:   func(_ context.Context, _ map[string]any) error { return nil },
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return context.DeadlineExceeded },
+		TaskMarkReady: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+			return nil, context.DeadlineExceeded
+		},
 	})
 
 	id, _ := eng.Submit(Task{Type: TaskMarkReady})
@@ -330,7 +364,7 @@ func TestHealthzMonotonicity(t *testing.T) {
 
 func TestStatusReflectsReady(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskMarkReady: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	if eng.Status().Status != "Initializing" {
@@ -349,7 +383,7 @@ func TestStatusReflectsReady(t *testing.T) {
 
 func TestGetResultReturnsCompleted(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
@@ -372,7 +406,7 @@ func TestGetResultReturnsCompleted(t *testing.T) {
 func TestGetResultReturnsFailure(t *testing.T) {
 	handlerErr := errors.New("handler failed")
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return handlerErr },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, handlerErr },
 	})
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
@@ -392,10 +426,10 @@ func TestGetResultReturnsRunning(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
 			close(started)
 			<-blocked
-			return nil
+			return nil, nil
 		},
 	}, newTestStore(t))
 
@@ -427,7 +461,7 @@ func TestGetResultReturnsRunning(t *testing.T) {
 
 func TestRecentResultsReturnsAll(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	var ids []string
@@ -451,10 +485,10 @@ func TestRecentResultsIncludesActive(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
 			close(started)
 			<-blocked
-			return nil
+			return nil, nil
 		},
 	}, newTestStore(t))
 
@@ -482,7 +516,7 @@ func TestRecentResultsIncludesActive(t *testing.T) {
 
 func TestRemoveResult(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
@@ -504,10 +538,10 @@ func TestRemoveActiveTaskCancels(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) (json.RawMessage, error) {
 			close(started)
 			<-ctx.Done()
-			return ctx.Err()
+			return nil, ctx.Err()
 		},
 	}, newTestStore(t))
 
@@ -536,11 +570,11 @@ func TestContextCancellationStopsEngine(t *testing.T) {
 	store, _ := NewMemoryStore()
 	t.Cleanup(func() { store.Close() })
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
 			mu.Lock()
 			executed++
 			mu.Unlock()
-			return nil
+			return nil, nil
 		},
 	}, store)
 
@@ -559,7 +593,7 @@ func TestContextCancellationStopsEngine(t *testing.T) {
 
 func TestLongRunningTaskCompletion(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
@@ -573,7 +607,7 @@ func TestLongRunningTaskCompletion(t *testing.T) {
 func TestLongRunningTaskFailure(t *testing.T) {
 	handlerErr := errors.New("fatal crash")
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return handlerErr },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, handlerErr },
 	})
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
@@ -592,12 +626,12 @@ func TestLongRunningTaskDoesNotBlockOthers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(ctx context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) (json.RawMessage, error) {
 			close(bgStarted)
 			<-ctx.Done()
-			return ctx.Err()
+			return nil, ctx.Err()
 		},
-		TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskMarkReady: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	}, newTestStore(t))
 
 	_, _ = eng.Submit(Task{Type: TaskConfigPatch})
@@ -620,12 +654,12 @@ func TestLongRunningTaskDoesNotBlockOthers(t *testing.T) {
 func TestSubmitReExecutesFailedTask(t *testing.T) {
 	calls := 0
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
 			calls++
 			if calls == 1 {
-				return errors.New("transient failure")
+				return nil, errors.New("transient failure")
 			}
-			return nil
+			return nil, nil
 		},
 	})
 
@@ -667,8 +701,8 @@ func TestSubmitReExecutesFailedTask(t *testing.T) {
 
 func TestSubmitReExecutesFailedTaskThatFailsAgain(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
-			return errors.New("persistent failure")
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+			return nil, errors.New("persistent failure")
 		},
 	})
 
@@ -704,7 +738,7 @@ func TestSubmitDoesNotIncrementRunOnRehydration(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	}, store)
 	eng.RehydrateStaleTasks()
 
@@ -726,11 +760,11 @@ func TestSubmitConcurrentSameFailedID(t *testing.T) {
 	t.Cleanup(cancel)
 	store := newTestStore(t)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
 			callCount.Add(1)
 			started <- struct{}{}
 			<-blocked
-			return nil
+			return nil, nil
 		},
 	}, store)
 
@@ -772,7 +806,7 @@ func TestSubmitConcurrentSameFailedID(t *testing.T) {
 
 func TestSubmitRunFieldOnFirstSubmit(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
@@ -785,8 +819,8 @@ func TestSubmitRunFieldOnFirstSubmit(t *testing.T) {
 
 func TestTaskErrorProducesRichErrorString(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
-			return &TaskError{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+			return nil, &TaskError{
 				Task:      "config-patch",
 				Operation: "S3",
 				Message:   "bucket not found",
@@ -819,7 +853,7 @@ func TestSubmitHandlerPanicBecomesFailedTask(t *testing.T) {
 	before := testutil.ToFloat64(taskPanics.WithLabelValues(string(TaskConfigPatch)))
 
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
-		TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
 			panic("kaboom")
 		},
 	})

@@ -283,7 +283,7 @@ func TestStateSyncConfigurer_Handler(t *testing.T) {
 	configurer := NewStateSyncConfigurer(homeDir, mock)
 	handler := configurer.Handler()
 
-	if err := handler(context.Background(), nil); err != nil {
+	if _, err := handler(context.Background(), nil); err != nil {
 		t.Fatalf("Handler failed: %v", err)
 	}
 

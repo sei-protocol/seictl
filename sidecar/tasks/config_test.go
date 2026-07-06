@@ -192,7 +192,7 @@ persistent-peers = ""
 func TestConfigPatcherHandlerRejectsEmptyFiles(t *testing.T) {
 	patcher := NewConfigPatcher(t.TempDir())
 	handler := patcher.Handler()
-	err := handler(context.Background(), map[string]any{})
+	_, err := handler(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for empty files, got nil")
 	}
@@ -223,7 +223,7 @@ persistent-peers = ""
 
 	patcher := NewConfigPatcher(homeDir)
 	handler := patcher.Handler()
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"files": map[string]any{
 			"config.toml": map[string]any{
 				"p2p": map[string]any{

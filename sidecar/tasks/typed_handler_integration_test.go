@@ -24,7 +24,7 @@ func TestDeserialize_SnapshotRestore(t *testing.T) {
 	handler := restorer.Handler()
 
 	// The handler should succeed (skip via marker) without a parse error.
-	err = handler(context.Background(), map[string]any{})
+	_, err = handler(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("snapshot-restore handler returned error: %v", err)
 	}
@@ -52,7 +52,7 @@ persistent-peers = ""
 		},
 	}
 
-	err := handler(context.Background(), params)
+	_, err := handler(context.Background(), params)
 	if err != nil {
 		t.Fatalf("config-patch handler returned error: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestDeserialize_AssembleGenesis(t *testing.T) {
 
 	// This will fail at the S3 download step (no real S3), but if it gets
 	// past param parsing without a "parsing params" error, deserialization worked.
-	err := handler(context.Background(), params)
+	_, err := handler(context.Background(), params)
 	if err == nil {
 		t.Fatal("expected error (no S3 client), got nil")
 	}
@@ -110,7 +110,7 @@ func TestDeserialize_AwaitCondition(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := handler(ctx, params)
+	_, err := handler(ctx, params)
 	if err == nil {
 		t.Fatal("expected context error, got nil")
 	}
@@ -135,7 +135,7 @@ func TestDeserialize_ConfigApply(t *testing.T) {
 		},
 	}
 
-	err := handler(context.Background(), params)
+	_, err := handler(context.Background(), params)
 	if err != nil {
 		t.Fatalf("config-apply handler returned error: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestDeserialize_ConfigReload(t *testing.T) {
 		"fields": map[string]any{},
 	}
 
-	err := handler(context.Background(), params)
+	_, err := handler(context.Background(), params)
 	if err == nil {
 		t.Fatal("expected error for empty fields, got nil")
 	}
@@ -203,7 +203,7 @@ func TestDeserialize_ConfigureGenesis(t *testing.T) {
 	fetcher := NewGenesisFetcher(homeDir, "pacific-1", "test-bucket", "us-east-2", nil)
 	handler := fetcher.Handler()
 
-	err := handler(context.Background(), map[string]any{})
+	_, err := handler(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("unexpected error for embedded chain: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestDeserialize_UploadArtifacts(t *testing.T) {
 		"nodeName": "",
 	}
 
-	err := handler(context.Background(), params)
+	_, err := handler(context.Background(), params)
 	if err == nil {
 		t.Fatal("expected error for empty nodeName, got nil")
 	}
@@ -240,7 +240,7 @@ func TestDeserialize_GenerateIdentity(t *testing.T) {
 		"moniker": "val-0",
 	}
 
-	err := handler(context.Background(), params)
+	_, err := handler(context.Background(), params)
 	if err == nil {
 		t.Fatal("expected error for empty chainId, got nil")
 	}
@@ -259,7 +259,7 @@ func TestDeserialize_SetGenesisPeers(t *testing.T) {
 
 	// The handler will try to download peers.json from S3 — that will fail
 	// since there's no real S3 client. But it proves deserialization worked.
-	err := handler(context.Background(), map[string]any{})
+	_, err := handler(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error (no S3), got nil")
 	}
@@ -284,7 +284,7 @@ func TestDeserialize_StateSync(t *testing.T) {
 	}
 
 	// Will fail because there are no peers, but deserialization should succeed.
-	err := handler(context.Background(), params)
+	_, err := handler(context.Background(), params)
 	if err == nil {
 		t.Fatal("expected error (no peers), got nil")
 	}
@@ -303,7 +303,7 @@ func TestDeserialize_ResultExport(t *testing.T) {
 		"region": "us-east-1",
 	}
 
-	err := handler(context.Background(), params)
+	_, err := handler(context.Background(), params)
 	if err == nil {
 		t.Fatal("expected error for empty bucket, got nil")
 	}
@@ -326,7 +326,7 @@ func TestDeserialize_GenerateGentx(t *testing.T) {
 		"accountBalance": "10000usei",
 	}
 
-	err := handler(context.Background(), params)
+	_, err := handler(context.Background(), params)
 	if err == nil {
 		t.Fatal("expected error for empty chainId, got nil")
 	}

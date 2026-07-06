@@ -118,7 +118,7 @@ func TestHealthzReturns503BeforeReady(t *testing.T) {
 
 func TestHealthzReturns200AfterMarkReady(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
+		engine.TaskMarkReady: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
@@ -133,7 +133,7 @@ func TestHealthzReturns200AfterMarkReady(t *testing.T) {
 
 func TestStatusResponse(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskMarkReady: func(_ context.Context, _ map[string]any) error { return nil },
+		engine.TaskMarkReady: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
@@ -164,7 +164,7 @@ func TestStatusResponse(t *testing.T) {
 
 func TestPostTaskReturnsID(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
@@ -185,7 +185,7 @@ func TestPostTaskReturnsID(t *testing.T) {
 
 func TestPostTaskWithCallerID(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
@@ -212,10 +212,10 @@ func TestPostTaskDedupReturnsExistingID(t *testing.T) {
 	store, _ := engine.NewMemoryStore()
 	t.Cleanup(func() { store.Close() })
 	eng := engine.NewEngine(ctx, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
 			close(started)
 			<-blocked
-			return nil
+			return nil, nil
 		},
 	}, store)
 	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
@@ -249,7 +249,7 @@ func TestPostTaskDedupReturnsExistingID(t *testing.T) {
 
 func TestPostTaskInvalidIDReturns400(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
@@ -311,7 +311,7 @@ func TestListTasksEmpty(t *testing.T) {
 
 func TestListTasksAfterSubmit(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
@@ -332,7 +332,7 @@ func TestListTasksAfterSubmit(t *testing.T) {
 
 func TestGetTask(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 
@@ -362,10 +362,10 @@ func TestGetTaskInProgress(t *testing.T) {
 	store, _ := engine.NewMemoryStore()
 	t.Cleanup(func() { store.Close() })
 	eng := engine.NewEngine(ctx, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error {
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
 			close(started)
 			<-blocked
-			return nil
+			return nil, nil
 		},
 	}, store)
 	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
@@ -422,7 +422,7 @@ func TestGetTaskNotFound(t *testing.T) {
 
 func TestDeleteTask(t *testing.T) {
 	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{
-		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) error { return nil },
+		engine.TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
 

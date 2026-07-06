@@ -34,7 +34,7 @@ func TestGenesisFetcher_S3_MatchingHashSucceeds(t *testing.T) {
 	body := []byte(`{"chain_id":"custom-devnet-1","app_state":{}}`)
 	fetcher, wantHash, homeDir := genesisFetchFixture(t, body)
 
-	err := fetcher.Handler()(context.Background(), map[string]any{"expectedGenesisHash": wantHash})
+	_, err := fetcher.Handler()(context.Background(), map[string]any{"expectedGenesisHash": wantHash})
 	if err != nil {
 		t.Fatalf("matching hash should succeed, got: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestGenesisFetcher_S3_MismatchedHashFailsClosed(t *testing.T) {
 	body := []byte(`{"chain_id":"custom-devnet-1","app_state":{}}`)
 	fetcher, _, homeDir := genesisFetchFixture(t, body)
 
-	err := fetcher.Handler()(context.Background(), map[string]any{
+	_, err := fetcher.Handler()(context.Background(), map[string]any{
 		"expectedGenesisHash": "0000000000000000000000000000000000000000000000000000000000000000",
 	})
 	if err == nil {
@@ -83,7 +83,7 @@ func TestGenesisFetcher_S3_EmptyHashPreservesBehavior(t *testing.T) {
 	fetcher, _, homeDir := genesisFetchFixture(t, body)
 
 	// No expectedGenesisHash in params — the current controller's wire shape.
-	if err := fetcher.Handler()(context.Background(), map[string]any{}); err != nil {
+	if _, err := fetcher.Handler()(context.Background(), map[string]any{}); err != nil {
 		t.Fatalf("empty expected hash should download unverified, got: %v", err)
 	}
 
@@ -104,7 +104,7 @@ func TestGenesisFetcher_EmbeddedChain(t *testing.T) {
 	fetcher := NewGenesisFetcher(homeDir, "pacific-1", "test-bucket", "us-east-2", nil)
 	handler := fetcher.Handler()
 
-	err := handler(context.Background(), map[string]any{})
+	_, err := handler(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -133,10 +133,10 @@ func TestGenesisFetcher_EmbeddedChain_Idempotent(t *testing.T) {
 	fetcher := NewGenesisFetcher(homeDir, "atlantic-2", "test-bucket", "us-east-2", nil)
 	handler := fetcher.Handler()
 
-	if err := handler(context.Background(), map[string]any{}); err != nil {
+	if _, err := handler(context.Background(), map[string]any{}); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	if err := handler(context.Background(), map[string]any{}); err != nil {
+	if _, err := handler(context.Background(), map[string]any{}); err != nil {
 		t.Fatalf("second call (should skip via marker): %v", err)
 	}
 }
@@ -154,7 +154,7 @@ func TestGenesisFetcher_UnknownChainFallsBackToS3(t *testing.T) {
 	fetcher := NewGenesisFetcher(homeDir, "custom-devnet-1", "my-genesis-bucket", "us-east-2", mockFactory)
 	handler := fetcher.Handler()
 
-	err := handler(context.Background(), map[string]any{})
+	_, err := handler(context.Background(), map[string]any{})
 	if !called {
 		t.Fatal("expected S3 fallback for unknown chain")
 	}
@@ -168,7 +168,7 @@ func TestGenesisFetcher_UnknownChainNoBucket(t *testing.T) {
 	fetcher := NewGenesisFetcher(homeDir, "custom-devnet-1", "", "", nil)
 	handler := fetcher.Handler()
 
-	err := handler(context.Background(), map[string]any{})
+	_, err := handler(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for unknown chain with no bucket configured")
 	}
@@ -179,7 +179,7 @@ func TestGenesisFetcher_NoChainID(t *testing.T) {
 	fetcher := NewGenesisFetcher(homeDir, "", "bucket", "region", nil)
 	handler := fetcher.Handler()
 
-	err := handler(context.Background(), map[string]any{})
+	_, err := handler(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when chainID is empty")
 	}

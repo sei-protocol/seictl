@@ -54,7 +54,7 @@ func TestRestartSeider_HappyPath(t *testing.T) {
 		upInterval:  time.Millisecond,
 	}
 
-	if err := r.Handler()(context.Background(), nil); err != nil {
+	if _, err := r.Handler()(context.Background(), nil); err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
 	if len(sig.signals) != 1 || sig.signals[0] != syscall.SIGTERM {
@@ -74,7 +74,7 @@ func TestRestartSeider_GraceTimeoutFailsWithoutSIGKILL(t *testing.T) {
 		upInterval:  time.Millisecond,
 	}
 
-	err := r.Handler()(context.Background(), nil)
+	_, err := r.Handler()(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected grace-timeout failure, got nil")
 	}
@@ -97,7 +97,7 @@ func TestRestartSeider_NotFoundRPCDownWaitsForUp(t *testing.T) {
 		upInterval:  time.Millisecond,
 	}
 
-	if err := r.Handler()(context.Background(), nil); err != nil {
+	if _, err := r.Handler()(context.Background(), nil); err != nil {
 		t.Fatalf("expected success when seid not found and RPC down, got %v", err)
 	}
 	if len(sig.signals) != 0 {
@@ -116,7 +116,7 @@ func TestRestartSeider_NotFoundRPCUpFails(t *testing.T) {
 		upInterval:  time.Millisecond,
 	}
 
-	err := r.Handler()(context.Background(), nil)
+	_, err := r.Handler()(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected error when RPC up but process not found, got nil")
 	}
@@ -161,7 +161,7 @@ func TestRestartSeider_RPCNeverUpTimesOut(t *testing.T) {
 		upInterval:  time.Millisecond,
 	}
 
-	err := r.Handler()(context.Background(), nil)
+	_, err := r.Handler()(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}

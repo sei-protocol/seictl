@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
@@ -143,12 +145,21 @@ func (e *Engine) Submit(task Task) (string, error) {
 // runTask spawns a goroutine to run the handler and persist the result.
 func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
 	go func() {
-		// Thread id and a result sink through ctx for handlers that need
-		// them (e.g., sign-tx memo tagging, assemble-genesis hash emission)
-		// without changing the TaskHandler signature.
-		sink := &resultSink{}
-		ctx := withResultSink(WithTaskID(e.ctx, id), sink)
-		err := e.executeRecovered(ctx, taskType, handler, params)
+		// Thread the task id through ctx for handlers that need it (e.g.
+		// sign-tx memo tagging).
+		ctx := WithTaskID(e.ctx, id)
+		result, err := e.executeRecovered(ctx, taskType, handler, params)
+
+		// Engine shutdown truncated the task — leave it 'running' so
+		// RehydrateStaleTasks resumes it on restart, rather than persisting a
+		// spurious Failed (which would strand an in-flight sign-tx). Safe: this
+		// path uses e.ctx directly (no per-task deadline), so context.Canceled
+		// here is only shutdown.
+		if errors.Is(err, context.Canceled) {
+			log.Info("task truncated by shutdown; left running for rehydration",
+				"type", taskType, "id", id, "run", run)
+			return
+		}
 
 		t := time.Now().UTC()
 		tr := &TaskResult{
@@ -159,14 +170,14 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 			SubmittedAt: submittedAt,
 			CompletedAt: &t,
 		}
+		// Stamp on both paths — a failed run may still carry a result (e.g. a
+		// tx hash); a panic yields nil, so nothing partial is stamped.
+		tr.Result = result
 		if err != nil {
 			tr.Error = err.Error()
 			tr.Status = TaskStatusFailed
 		} else {
 			tr.Status = TaskStatusCompleted
-			// Capture only on success — a partial result from a failed
-			// run must not be stamped as authoritative.
-			tr.Result = sink.payload
 		}
 
 		if storeErr := e.store.Save(tr); storeErr != nil {
@@ -179,7 +190,7 @@ func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, para
 // failed TaskResult instead of taking down the shared sidecar process. It
 // guards only the handler goroutine; a task that spawns its own goroutines must
 // recover within them (e.g. s3.streamGzip's writer).
-func (e *Engine) executeRecovered(ctx context.Context, taskType TaskType, handler TaskHandler, params map[string]any) (err error) {
+func (e *Engine) executeRecovered(ctx context.Context, taskType TaskType, handler TaskHandler, params map[string]any) (result json.RawMessage, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("task handler panicked", "type", taskType, "panic", r, "stack", string(debug.Stack()))
@@ -192,14 +203,15 @@ func (e *Engine) executeRecovered(ctx context.Context, taskType TaskType, handle
 }
 
 // execute runs a handler synchronously and logs the outcome.
-func (e *Engine) execute(ctx context.Context, taskType TaskType, handler TaskHandler, params map[string]any) error {
+func (e *Engine) execute(ctx context.Context, taskType TaskType, handler TaskHandler, params map[string]any) (json.RawMessage, error) {
 	start := time.Now()
-	if err := handler(ctx, params); err != nil {
+	result, err := handler(ctx, params)
+	if err != nil {
 		elapsed := time.Since(start)
 		log.Error("task failed", "type", taskType, "elapsed", elapsed.Round(time.Millisecond), "err", err)
 		taskDuration.WithLabelValues(string(taskType), "failed").Observe(elapsed.Seconds())
 		taskFailures.WithLabelValues(string(taskType)).Inc()
-		return err
+		return result, err
 	}
 	elapsed := time.Since(start)
 	log.Info("task completed", "type", taskType, "elapsed", elapsed.Round(time.Millisecond))
@@ -207,7 +219,7 @@ func (e *Engine) execute(ctx context.Context, taskType TaskType, handler TaskHan
 	if taskType == TaskMarkReady {
 		e.ready.Store(true)
 	}
-	return nil
+	return result, nil
 }
 
 // Healthz returns true after the engine has been marked ready.

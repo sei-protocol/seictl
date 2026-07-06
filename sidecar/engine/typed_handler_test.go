@@ -17,7 +17,7 @@ func TestTypedHandler_HappyPath(t *testing.T) {
 		return nil
 	})
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"name": "alice",
 		"age":  float64(30),
 	})
@@ -42,7 +42,7 @@ func TestTypedHandler_MalformedJSON(t *testing.T) {
 	})
 
 	// A channel cannot be marshaled to JSON, causing a marshal error.
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"value": make(chan int),
 	})
 	if err == nil {
@@ -62,7 +62,7 @@ func TestTypedHandler_NilParams(t *testing.T) {
 		return nil
 	})
 
-	err := handler(context.Background(), nil)
+	_, err := handler(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error for nil params: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestTypedHandler_EmptyParams(t *testing.T) {
 		return nil
 	})
 
-	err := handler(context.Background(), map[string]any{})
+	_, err := handler(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("unexpected error for empty params: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestTypedHandler_NestedStruct(t *testing.T) {
 		return nil
 	})
 
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"nested": map[string]any{
 			"key":   "foo",
 			"value": "bar",
@@ -142,7 +142,7 @@ func TestTypedHandler_Float64ToInt64Coercion(t *testing.T) {
 	})
 
 	// JSON numbers arrive as float64 when unmarshaled into map[string]any.
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"height": float64(198030000),
 	})
 	if err != nil {

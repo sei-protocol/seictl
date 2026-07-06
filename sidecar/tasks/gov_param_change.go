@@ -4,18 +4,13 @@
 // operator account. API authentication is controlled by
 // SEI_SIDECAR_AUTHN_MODE; see sidecar/server/auth.go.
 //
-// REHYDRATION WARNING — sei-protocol/seictl#174
+// REHYDRATION — sei-protocol/seictl#174
 //
-// MsgSubmitProposal is NOT chain-idempotent: a crash between
-// BroadcastSync and task-result persist re-runs this handler on pod
-// restart, re-signs at sequence+1, and broadcasts a SECOND proposal
-// with identical content. Unlike gov-software-upgrade — where the
-// upgrade module applies exactly once at the named height, bounding the
-// blast radius — a param-change has NO "applies once" safety net: two
-// duplicate proposals both enter governance, the operator pays
-// InitialDeposit twice, and voter attention splits. #174 tracks the
-// pre-broadcast txHash marker that closes this window for all sign-tx
-// handlers; until it lands, callers must submit-once.
+// MsgSubmitProposal is NOT chain-idempotent, and param-change has no "applies
+// once" safety net (unlike gov-software-upgrade). Crash-idempotency is provided
+// by the pre-broadcast TxMarker + rehydrate-adopt in SignAndBroadcast: a re-run
+// adopts the in-flight tx rather than re-signing, so a crash no longer produces
+// a duplicate proposal.
 
 package tasks
 
@@ -78,17 +73,14 @@ func NewGovParamChanger(cfg engine.ExecutionConfig) *GovParamChanger {
 	return &GovParamChanger{cfg: cfg}
 }
 
-// Handler delegates to SignAndBroadcast after MsgSubmitProposal
-// construction. See the REHYDRATION WARNING at the top of this file: a
-// crash between broadcast and result-persist re-submits a second
-// proposal with identical content, and param-change has no apply-once
-// safety net — do not reuse this pattern for retry loops until #174's
-// pre-broadcast txHash marker lands.
+// Handler delegates to SignAndBroadcast (which owns the crash-idempotency
+// marker — see the REHYDRATION note at the top of this file) and classifies
+// the outcome via classifyGovResult.
 func (g *GovParamChanger) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params GovParamChangeRequest) error {
+	return engine.TypedHandlerWithResult(func(ctx context.Context, params GovParamChangeRequest) (*GovTxResult, error) {
 		msg, err := buildParamChangeMsg(g.cfg, params)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		result, err := SignAndBroadcast(ctx, g.cfg, SignAndBroadcastInput{
 			ChainID: params.ChainID,
@@ -100,12 +92,9 @@ func (g *GovParamChanger) Handler() engine.TaskHandler {
 			TaskID:  engine.TaskIDFromContext(ctx),
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		inclusionStatus := "undetermined"
-		if result.IncludedAt != nil {
-			inclusionStatus = "included"
-		}
+		out, cerr := classifyGovResult(engine.TaskGovParamChange, result)
 		keys := make([]string, 0, len(params.Changes))
 		for _, c := range params.Changes {
 			keys = append(keys, c.Subspace+"/"+c.Key)
@@ -113,14 +102,12 @@ func (g *GovParamChanger) Handler() engine.TaskHandler {
 		govParamChangeLog.Info("proposal broadcast",
 			"taskId", engine.TaskIDFromContext(ctx),
 			"chainId", params.ChainID,
-			"keyName", params.KeyName,
 			"changes", keys,
-			"deposit", params.InitialDeposit,
-			"txHash", result.TxHash,
-			"height", result.Height,
-			"sequence", result.Sequence,
-			"inclusionStatus", inclusionStatus)
-		return nil
+			"txHash", out.TxHash,
+			"height", out.Height,
+			"proposalId", out.ProposalID,
+			"inclusionStatus", out.InclusionStatus)
+		return out, cerr
 	})
 }
 

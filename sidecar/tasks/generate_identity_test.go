@@ -12,7 +12,7 @@ func TestIdentityGenerator_CreatesNodeKey(t *testing.T) {
 	os.MkdirAll(filepath.Join(homeDir, "config"), 0o755)
 
 	handler := NewIdentityGenerator(homeDir).Handler()
-	err := handler(context.Background(), map[string]any{
+	_, err := handler(context.Background(), map[string]any{
 		"chainId": "test-chain-1",
 		"moniker": "val-0",
 	})
@@ -38,14 +38,14 @@ func TestIdentityGenerator_Idempotent(t *testing.T) {
 	handler := NewIdentityGenerator(homeDir).Handler()
 	params := map[string]any{"chainId": "test-chain-1", "moniker": "val-0"}
 
-	if err := handler(context.Background(), params); err != nil {
+	if _, err := handler(context.Background(), params); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 
 	// Read node_key.json after first call
 	nodeKeyBefore, _ := os.ReadFile(filepath.Join(homeDir, "config", "node_key.json"))
 
-	if err := handler(context.Background(), params); err != nil {
+	if _, err := handler(context.Background(), params); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 
@@ -58,7 +58,7 @@ func TestIdentityGenerator_Idempotent(t *testing.T) {
 
 func TestIdentityGenerator_MissingChainID(t *testing.T) {
 	handler := NewIdentityGenerator(t.TempDir()).Handler()
-	err := handler(context.Background(), map[string]any{"moniker": "val-0"})
+	_, err := handler(context.Background(), map[string]any{"moniker": "val-0"})
 	if err == nil {
 		t.Fatal("expected error for missing chainId")
 	}
@@ -66,7 +66,7 @@ func TestIdentityGenerator_MissingChainID(t *testing.T) {
 
 func TestIdentityGenerator_MissingMoniker(t *testing.T) {
 	handler := NewIdentityGenerator(t.TempDir()).Handler()
-	err := handler(context.Background(), map[string]any{"chainId": "test-chain-1"})
+	_, err := handler(context.Background(), map[string]any{"chainId": "test-chain-1"})
 	if err == nil {
 		t.Fatal("expected error for missing moniker")
 	}
