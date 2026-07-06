@@ -237,6 +237,7 @@ components:
         result:
           type: object
           additionalProperties: true
+          x-go-type: json.RawMessage
           description: |
             Handler's structured result, present on any task that emits one —
             on both success and failure (e.g. assemble-and-upload-genesis
