@@ -77,6 +77,9 @@ type SignAndBroadcastResult struct {
 	AccountNumber uint64    `json:"accountNumber"`
 	ChainID       string    `json:"chainId"`
 	BroadcastedAt time.Time `json:"broadcastedAt"`
+	// ProposalID is parsed from the committed tx's submit_proposal event; 0
+	// for votes, non-gov txs, or a not-yet-included tx.
+	ProposalID uint64 `json:"proposalId,omitempty"`
 	// IncludedAt is nil when inclusion polling timed out after a
 	// successful broadcast. nil means UNDETERMINED — the tx may still
 	// land later. It does NOT mean "not included". Callers must
@@ -461,5 +464,6 @@ func resultFromTxResponse(resp *sdk.TxResponse, accNum, seq uint64, chainID stri
 		ChainID:       chainID,
 		BroadcastedAt: broadcastedAt,
 		IncludedAt:    includedAt,
+		ProposalID:    parseProposalID(resp),
 	}
 }

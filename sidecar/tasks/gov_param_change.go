@@ -85,10 +85,10 @@ func NewGovParamChanger(cfg engine.ExecutionConfig) *GovParamChanger {
 // safety net — do not reuse this pattern for retry loops until #174's
 // pre-broadcast txHash marker lands.
 func (g *GovParamChanger) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params GovParamChangeRequest) error {
+	return engine.TypedHandlerWithResult(func(ctx context.Context, params GovParamChangeRequest) (*GovTxResult, error) {
 		msg, err := buildParamChangeMsg(g.cfg, params)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		result, err := SignAndBroadcast(ctx, g.cfg, SignAndBroadcastInput{
 			ChainID: params.ChainID,
@@ -100,12 +100,9 @@ func (g *GovParamChanger) Handler() engine.TaskHandler {
 			TaskID:  engine.TaskIDFromContext(ctx),
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		inclusionStatus := "undetermined"
-		if result.IncludedAt != nil {
-			inclusionStatus = "included"
-		}
+		out, cerr := classifyGovResult(string(engine.TaskGovParamChange), result)
 		keys := make([]string, 0, len(params.Changes))
 		for _, c := range params.Changes {
 			keys = append(keys, c.Subspace+"/"+c.Key)
@@ -113,14 +110,12 @@ func (g *GovParamChanger) Handler() engine.TaskHandler {
 		govParamChangeLog.Info("proposal broadcast",
 			"taskId", engine.TaskIDFromContext(ctx),
 			"chainId", params.ChainID,
-			"keyName", params.KeyName,
 			"changes", keys,
-			"deposit", params.InitialDeposit,
-			"txHash", result.TxHash,
-			"height", result.Height,
-			"sequence", result.Sequence,
-			"inclusionStatus", inclusionStatus)
-		return nil
+			"txHash", out.TxHash,
+			"height", out.Height,
+			"proposalId", out.ProposalID,
+			"inclusionStatus", out.InclusionStatus)
+		return out, cerr
 	})
 }
 

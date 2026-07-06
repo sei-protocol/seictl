@@ -74,10 +74,10 @@ func NewGovSoftwareUpgrader(cfg engine.ExecutionConfig) *GovSoftwareUpgrader {
 // pattern must not be reused for other proposal types without first
 // wiring the pre-broadcast txHash marker from #174.
 func (g *GovSoftwareUpgrader) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, params GovSoftwareUpgradeRequest) error {
+	return engine.TypedHandlerWithResult(func(ctx context.Context, params GovSoftwareUpgradeRequest) (*GovTxResult, error) {
 		msg, err := buildSoftwareUpgradeMsg(g.cfg, params)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		result, err := SignAndBroadcast(ctx, g.cfg, SignAndBroadcastInput{
 			ChainID: params.ChainID,
@@ -89,24 +89,19 @@ func (g *GovSoftwareUpgrader) Handler() engine.TaskHandler {
 			TaskID:  engine.TaskIDFromContext(ctx),
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		inclusionStatus := "undetermined"
-		if result.IncludedAt != nil {
-			inclusionStatus = "included"
-		}
+		out, cerr := classifyGovResult(string(engine.TaskGovSoftwareUpgrade), result)
 		govSoftwareUpgradeLog.Info("proposal broadcast",
 			"taskId", engine.TaskIDFromContext(ctx),
 			"chainId", params.ChainID,
-			"keyName", params.KeyName,
 			"upgradeName", params.UpgradeName,
 			"upgradeHeight", params.UpgradeHeight,
-			"deposit", params.InitialDeposit,
-			"txHash", result.TxHash,
-			"height", result.Height,
-			"sequence", result.Sequence,
-			"inclusionStatus", inclusionStatus)
-		return nil
+			"txHash", out.TxHash,
+			"height", out.Height,
+			"proposalId", out.ProposalID,
+			"inclusionStatus", out.InclusionStatus)
+		return out, cerr
 	})
 }
 
