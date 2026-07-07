@@ -16,7 +16,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sei-protocol/sei-chain v0.0.29-fix.0.20260326202429-c9b42951fef7
-	github.com/sei-protocol/sei-config v0.0.20
+	github.com/sei-protocol/sei-config v0.0.22
 	github.com/sei-protocol/sei-k8s-controller v0.0.0-20260622210026-978577b63c78
 	github.com/sei-protocol/seilog v0.0.3
 	github.com/urfave/cli/v3 v3.6.1
@@ -121,7 +121,7 @@ require (
 	github.com/go-openapi/jsonpointer v0.21.2 // indirect
 	github.com/go-openapi/jsonreference v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.1 // indirect
-	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/godbus/dbus v0.0.0-20190726142602-4481cbc300e2 // indirect
 	github.com/gogo/gateway v1.1.0 // indirect
 	github.com/gogo/protobuf v1.3.3 // indirect
