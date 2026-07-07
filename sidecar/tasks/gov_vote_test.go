@@ -9,40 +9,6 @@ import (
 	"github.com/sei-protocol/seictl/sidecar/engine"
 )
 
-func TestParseVoteOption(t *testing.T) {
-	cases := []struct {
-		in   string
-		want govtypes.VoteOption
-		err  bool
-	}{
-		{"yes", govtypes.OptionYes, false},
-		{"YES", govtypes.OptionYes, false},
-		{"no", govtypes.OptionNo, false},
-		{"abstain", govtypes.OptionAbstain, false},
-		{"no_with_veto", govtypes.OptionNoWithVeto, false},
-		{"no-with-veto", govtypes.OptionNoWithVeto, false},
-		{"NO_WITH_VETO", govtypes.OptionNoWithVeto, false},
-		{"", 0, true},
-		{"maybe", 0, true},
-	}
-	for _, c := range cases {
-		got, err := ParseVoteOption(c.in)
-		if c.err {
-			if err == nil {
-				t.Errorf("ParseVoteOption(%q): want err, got %v", c.in, got)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("ParseVoteOption(%q): unexpected err: %v", c.in, err)
-			continue
-		}
-		if got != c.want {
-			t.Errorf("ParseVoteOption(%q) = %v, want %v", c.in, got, c.want)
-		}
-	}
-}
-
 func TestBuildVoteMsg(t *testing.T) {
 	kr, addr := testKeyring(t)
 	cfg := engine.ExecutionConfig{Keyring: kr}

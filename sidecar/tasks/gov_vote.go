@@ -10,11 +10,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/wire"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -56,7 +56,7 @@ func NewGovVoter(cfg engine.ExecutionConfig) *GovVoter {
 // Stale proposals are rejected by CheckTx and surface as Terminal. We
 // do not pre-check via chain query — that opens a TOCTOU window.
 func (g *GovVoter) Handler() engine.TaskHandler {
-	return engine.TypedHandlerWithResult(func(ctx context.Context, params GovVoteRequest) (*GovTxResult, error) {
+	return engine.TypedHandlerWithResult(func(ctx context.Context, params GovVoteRequest) (*wire.GovTxResult, error) {
 		msg, err := buildVoteMsg(g.cfg, params)
 		if err != nil {
 			return nil, err
@@ -90,7 +90,7 @@ func buildVoteMsg(cfg engine.ExecutionConfig, params GovVoteRequest) (*govtypes.
 	if params.ProposalID == 0 {
 		return nil, Terminal(errors.New("proposalId required (must be > 0)"))
 	}
-	option, err := ParseVoteOption(params.Option)
+	option, err := wire.ParseVoteOption(params.Option)
 	if err != nil {
 		return nil, Terminal(err)
 	}
@@ -104,22 +104,5 @@ func buildVoteMsg(cfg engine.ExecutionConfig, params GovVoteRequest) (*govtypes.
 	if err != nil {
 		return nil, Terminal(fmt.Errorf("keyring entry %q: %w", params.KeyName, err))
 	}
-	return govtypes.NewMsgVote(info.GetAddress(), params.ProposalID, option), nil
-}
-
-// ParseVoteOption (gov v1beta1) is exported so client and server
-// share one accepted-option set; otherwise the two lists drift.
-func ParseVoteOption(s string) (govtypes.VoteOption, error) {
-	switch strings.ToLower(s) {
-	case "yes":
-		return govtypes.OptionYes, nil
-	case "no":
-		return govtypes.OptionNo, nil
-	case "abstain":
-		return govtypes.OptionAbstain, nil
-	case "no_with_veto", "no-with-veto":
-		return govtypes.OptionNoWithVeto, nil
-	default:
-		return 0, fmt.Errorf("invalid vote option %q (allowed: yes | no | abstain | no_with_veto)", s)
-	}
+	return govtypes.NewMsgVote(info.GetAddress(), params.ProposalID, govtypes.VoteOption(option)), nil
 }

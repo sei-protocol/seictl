@@ -7,8 +7,7 @@ import (
 
 	"github.com/cosmos/btcutil/bech32"
 	seiconfig "github.com/sei-protocol/sei-config"
-	"github.com/sei-protocol/seictl/sidecar/engine"
-	"github.com/sei-protocol/seictl/sidecar/tasks"
+	"github.com/sei-protocol/seictl/sidecar/wire"
 )
 
 const seiBech32HRP = "sei"
@@ -36,30 +35,30 @@ type TaskBuilder interface {
 	ToTaskRequest() TaskRequest
 }
 
-// Task type constants re-exported from engine for external consumers.
+// Task type constants re-exported from wire for external consumers.
 const (
-	TaskTypeSnapshotRestore    = string(engine.TaskSnapshotRestore)
-	TaskTypeConfigPatch        = string(engine.TaskConfigPatch)
-	TaskTypeConfigApply        = string(engine.TaskConfigApply)
-	TaskTypeConfigValidate     = string(engine.TaskConfigValidate)
-	TaskTypeConfigReload       = string(engine.TaskConfigReload)
-	TaskTypeMarkReady          = string(engine.TaskMarkReady)
-	TaskTypeRestartSeid        = string(engine.TaskRestartSeid)
-	TaskTypeConfigureGenesis   = string(engine.TaskConfigureGenesis)
-	TaskTypeConfigureStateSync = string(engine.TaskConfigureStateSync)
-	TaskTypeSnapshotUpload     = string(engine.TaskSnapshotUpload)
-	TaskTypeResultExport       = string(engine.TaskResultExport)
-	TaskTypeAwaitCondition     = string(engine.TaskAwaitCondition)
+	TaskTypeSnapshotRestore    = string(wire.TaskSnapshotRestore)
+	TaskTypeConfigPatch        = string(wire.TaskConfigPatch)
+	TaskTypeConfigApply        = string(wire.TaskConfigApply)
+	TaskTypeConfigValidate     = string(wire.TaskConfigValidate)
+	TaskTypeConfigReload       = string(wire.TaskConfigReload)
+	TaskTypeMarkReady          = string(wire.TaskMarkReady)
+	TaskTypeRestartSeid        = string(wire.TaskRestartSeid)
+	TaskTypeConfigureGenesis   = string(wire.TaskConfigureGenesis)
+	TaskTypeConfigureStateSync = string(wire.TaskConfigureStateSync)
+	TaskTypeSnapshotUpload     = string(wire.TaskSnapshotUpload)
+	TaskTypeResultExport       = string(wire.TaskResultExport)
+	TaskTypeAwaitCondition     = string(wire.TaskAwaitCondition)
 
-	TaskTypeGenerateIdentity       = string(engine.TaskGenerateIdentity)
-	TaskTypeGenerateGentx          = string(engine.TaskGenerateGentx)
-	TaskTypeUploadGenesisArtifacts = string(engine.TaskUploadGenesisArtifacts)
-	TaskTypeAssembleGenesis        = string(engine.TaskAssembleAndUploadGenesis)
-	TaskTypeSetGenesisPeers        = string(engine.TaskSetGenesisPeers)
+	TaskTypeGenerateIdentity       = string(wire.TaskGenerateIdentity)
+	TaskTypeGenerateGentx          = string(wire.TaskGenerateGentx)
+	TaskTypeUploadGenesisArtifacts = string(wire.TaskUploadGenesisArtifacts)
+	TaskTypeAssembleGenesis        = string(wire.TaskAssembleAndUploadGenesis)
+	TaskTypeSetGenesisPeers        = string(wire.TaskSetGenesisPeers)
 
-	TaskTypeGovVote            = string(engine.TaskGovVote)
-	TaskTypeGovSoftwareUpgrade = string(engine.TaskGovSoftwareUpgrade)
-	TaskTypeGovParamChange     = string(engine.TaskGovParamChange)
+	TaskTypeGovVote            = string(wire.TaskGovVote)
+	TaskTypeGovSoftwareUpgrade = string(wire.TaskGovSoftwareUpgrade)
+	TaskTypeGovParamChange     = string(wire.TaskGovParamChange)
 )
 
 // Known condition and action values for AwaitConditionTask.
@@ -617,7 +616,7 @@ func (t GovVoteTask) Validate() error {
 	if t.ProposalID == 0 {
 		return errors.New("gov-vote: proposalId required (must be > 0)")
 	}
-	if _, err := tasks.ParseVoteOption(t.Option); err != nil {
+	if _, err := wire.ParseVoteOption(t.Option); err != nil {
 		return fmt.Errorf("gov-vote: %w", err)
 	}
 	if t.Fees == "" {

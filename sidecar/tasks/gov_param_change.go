@@ -25,6 +25,7 @@ import (
 	proposal "github.com/sei-protocol/sei-chain/sei-cosmos/x/params/types/proposal"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/wire"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -77,7 +78,7 @@ func NewGovParamChanger(cfg engine.ExecutionConfig) *GovParamChanger {
 // marker — see the REHYDRATION note at the top of this file) and classifies
 // the outcome via classifyGovResult.
 func (g *GovParamChanger) Handler() engine.TaskHandler {
-	return engine.TypedHandlerWithResult(func(ctx context.Context, params GovParamChangeRequest) (*GovTxResult, error) {
+	return engine.TypedHandlerWithResult(func(ctx context.Context, params GovParamChangeRequest) (*wire.GovTxResult, error) {
 		msg, err := buildParamChangeMsg(g.cfg, params)
 		if err != nil {
 			return nil, err
