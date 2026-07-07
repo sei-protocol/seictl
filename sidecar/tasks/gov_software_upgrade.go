@@ -25,6 +25,7 @@ import (
 	upgradetypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/upgrade/types"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
+	"github.com/sei-protocol/seictl/sidecar/wire"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -66,7 +67,7 @@ func NewGovSoftwareUpgrader(cfg engine.ExecutionConfig) *GovSoftwareUpgrader {
 // marker — see the REHYDRATION note at the top of this file) and classifies
 // the outcome via classifyGovResult.
 func (g *GovSoftwareUpgrader) Handler() engine.TaskHandler {
-	return engine.TypedHandlerWithResult(func(ctx context.Context, params GovSoftwareUpgradeRequest) (*GovTxResult, error) {
+	return engine.TypedHandlerWithResult(func(ctx context.Context, params GovSoftwareUpgradeRequest) (*wire.GovTxResult, error) {
 		msg, err := buildSoftwareUpgradeMsg(g.cfg, params)
 		if err != nil {
 			return nil, err

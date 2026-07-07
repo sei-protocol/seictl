@@ -9,33 +9,36 @@ import (
 	"github.com/sei-protocol/sei-chain/sei-cosmos/crypto/keyring"
 
 	"github.com/sei-protocol/seictl/sidecar/rpc"
+	"github.com/sei-protocol/seictl/sidecar/wire"
 )
 
 // TaskType identifies the kind of task to execute.
-type TaskType string
+// TaskType aliases wire.TaskType so engine call sites and the dispatch-map key
+// type are unchanged; the consts below re-export wire.Task* likewise.
+type TaskType = wire.TaskType
 
 const (
-	TaskSnapshotRestore          TaskType = "snapshot-restore"
-	TaskConfigPatch              TaskType = "config-patch"
-	TaskConfigApply              TaskType = "config-apply"
-	TaskConfigValidate           TaskType = "config-validate"
-	TaskConfigReload             TaskType = "config-reload"
-	TaskMarkReady                TaskType = "mark-ready"
-	TaskRestartSeid              TaskType = "restart-seid"
-	TaskConfigureGenesis         TaskType = "configure-genesis"
-	TaskConfigureStateSync       TaskType = "configure-state-sync"
-	TaskSnapshotUpload           TaskType = "snapshot-upload"
-	TaskResultExport             TaskType = "result-export"
-	TaskAwaitCondition           TaskType = "await-condition"
-	TaskGenerateIdentity         TaskType = "generate-identity"
-	TaskGenerateGentx            TaskType = "generate-gentx"
-	TaskUploadGenesisArtifacts   TaskType = "upload-genesis-artifacts"
-	TaskAssembleAndUploadGenesis TaskType = "assemble-and-upload-genesis"
-	TaskSetGenesisPeers          TaskType = "set-genesis-peers"
-	TaskGovVote                  TaskType = "gov-vote"
-	TaskGovSoftwareUpgrade       TaskType = "gov-software-upgrade"
-	TaskGovParamChange           TaskType = "gov-param-change"
-	TaskEvmLogicalDigest         TaskType = "evm-logical-digest"
+	TaskSnapshotRestore          = wire.TaskSnapshotRestore
+	TaskConfigPatch              = wire.TaskConfigPatch
+	TaskConfigApply              = wire.TaskConfigApply
+	TaskConfigValidate           = wire.TaskConfigValidate
+	TaskConfigReload             = wire.TaskConfigReload
+	TaskMarkReady                = wire.TaskMarkReady
+	TaskRestartSeid              = wire.TaskRestartSeid
+	TaskConfigureGenesis         = wire.TaskConfigureGenesis
+	TaskConfigureStateSync       = wire.TaskConfigureStateSync
+	TaskSnapshotUpload           = wire.TaskSnapshotUpload
+	TaskResultExport             = wire.TaskResultExport
+	TaskAwaitCondition           = wire.TaskAwaitCondition
+	TaskGenerateIdentity         = wire.TaskGenerateIdentity
+	TaskGenerateGentx            = wire.TaskGenerateGentx
+	TaskUploadGenesisArtifacts   = wire.TaskUploadGenesisArtifacts
+	TaskAssembleAndUploadGenesis = wire.TaskAssembleAndUploadGenesis
+	TaskSetGenesisPeers          = wire.TaskSetGenesisPeers
+	TaskGovVote                  = wire.TaskGovVote
+	TaskGovSoftwareUpgrade       = wire.TaskGovSoftwareUpgrade
+	TaskGovParamChange           = wire.TaskGovParamChange
+	TaskEvmLogicalDigest         = wire.TaskEvmLogicalDigest
 )
 
 // Task is a unit of work submitted by the controller. When ID is set, the
