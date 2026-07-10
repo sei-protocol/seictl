@@ -114,6 +114,27 @@ func (s *SQLiteStore) Delete(id string) (bool, error) {
 	return n > 0, nil
 }
 
+func (s *SQLiteStore) DeleteByType(taskType string) (int, error) {
+	res, err := s.db.Exec("DELETE FROM task_results WHERE type = ?", taskType)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+func (s *SQLiteStore) LatestByType(taskType string) (*TaskResult, error) {
+	row := s.db.QueryRow(selectColumns+` WHERE type = ? ORDER BY submitted_at DESC LIMIT 1`, taskType)
+	r, err := scanTaskResult(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
 // SaveTxMarker persists a pre-broadcast marker and fsyncs it (via checkpoint,
 // since the store runs synchronous=NORMAL) before returning, so it survives a
 // crash. Callers MUST let it return before broadcasting.

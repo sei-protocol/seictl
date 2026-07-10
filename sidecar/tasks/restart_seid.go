@@ -161,51 +161,18 @@ func (r *RestartSeider) Handler() engine.TaskHandler {
 	})
 }
 
-// stopSeid SIGTERMs seid and waits for it to exit gracefully. When the process
-// is not found in /proc we disambiguate: if seid's RPC is serving, the process
-// exists but is invisible to us (e.g. a non-shared-PID-ns profile) and we refuse
-// to report a restart that did not happen; if its RPC is down, seid is genuinely
-// stopped or mid-restart (including the entrypoint's bash wait-loop window before
-// it execs seid) and we proceed straight to waitForUp.
+// stopSeid SIGTERMs seid and waits for it to exit gracefully via the shared
+// seidStopper (graceful-only, never SIGKILL; honesty check when /proc shows
+// nothing but the RPC serves). restart-seid proceeds to waitForUp afterwards.
 func (r *RestartSeider) stopSeid(ctx context.Context) error {
-	pid, err := r.signaler.FindPID(restartSeidProcess)
-	if err != nil {
-		if r.probeUp(ctx) {
-			return fmt.Errorf("seid RPC is serving but its process was not found in /proc: %w — refusing to report a restart that did not happen", err)
-		}
-		restartSeidLog.Info("seid process not running and RPC down; proceeding to wait for it to come up",
-			"reason", err.Error())
-		return nil
-	}
-	restartSeidLog.Info("restarting seid in place", "pid", pid, "grace", r.gracePeriod)
-	return r.gracefulStop(ctx, pid)
-}
-
-// gracefulStop SIGTERMs pid and polls until it exits or the grace window
-// elapses. It never escalates to SIGKILL: if seid is still alive at the
-// deadline the task fails and the process is left running for an operator.
-func (r *RestartSeider) gracefulStop(ctx context.Context, pid int) error {
-	if err := r.signaler.Signal(pid, syscall.SIGTERM); err != nil {
-		return fmt.Errorf("sending SIGTERM to seid pid %d: %w", pid, err)
-	}
-
-	ticker := time.NewTicker(restartSeidExitPollInterval)
-	defer ticker.Stop()
-	deadline := time.After(r.gracePeriod)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-deadline:
-			return fmt.Errorf("seid pid %d still alive %s after SIGTERM; leaving it running (not force-killing a validator mid-commit)", pid, r.gracePeriod)
-		case <-ticker.C:
-			if !r.signaler.Alive(pid) {
-				restartSeidLog.Info("seid exited after SIGTERM", "pid", pid)
-				return nil
-			}
-		}
-	}
+	return seidStopper{
+		signaler:         r.signaler,
+		probeUp:          r.probeUp,
+		gracePeriod:      r.gracePeriod,
+		exitPollInterval: restartSeidExitPollInterval,
+		log:              restartSeidLog,
+		op:               "restart",
+	}.stop(ctx)
 }
 
 // waitForUp polls seid's local RPC until it serves /status or the timeout

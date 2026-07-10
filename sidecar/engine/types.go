@@ -39,6 +39,9 @@ const (
 	TaskGovSoftwareUpgrade       = wire.TaskGovSoftwareUpgrade
 	TaskGovParamChange           = wire.TaskGovParamChange
 	TaskEvmLogicalDigest         = wire.TaskEvmLogicalDigest
+	TaskMarkNotReady             = wire.TaskMarkNotReady
+	TaskStopSeid                 = wire.TaskStopSeid
+	TaskResetData                = wire.TaskResetData
 )
 
 // Task is a unit of work submitted by the controller. When ID is set, the
