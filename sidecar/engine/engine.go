@@ -106,12 +106,13 @@ func (e *Engine) RehydrateStaleTasks() {
 		case TaskMarkNotReady:
 			continue // handled synchronously above
 		case TaskMarkReady:
-			// Fail closed: if a hold was in flight at the crash, never let a
-			// stranded mark-ready from the same era release it — even if the
-			// synchronous purge above could not delete this row (a broken
-			// store). The row is left running rather than dispatched.
-			if holdSeen {
-				log.Warn("skipping stranded mark-ready while a hold was recovering", "id", tr.ID)
+			// Durable hold supersession: never rehydrate a stranded mark-ready
+			// while a hold at least as new as it exists in the store. Keyed on
+			// the persisted mark-not-ready record (any status), this survives
+			// restarts — a failed purge persists the hold Failed, which the
+			// in-run holdSeen flag (used only for the re-list above) cannot see
+			// on a later boot.
+			if e.markReadySuperseded(tr) {
 				continue
 			}
 		}
@@ -120,6 +121,39 @@ func (e *Engine) RehydrateStaleTasks() {
 			e.runTask(tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
 		}
 	}
+}
+
+// markReadySuperseded reports whether a stranded mark-ready must not be
+// rehydrated because a hold supersedes it, and if so records that outcome.
+//
+// The store is the durable source of truth: a mark-not-ready record of ANY
+// status (a failed purge persists the hold Failed, so this must not be limited
+// to running rows) submitted no earlier than the mark-ready means the hold
+// attempt supersedes the stale release. The superseded mark-ready is marked
+// Failed ("superseded by hold") so a controller polling it terminates, rather
+// than being left running across restarts. A lone stranded mark-ready with no
+// newer hold is not superseded — that init-time crash recovery path is
+// load-bearing and must still rehydrate. On a store read error it fails closed
+// (treats the mark-ready as superseded) rather than risk releasing a hold.
+func (e *Engine) markReadySuperseded(mr TaskResult) bool {
+	hold, err := e.store.LatestByType(string(TaskMarkNotReady))
+	if err != nil {
+		log.Error("checking for a superseding hold; refusing to rehydrate mark-ready", "id", mr.ID, "err", err)
+		return true
+	}
+	if hold == nil || hold.SubmittedAt.Before(mr.SubmittedAt) {
+		return false
+	}
+	log.Warn("stranded mark-ready superseded by a hold; marking failed instead of rehydrating",
+		"markReadyID", mr.ID, "holdID", hold.ID, "holdStatus", hold.Status)
+	t := time.Now().UTC()
+	mr.Status = TaskStatusFailed
+	mr.Error = "superseded by hold"
+	mr.CompletedAt = &t
+	if err := e.store.Save(&mr); err != nil {
+		log.Error("failed to persist superseded mark-ready", "id", mr.ID, "err", err)
+	}
+	return true
 }
 
 // Submit starts a task in its own goroutine and returns its ID.

@@ -23,39 +23,30 @@ func engineOver(t *testing.T, store ResultStore, handlers map[TaskType]TaskHandl
 	return NewEngine(ctx, handlers, store)
 }
 
-// seedStrandedMarkReady writes a mark-ready record stuck in "running", the
-// state an ungraceful kill leaves between Submit's Save(running) and the
-// completing Save. RehydrateStaleTasks re-runs exactly these.
-func seedStrandedMarkReady(t *testing.T, store ResultStore) string {
+// seedStrandedAt writes a task record stuck in "running" at the given submit
+// time — the state an ungraceful kill leaves between Submit's Save(running) and
+// the completing Save. RehydrateStaleTasks re-runs exactly these.
+func seedStrandedAt(t *testing.T, store ResultStore, taskType TaskType, submittedAt time.Time) string {
 	t.Helper()
 	id := uuid.New().String()
 	if err := store.Save(&TaskResult{
 		ID:          id,
-		Type:        string(TaskMarkReady),
+		Type:        string(taskType),
 		Status:      TaskStatusRunning,
 		Run:         1,
-		SubmittedAt: time.Now().UTC(),
+		SubmittedAt: submittedAt,
 	}); err != nil {
-		t.Fatalf("seeding stranded mark-ready: %v", err)
+		t.Fatalf("seeding stranded %s: %v", taskType, err)
 	}
 	return id
 }
 
-// seedStrandedMarkNotReady writes a mark-not-ready record stuck in "running" —
-// the state a crash leaves in the [Submit-saved-running … purge-commit] window.
+func seedStrandedMarkReady(t *testing.T, store ResultStore) string {
+	return seedStrandedAt(t, store, TaskMarkReady, time.Now().UTC())
+}
+
 func seedStrandedMarkNotReady(t *testing.T, store ResultStore) string {
-	t.Helper()
-	id := uuid.New().String()
-	if err := store.Save(&TaskResult{
-		ID:          id,
-		Type:        string(TaskMarkNotReady),
-		Status:      TaskStatusRunning,
-		Run:         1,
-		SubmittedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("seeding stranded mark-not-ready: %v", err)
-	}
-	return id
+	return seedStrandedAt(t, store, TaskMarkNotReady, time.Now().UTC())
 }
 
 func countMarkReady(t *testing.T, store ResultStore) int {
@@ -288,10 +279,11 @@ func (failingPurgeStore) DeleteByType(string) (int, error) {
 	return 0, fmt.Errorf("simulated purge failure")
 }
 
-// When the synchronous hold's purge fails, the stranded mark-ready survives —
-// the holdSeen fail-closed guard must still skip dispatching it, leaving it
-// running and readiness false (never release a hold on a broken store).
-func TestRehydrate_FailedPurgeLeavesStrandedMarkReadyHeld(t *testing.T) {
+// When the synchronous hold's purge fails, the stranded mark-ready survives the
+// purge — but the durable supersession rule must still refuse to rehydrate it
+// (a newer mark-not-ready record exists) and mark it Failed ("superseded by
+// hold") so a controller poll terminates. Readiness stays false.
+func TestRehydrate_FailedPurgeSupersedesStrandedMarkReady(t *testing.T) {
 	inner, err := NewMemoryStore()
 	if err != nil {
 		t.Fatalf("memory store: %v", err)
@@ -299,8 +291,9 @@ func TestRehydrate_FailedPurgeLeavesStrandedMarkReadyHeld(t *testing.T) {
 	t.Cleanup(func() { _ = inner.Close() })
 	store := failingPurgeStore{inner}
 
-	readyID := seedStrandedMarkReady(t, store)
-	seedStrandedMarkNotReady(t, store)
+	base := time.Now().UTC()
+	readyID := seedStrandedAt(t, store, TaskMarkReady, base)
+	seedStrandedAt(t, store, TaskMarkNotReady, base.Add(time.Second)) // hold is newer
 
 	purge := func(context.Context, map[string]any) (json.RawMessage, error) {
 		_, err := store.DeleteByType(string(TaskMarkReady))
@@ -313,19 +306,74 @@ func TestRehydrate_FailedPurgeLeavesStrandedMarkReadyHeld(t *testing.T) {
 	eng.RehydrateStaleTasks()
 
 	if eng.Healthz() {
-		t.Fatal("engine ready after rehydration: stranded mark-ready was dispatched despite the hold guard")
+		t.Fatal("engine ready after rehydration: stranded mark-ready was dispatched despite a newer hold")
 	}
 	r, err := store.Get(readyID)
 	if err != nil {
 		t.Fatalf("get stranded mark-ready: %v", err)
 	}
 	if r == nil {
-		t.Fatal("stranded mark-ready was removed; a failed purge should leave it running")
+		t.Fatal("stranded mark-ready was removed; a failed purge should leave it recorded as superseded")
 	}
-	if r.Status != TaskStatusRunning {
-		t.Errorf("stranded mark-ready status = %q, want running (skipped, not dispatched)", r.Status)
+	if r.Status != TaskStatusFailed {
+		t.Errorf("stranded mark-ready status = %q, want failed (superseded)", r.Status)
+	}
+	if r.Error != "superseded by hold" {
+		t.Errorf("stranded mark-ready error = %q, want \"superseded by hold\"", r.Error)
 	}
 	ensureStaysNotReady(t, eng)
+}
+
+// The Bugbot residual: a transient purge failure persists the mark-not-ready
+// Failed (non-stale), so the NEXT boot sees only the still-running mark-ready
+// and no stale hold. The durable supersession rule (keyed on the persisted hold
+// record, any status) must keep the node held across BOTH restarts.
+func TestRehydrate_HoldSurvivesFailedPurgeAcrossTwoRestarts(t *testing.T) {
+	for i := 0; i < 30; i++ {
+		store, dbPath := newFileStore(t)
+		base := time.Now().UTC()
+		readyID := seedStrandedAt(t, store, TaskMarkReady, base)          // earlier lifecycle's release
+		seedStrandedAt(t, store, TaskMarkNotReady, base.Add(time.Second)) // the newer hold
+
+		// Restart N: the purge fails transiently; runTaskSync's failure Save
+		// persists the mark-not-ready Failed, making it non-stale next boot.
+		store = reopenStore(t, store, dbPath)
+		failPurge := func(context.Context, map[string]any) (json.RawMessage, error) {
+			return nil, fmt.Errorf("transient purge failure")
+		}
+		engN := engineOver(t, store, map[TaskType]TaskHandler{
+			TaskMarkReady:    noopHandler,
+			TaskMarkNotReady: failPurge,
+		})
+		engN.RehydrateStaleTasks()
+		if engN.Healthz() {
+			t.Fatalf("iteration %d restart N: hold released", i)
+		}
+
+		// Restart N+1: no stale mark-not-ready remains (it is Failed); only the
+		// still-running mark-ready. The durable rule must keep the node held.
+		store = reopenStore(t, store, dbPath)
+		okPurge := func(context.Context, map[string]any) (json.RawMessage, error) {
+			_, err := store.DeleteByType(string(TaskMarkReady))
+			return nil, err
+		}
+		engN1 := engineOver(t, store, map[TaskType]TaskHandler{
+			TaskMarkReady:    noopHandler,
+			TaskMarkNotReady: okPurge,
+		})
+		engN1.RehydrateStaleTasks()
+
+		if engN1.Healthz() {
+			t.Fatalf("iteration %d restart N+1: hold escaped across two restarts", i)
+		}
+		r, err := store.Get(readyID)
+		if err != nil {
+			t.Fatalf("iteration %d: get mark-ready: %v", i, err)
+		}
+		if r == nil || r.Status != TaskStatusFailed {
+			t.Fatalf("iteration %d: mark-ready not terminal-superseded: %+v", i, r)
+		}
+	}
 }
 
 // relistFailStore fails the second (post-purge) ListStaleTasks call, modelling a

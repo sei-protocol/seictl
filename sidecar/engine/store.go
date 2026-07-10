@@ -26,6 +26,13 @@ type ResultStore interface {
 	// release a node hold after a data wipe.
 	DeleteByType(taskType string) (int, error)
 
+	// LatestByType returns the most recently submitted result of the given
+	// task type (any status), or (nil, nil) when none exists. Rehydration
+	// uses it to detect a hold that supersedes a stranded mark-ready even
+	// after the hold's own record has gone terminal (e.g. a failed purge
+	// persisted it Failed), which a stale-only scan would miss.
+	LatestByType(taskType string) (*TaskResult, error)
+
 	// Ping verifies the store is responsive. Used by liveness checks.
 	Ping() error
 
