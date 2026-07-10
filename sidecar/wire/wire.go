@@ -36,6 +36,14 @@ const (
 	TaskGovSoftwareUpgrade       TaskType = "gov-software-upgrade"
 	TaskGovParamChange           TaskType = "gov-param-change"
 	TaskEvmLogicalDigest         TaskType = "evm-logical-digest"
+
+	// Workflow node-hold tasks (SeiNodeTaskWorkflow StateSync recipe). These
+	// three compose the durable seid hold: mark-not-ready re-arms the start
+	// gate, stop-seid parks seid behind it, reset-data clears the chain data
+	// directory. Wire strings are a published contract (one-way door).
+	TaskMarkNotReady TaskType = "mark-not-ready"
+	TaskStopSeid     TaskType = "stop-seid"
+	TaskResetData    TaskType = "reset-data"
 )
 
 // VoteOption mirrors cosmos gov v1beta1 VoteOption values so callers can parse

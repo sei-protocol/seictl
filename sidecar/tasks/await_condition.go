@@ -14,8 +14,9 @@ import (
 var awaitLog = seilog.NewLogger("seictl", "task", "await-condition")
 
 const (
-	conditionHeight = "height"
-	actionSIGTERM   = "SIGTERM_SEID"
+	conditionHeight     = "height"
+	conditionCatchingUp = "catchingUp"
+	actionSIGTERM       = "SIGTERM_SEID"
 
 	heightPollInterval = 100 * time.Millisecond
 )
@@ -54,6 +55,10 @@ func (w *ConditionWaiter) Handler() engine.TaskHandler {
 				return fmt.Errorf("targetHeight must be > 0, got %d", params.TargetHeight)
 			}
 			if err := w.awaitHeight(ctx, params.TargetHeight); err != nil {
+				return err
+			}
+		case conditionCatchingUp:
+			if err := w.awaitCaughtUp(ctx); err != nil {
 				return err
 			}
 		default:
@@ -100,6 +105,49 @@ func (w *ConditionWaiter) awaitHeight(ctx context.Context, targetHeight int64) e
 
 		if height >= targetHeight {
 			awaitLog.Info("target height reached", "current", height, "target", targetHeight)
+			return nil
+		}
+	}
+}
+
+// awaitCaughtUp polls the local node until it reports catching_up=false at a
+// height past genesis (>1). A freshly state-synced node reports catching_up
+// while it applies the snapshot and backfills; the height>1 floor rejects the
+// degenerate window where a just-started node reads catching_up=false before it
+// has synced. This matches the sdk/sei readiness semantics the controller uses.
+func (w *ConditionWaiter) awaitCaughtUp(ctx context.Context) error {
+	awaitLog.Info("awaiting caught up", "rpc", w.rpc.Endpoint())
+
+	var rpcHealthy bool
+	var loggedInitialWait bool
+	ticker := time.NewTicker(heightPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+
+		status, err := w.rpc.Status(ctx)
+		if err != nil {
+			if rpcHealthy {
+				awaitLog.Warn("rpc became unavailable", "err", err)
+				rpcHealthy = false
+			} else if !loggedInitialWait {
+				awaitLog.Info("waiting for rpc to become available", "err", err)
+				loggedInitialWait = true
+			}
+			continue
+		}
+		if !rpcHealthy {
+			awaitLog.Info("rpc available", "height", status.LatestBlockHeight, "catchingUp", status.CatchingUp)
+			rpcHealthy = true
+		}
+
+		if !status.CatchingUp && status.LatestBlockHeight > 1 {
+			awaitLog.Info("node caught up", "height", status.LatestBlockHeight)
 			return nil
 		}
 	}

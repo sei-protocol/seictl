@@ -179,6 +179,53 @@ func TestMarkReadyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWorkflowHoldTasksRoundTrip(t *testing.T) {
+	cases := []struct {
+		task     TaskBuilder
+		wantType string
+	}{
+		{MarkNotReadyTask{}, TaskTypeMarkNotReady},
+		{StopSeidTask{}, TaskTypeStopSeid},
+		{ResetDataTask{}, TaskTypeResetData},
+	}
+	for _, tc := range cases {
+		t.Run(tc.wantType, func(t *testing.T) {
+			if err := tc.task.Validate(); err != nil {
+				t.Fatalf("Validate() = %v", err)
+			}
+			req := tc.task.ToTaskRequest()
+			if req.Type != tc.wantType {
+				t.Errorf("Type = %q, want %q", req.Type, tc.wantType)
+			}
+			if req.Params != nil {
+				t.Errorf("Params = %v, want nil (empty-payload task)", req.Params)
+			}
+		})
+	}
+}
+
+func TestAwaitCatchingUpRoundTrip(t *testing.T) {
+	task := AwaitConditionTask{Condition: ConditionCatchingUp}
+	if err := task.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	req := task.ToTaskRequest()
+	if req.Type != TaskTypeAwaitCondition {
+		t.Errorf("Type = %q, want %q", req.Type, TaskTypeAwaitCondition)
+	}
+	if req.Params == nil {
+		t.Fatal("expected non-nil Params")
+	}
+	p := *req.Params
+	if p["condition"] != ConditionCatchingUp {
+		t.Errorf("condition = %v, want %q", p["condition"], ConditionCatchingUp)
+	}
+	// targetHeight is meaningless for catchingUp and must be omitted.
+	if _, ok := p["targetHeight"]; ok {
+		t.Errorf("targetHeight should be omitted for catchingUp, got %v", p["targetHeight"])
+	}
+}
+
 func TestSetGenesisPeersRoundTrip(t *testing.T) {
 	task := SetGenesisPeersTask{}
 	if err := task.Validate(); err != nil {

@@ -59,12 +59,17 @@ const (
 	TaskTypeGovVote            = string(wire.TaskGovVote)
 	TaskTypeGovSoftwareUpgrade = string(wire.TaskGovSoftwareUpgrade)
 	TaskTypeGovParamChange     = string(wire.TaskGovParamChange)
+
+	TaskTypeMarkNotReady = string(wire.TaskMarkNotReady)
+	TaskTypeStopSeid     = string(wire.TaskStopSeid)
+	TaskTypeResetData    = string(wire.TaskResetData)
 )
 
 // Known condition and action values for AwaitConditionTask.
 const (
-	ConditionHeight = "height"
-	ActionSIGTERM   = "SIGTERM_SEID"
+	ConditionHeight     = "height"
+	ConditionCatchingUp = "catchingUp"
+	ActionSIGTERM       = "SIGTERM_SEID"
 )
 
 // SnapshotRestoreTask downloads and extracts a snapshot archive from S3.
@@ -212,6 +217,47 @@ func (t RestartSeidTask) Validate() error  { return nil }
 func (t RestartSeidTask) ToTaskRequest() TaskRequest {
 	req := TaskRequest{Type: t.TaskType()}
 	return req
+}
+
+// MarkNotReadyTask re-arms the seid start gate for a node hold: it purges
+// recorded mark-ready results and flips the sidecar readiness flag false, so
+// the next container restart parks seid at the gate (healthz 503).
+//
+// Consumers MUST poll this task to a terminal state (never fire-and-forget):
+// the purge it performs is a precondition for the destructive steps that follow
+// in the hold recipe, so releasing the next step before it completes is unsafe.
+// This contrasts with mark-ready, which is fire-and-forget by design.
+type MarkNotReadyTask struct{}
+
+func (t MarkNotReadyTask) TaskType() string { return TaskTypeMarkNotReady }
+func (t MarkNotReadyTask) Validate() error  { return nil }
+
+func (t MarkNotReadyTask) ToTaskRequest() TaskRequest {
+	return TaskRequest{Type: t.TaskType()}
+}
+
+// StopSeidTask SIGTERMs the co-located seid process and confirms it exited,
+// without waiting for it to come back up. Paired with a prior mark-not-ready,
+// the restarted container blocks at the gate instead of booting.
+type StopSeidTask struct{}
+
+func (t StopSeidTask) TaskType() string { return TaskTypeStopSeid }
+func (t StopSeidTask) Validate() error  { return nil }
+
+func (t StopSeidTask) ToTaskRequest() TaskRequest {
+	return TaskRequest{Type: t.TaskType()}
+}
+
+// ResetDataTask clears the chain data directory (data/ only), rewrites an empty
+// priv_validator_state, and removes the state-sync completion marker so the
+// node re-bootstraps through state sync. Refuses to run while seid's RPC serves.
+type ResetDataTask struct{}
+
+func (t ResetDataTask) TaskType() string { return TaskTypeResetData }
+func (t ResetDataTask) Validate() error  { return nil }
+
+func (t ResetDataTask) ToTaskRequest() TaskRequest {
+	return TaskRequest{Type: t.TaskType()}
 }
 
 // SetGenesisPeersTask requests the sidecar to publish this node's peer
@@ -572,6 +618,9 @@ func (t AwaitConditionTask) Validate() error {
 		if t.TargetHeight <= 0 {
 			return fmt.Errorf("await-condition: height condition requires TargetHeight > 0")
 		}
+	case ConditionCatchingUp:
+		// No parameters: caught-up is derived from the local node's /status
+		// (catching_up=false, height>1).
 	default:
 		return fmt.Errorf("await-condition: unknown condition %q", t.Condition)
 	}
@@ -583,8 +632,12 @@ func (t AwaitConditionTask) Validate() error {
 
 func (t AwaitConditionTask) ToTaskRequest() TaskRequest {
 	p := map[string]interface{}{
-		"condition":    t.Condition,
-		"targetHeight": t.TargetHeight,
+		"condition": t.Condition,
+	}
+	// targetHeight is meaningful only for the height condition; omit it
+	// otherwise so a catchingUp request doesn't carry a spurious zero.
+	if t.TargetHeight > 0 {
+		p["targetHeight"] = t.TargetHeight
 	}
 	if t.Action != "" {
 		p["action"] = t.Action

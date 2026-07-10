@@ -20,6 +20,12 @@ type ResultStore interface {
 	// Delete removes a result by ID. Returns true if it existed.
 	Delete(id string) (bool, error)
 
+	// DeleteByType removes all results of the given task type and returns
+	// how many rows were removed. Used by mark-not-ready to purge recorded
+	// mark-ready results so a stranded running one cannot rehydrate and
+	// release a node hold after a data wipe.
+	DeleteByType(taskType string) (int, error)
+
 	// Ping verifies the store is responsive. Used by liveness checks.
 	Ping() error
 

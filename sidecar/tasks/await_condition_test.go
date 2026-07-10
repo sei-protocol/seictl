@@ -198,6 +198,81 @@ func TestAwaitHeight_UnknownCondition(t *testing.T) {
 	}
 }
 
+// syncStep is one (height, catchingUp) sample for statusServer.
+type syncStep struct {
+	height     int64
+	catchingUp bool
+}
+
+// statusServer serves a /status sequence; after exhaustion it repeats the last.
+func statusServer(steps ...syncStep) *httptest.Server {
+	var mu sync.Mutex
+	idx := 0
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		i := idx
+		if i < len(steps)-1 {
+			idx++
+		}
+		mu.Unlock()
+		_, _ = fmt.Fprintf(w,
+			`{"jsonrpc":"2.0","id":-1,"result":{"sync_info":{"latest_block_height":"%d","catching_up":%t}}}`,
+			steps[i].height, steps[i].catchingUp)
+	}))
+}
+
+func TestAwaitCatchingUp_ReachesCaughtUp(t *testing.T) {
+	// catching_up flips false only after height climbs past 1.
+	srv := statusServer(
+		syncStep{0, true},
+		syncStep{500, true},
+		syncStep{1200, false},
+	)
+	defer srv.Close()
+
+	handler := NewConditionWaiter(rpcClient(srv.URL)).Handler()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if _, err := handler(ctx, map[string]any{"condition": "catchingUp"}); err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+}
+
+func TestAwaitCatchingUp_IgnoresNotCaughtUpAtGenesisHeight(t *testing.T) {
+	// A just-started node can report catching_up=false at height<=1 before it
+	// has synced; the height>1 floor must not treat that as caught up. The
+	// server holds height 1 for the first two samples, then jumps past it.
+	srv := statusServer(
+		syncStep{1, false},
+		syncStep{1, false},
+		syncStep{3000, false},
+	)
+	defer srv.Close()
+
+	handler := NewConditionWaiter(rpcClient(srv.URL)).Handler()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if _, err := handler(ctx, map[string]any{"condition": "catchingUp"}); err != nil {
+		t.Fatalf("expected success once height passes 1, got %v", err)
+	}
+}
+
+func TestAwaitCatchingUp_BlocksWhileCatchingUp(t *testing.T) {
+	srv := statusServer(syncStep{5000, true}) // never stops catching up
+	defer srv.Close()
+
+	handler := NewConditionWaiter(rpcClient(srv.URL)).Handler()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := handler(ctx, map[string]any{"condition": "catchingUp"})
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected DeadlineExceeded while catching up, got %v", err)
+	}
+}
+
 func TestAwaitHeight_UnknownAction(t *testing.T) {
 	srv := heightServer(500)
 	defer srv.Close()

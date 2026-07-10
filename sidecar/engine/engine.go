@@ -67,21 +67,58 @@ func (e *Engine) RehydrateStaleTasks() {
 		log.Error("failed to list stale tasks", "err", err)
 		return
 	}
+
+	// A node hold must win crash recovery deterministically. Run any stale
+	// mark-not-ready SYNCHRONOUSLY FIRST: its handler purges stranded mark-ready
+	// rows from the store and its completion hook flips readiness false. This
+	// removes the Store(true)/Store(false) race that goroutine dispatch would
+	// otherwise create between a stranded mark-ready and a stranded
+	// mark-not-ready — a race that could transiently release a held seid.
+	//
+	// CONTRACT: a hold handler run here must stay bounded (a single store op).
+	// This executes before the HTTP server's ListenAndServe, so livez does not
+	// serve yet — a slow handler here silently delays startup with no signal.
+	holdSeen := false
 	for _, tr := range stale {
-		handler, ok := e.handlers[TaskType(tr.Type)]
-		if !ok {
-			log.Warn("stale task has no handler, marking failed", "type", tr.Type, "id", tr.ID)
-			t := time.Now().UTC()
-			tr.Status = TaskStatusFailed
-			tr.Error = "no handler registered for task type"
-			tr.CompletedAt = &t
-			if err := e.store.Save(&tr); err != nil {
-				log.Error("failed to persist stale task failure", "id", tr.ID, "err", err)
-			}
+		if TaskType(tr.Type) != TaskMarkNotReady {
 			continue
 		}
-		log.Info("rehydrating stale task", "type", tr.Type, "id", tr.ID, "run", tr.Run)
-		e.runTask(tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
+		holdSeen = true
+		if handler, ok := e.resolveStaleHandler(tr); ok {
+			log.Info("rehydrating hold synchronously before other tasks",
+				"type", tr.Type, "id", tr.ID, "run", tr.Run)
+			e.runTaskSync(tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
+		}
+	}
+
+	// Re-read the source of truth after the purge so the mark-ready rows it
+	// deleted (and the now-terminal mark-not-ready) are not dispatched.
+	if holdSeen {
+		stale, err = e.store.ListStaleTasks()
+		if err != nil {
+			log.Error("failed to re-list stale tasks after hold", "err", err)
+			return
+		}
+	}
+
+	for _, tr := range stale {
+		switch TaskType(tr.Type) {
+		case TaskMarkNotReady:
+			continue // handled synchronously above
+		case TaskMarkReady:
+			// Fail closed: if a hold was in flight at the crash, never let a
+			// stranded mark-ready from the same era release it — even if the
+			// synchronous purge above could not delete this row (a broken
+			// store). The row is left running rather than dispatched.
+			if holdSeen {
+				log.Warn("skipping stranded mark-ready while a hold was recovering", "id", tr.ID)
+				continue
+			}
+		}
+		if handler, ok := e.resolveStaleHandler(tr); ok {
+			log.Info("rehydrating stale task", "type", tr.Type, "id", tr.ID, "run", tr.Run)
+			e.runTask(tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
+		}
 	}
 }
 
@@ -144,46 +181,70 @@ func (e *Engine) Submit(task Task) (string, error) {
 
 // runTask spawns a goroutine to run the handler and persist the result.
 func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
-	go func() {
-		// Thread the task id through ctx for handlers that need it (e.g.
-		// sign-tx memo tagging).
-		ctx := WithTaskID(e.ctx, id)
-		result, err := e.executeRecovered(ctx, taskType, handler, params)
+	go e.runTaskSync(id, taskType, handler, params, submittedAt, run)
+}
 
-		// Engine shutdown truncated the task — leave it 'running' so
-		// RehydrateStaleTasks resumes it on restart, rather than persisting a
-		// spurious Failed (which would strand an in-flight sign-tx). Safe: this
-		// path uses e.ctx directly (no per-task deadline), so context.Canceled
-		// here is only shutdown.
-		if errors.Is(err, context.Canceled) {
-			log.Info("task truncated by shutdown; left running for rehydration",
-				"type", taskType, "id", id, "run", run)
-			return
-		}
+// runTaskSync runs the handler and persists the result, blocking until done.
+// runTask wraps it in a goroutine; RehydrateStaleTasks calls it directly for a
+// stale mark-not-ready that must complete (purge + readiness flip) before any
+// other stale task is dispatched.
+func (e *Engine) runTaskSync(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
+	// Thread the task id through ctx for handlers that need it (e.g.
+	// sign-tx memo tagging).
+	ctx := WithTaskID(e.ctx, id)
+	result, err := e.executeRecovered(ctx, taskType, handler, params)
 
-		t := time.Now().UTC()
-		tr := &TaskResult{
-			ID:          id,
-			Type:        string(taskType),
-			Run:         run,
-			Params:      params,
-			SubmittedAt: submittedAt,
-			CompletedAt: &t,
-		}
-		// Stamp on both paths — a failed run may still carry a result (e.g. a
-		// tx hash); a panic yields nil, so nothing partial is stamped.
-		tr.Result = result
-		if err != nil {
-			tr.Error = err.Error()
-			tr.Status = TaskStatusFailed
-		} else {
-			tr.Status = TaskStatusCompleted
-		}
+	// Engine shutdown truncated the task — leave it 'running' so
+	// RehydrateStaleTasks resumes it on restart, rather than persisting a
+	// spurious Failed (which would strand an in-flight sign-tx). Safe: this
+	// path uses e.ctx directly (no per-task deadline), so context.Canceled
+	// here is only shutdown.
+	if errors.Is(err, context.Canceled) {
+		log.Info("task truncated by shutdown; left running for rehydration",
+			"type", taskType, "id", id, "run", run)
+		return
+	}
 
-		if storeErr := e.store.Save(tr); storeErr != nil {
-			log.Error("failed to persist task result", "id", id, "err", storeErr)
-		}
-	}()
+	t := time.Now().UTC()
+	tr := &TaskResult{
+		ID:          id,
+		Type:        string(taskType),
+		Run:         run,
+		Params:      params,
+		SubmittedAt: submittedAt,
+		CompletedAt: &t,
+	}
+	// Stamp on both paths — a failed run may still carry a result (e.g. a
+	// tx hash); a panic yields nil, so nothing partial is stamped.
+	tr.Result = result
+	if err != nil {
+		tr.Error = err.Error()
+		tr.Status = TaskStatusFailed
+	} else {
+		tr.Status = TaskStatusCompleted
+	}
+
+	if storeErr := e.store.Save(tr); storeErr != nil {
+		log.Error("failed to persist task result", "id", id, "err", storeErr)
+	}
+}
+
+// resolveStaleHandler returns the handler for a stale task. When no handler is
+// registered it marks the task failed, persists that, and returns ok=false.
+func (e *Engine) resolveStaleHandler(tr TaskResult) (TaskHandler, bool) {
+	handler, ok := e.handlers[TaskType(tr.Type)]
+	if ok {
+		return handler, true
+	}
+	log.Warn("stale task has no handler, marking failed", "type", tr.Type, "id", tr.ID)
+	t := time.Now().UTC()
+	tr.Status = TaskStatusFailed
+	tr.Error = "no handler registered for task type"
+	tr.CompletedAt = &t
+	if err := e.store.Save(&tr); err != nil {
+		log.Error("failed to persist stale task failure", "id", tr.ID, "err", err)
+	}
+	return nil, false
 }
 
 // executeRecovered runs execute under a recover so a handler panic becomes a
@@ -216,8 +277,23 @@ func (e *Engine) execute(ctx context.Context, taskType TaskType, handler TaskHan
 	elapsed := time.Since(start)
 	log.Info("task completed", "type", taskType, "elapsed", elapsed.Round(time.Millisecond))
 	taskDuration.WithLabelValues(string(taskType), "completed").Observe(elapsed.Seconds())
-	if taskType == TaskMarkReady {
+	// These two hooks are the only writers of e.ready: mark-ready flips it true,
+	// mark-not-ready flips it false to re-arm the start gate for a node hold.
+	// The flip happens only on handler success — a failed mark-not-ready purge
+	// leaves readiness untouched (fail-safe: nothing half-held).
+	//
+	// Crash-recovery ordering is enforced in RehydrateStaleTasks, which runs a
+	// stranded mark-not-ready synchronously (purging stranded mark-ready rows)
+	// before dispatching anything else, so no Store(true)/Store(false) race can
+	// transiently release a hold. The one interlock this engine does NOT own: on
+	// the live path, a controller-submitted mark-ready concurrent with an active
+	// hold — that mutual exclusion is the controller's (reapproval suppression
+	// keyed on adoptedWorkflow), not enforced here.
+	switch taskType {
+	case TaskMarkReady:
 		e.ready.Store(true)
+	case TaskMarkNotReady:
+		e.ready.Store(false)
 	}
 	return result, nil
 }
