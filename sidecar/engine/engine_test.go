@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -528,11 +529,11 @@ func TestRemoveResult(t *testing.T) {
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 	waitForResult(t, eng, id)
 
-	if !eng.RemoveResult(id) {
-		t.Fatal("expected remove to return true")
+	if deleted, err := eng.RemoveResult(id); err != nil || !deleted {
+		t.Fatalf("expected remove to return (true, nil), got (%v, %v)", deleted, err)
 	}
-	if eng.RemoveResult(id) {
-		t.Fatal("second remove should return false")
+	if deleted, err := eng.RemoveResult(id); err != nil || deleted {
+		t.Fatalf("second remove should return (false, nil), got (%v, %v)", deleted, err)
 	}
 	if eng.GetResult(id) != nil {
 		t.Fatal("expected nil after removal")
@@ -561,8 +562,8 @@ func TestRemoveActiveTaskCancels(t *testing.T) {
 		t.Fatal("timed out waiting for task to start")
 	}
 
-	if !eng.RemoveResult(id) {
-		t.Fatal("expected remove to return true")
+	if deleted, err := eng.RemoveResult(id); err != nil || !deleted {
+		t.Fatalf("expected remove to return (true, nil), got (%v, %v)", deleted, err)
 	}
 	select {
 	case <-stopped:
@@ -629,8 +630,8 @@ func TestRemoveRehydratedTaskCancels(t *testing.T) {
 		t.Fatal("timed out waiting for rehydrated task to start")
 	}
 
-	if !eng.RemoveResult(id) {
-		t.Fatal("expected remove to return true")
+	if deleted, err := eng.RemoveResult(id); err != nil || !deleted {
+		t.Fatalf("expected remove to return (true, nil), got (%v, %v)", deleted, err)
 	}
 	select {
 	case <-stopped:
@@ -639,6 +640,128 @@ func TestRemoveRehydratedTaskCancels(t *testing.T) {
 	}
 	if eng.GetResult(id) != nil {
 		t.Fatal("expected nil after removal")
+	}
+}
+
+// Retry race (Finding 1): a Failed task resubmitted under the same ID starts a
+// new run whose newTaskContext overwrites the cancel entry. If the superseded
+// run's runTaskSync defer fires AFTER the retry registered, its clearCancel must
+// not cancel or drop the retry's entry — the blind delete-by-ID this replaced
+// would kill the retry's live context. This drives clearCancel directly to make
+// the interleaving deterministic under -race.
+func TestClearCancelIgnoresSupersededRun(t *testing.T) {
+	eng := newTestEngine(t, nil)
+	const id = "aaaaaaaa-1111-2222-3333-444444444444"
+
+	eng.mu.Lock()
+	retryCtx := eng.newTaskContext(id, 2) // run 2 (the retry) wins registration
+	eng.mu.Unlock()
+
+	eng.clearCancel(id, 1) // run 1's late defer must be a no-op
+
+	if retryCtx.Err() != nil {
+		t.Fatal("run 1's stale clearCancel cancelled the retry's context")
+	}
+	if cancelRegistrySize(eng) != 1 {
+		t.Fatalf("retry entry must survive the superseded run's cleanup; size %d", cancelRegistrySize(eng))
+	}
+
+	eng.clearCancel(id, 2) // run 2's own cleanup still cancels and removes it
+	if retryCtx.Err() == nil {
+		t.Fatal("run 2's own clearCancel must cancel its context")
+	}
+	if cancelRegistrySize(eng) != 0 {
+		t.Fatalf("run 2's entry must be removed by its own clearCancel; size %d", cancelRegistrySize(eng))
+	}
+}
+
+// toggleDeleteFailStore makes store.Delete fail on demand so a DELETE can be
+// driven through the failure path and then a retry through the success path.
+type toggleDeleteFailStore struct {
+	*SQLiteStore
+	failDelete atomic.Bool
+}
+
+func (s *toggleDeleteFailStore) Delete(id string) (bool, error) {
+	if s.failDelete.Load() {
+		return false, fmt.Errorf("simulated delete failure")
+	}
+	return s.SQLiteStore.Delete(id)
+}
+
+// Failed delete must not strand (Finding 2): when store.Delete fails, RemoveResult
+// still cancels the goroutine (work stops) but surfaces the error and leaves the
+// row 'running' so it stays recoverable — a DELETE retry (or rehydration on
+// restart) can still act on it. The old code removed the registry entry before
+// confirming the delete and reported not-found, leaving a 'running' row with no
+// goroutine that Submit's dedup would refuse to re-run: permanently stranded.
+func TestRemoveResultFailedDeleteDoesNotStrand(t *testing.T) {
+	inner, err := NewMemoryStore()
+	if err != nil {
+		t.Fatalf("memory store: %v", err)
+	}
+	t.Cleanup(func() { _ = inner.Close() })
+	store := &toggleDeleteFailStore{SQLiteStore: inner}
+	store.failDelete.Store(true)
+
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) (json.RawMessage, error) {
+			close(started)
+			<-ctx.Done()
+			close(stopped)
+			return nil, ctx.Err()
+		},
+	}, store)
+
+	id, err := eng.Submit(Task{Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for task to start")
+	}
+
+	deleted, err := eng.RemoveResult(id)
+	if err == nil {
+		t.Fatal("RemoveResult must surface the store.Delete failure so the caller can retry")
+	}
+	if deleted {
+		t.Fatal("RemoveResult must not report the row removed when store.Delete failed")
+	}
+
+	// The work is still cancelled — cancellation is unconditional.
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("task goroutine did not observe cancellation despite the delete failure")
+	}
+
+	// The row survives and stays 'running', so it remains actionable.
+	r := eng.GetResult(id)
+	if r == nil {
+		t.Fatal("row must survive a failed delete so it stays recoverable")
+	}
+	if r.Status != TaskStatusRunning {
+		t.Fatalf("row status = %q, want running (recoverable)", r.Status)
+	}
+
+	// A DELETE retry against a now-healthy store recovers it.
+	store.failDelete.Store(false)
+	deleted, err = eng.RemoveResult(id)
+	if err != nil {
+		t.Fatalf("DELETE retry: %v", err)
+	}
+	if !deleted {
+		t.Fatal("DELETE retry should report the row removed")
+	}
+	if eng.GetResult(id) != nil {
+		t.Fatal("row should be gone after a successful DELETE retry")
 	}
 }
 

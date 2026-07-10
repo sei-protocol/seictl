@@ -163,7 +163,12 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing task ID")
 		return
 	}
-	if !s.engine.RemoveResult(id) {
+	deleted, err := s.engine.RemoveResult(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete task; retry")
+		return
+	}
+	if !deleted {
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
