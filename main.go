@@ -11,6 +11,7 @@ import (
 
 	"github.com/sei-protocol/seictl/seinetwork"
 	"github.com/sei-protocol/seictl/seinode"
+	"github.com/sei-protocol/seictl/workflow"
 )
 
 var (
@@ -54,6 +55,7 @@ var (
 			&reportCmd,
 			&seinetwork.Cmd,
 			&seinode.Cmd,
+			&workflow.Cmd,
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{

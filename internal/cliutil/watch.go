@@ -41,10 +41,34 @@ func MatchPhase(obj *unstructured.Unstructured, until string) (bool, error) {
 	return false, nil
 }
 
+// MatchPhaseAtLeastGeneration is MatchPhase gated on the controller having
+// observed at least minGeneration. A terminal phase (Complete or Failed) is
+// honored only once status.observedGeneration catches up to the generation the
+// caller applied, so an apply-then-watch cannot false-green on — or replay the
+// stale failure of — a prior run of a re-applied CR. minGeneration == 0 is the
+// ungated case (observedGeneration defaults to 0), so MatchPhase's existing
+// callers are unaffected.
+func MatchPhaseAtLeastGeneration(obj *unstructured.Unstructured, until string, minGeneration int64) (bool, error) {
+	observed, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
+	if observed < minGeneration {
+		return false, nil
+	}
+	return MatchPhase(obj, until)
+}
+
 // RunWatch streams every event for the named resource as one NDJSON line
 // on out, returning nil when MatchPhase(obj, until) is satisfied and a
 // metav1.Status-shaped error on timeout / terminal Failed / API error.
 func RunWatch(ctx context.Context, cfg *rest.Config, gvr schema.GroupVersionResource, ns, name, until string, timeout time.Duration, out io.Writer) error {
+	return RunWatchGen(ctx, cfg, gvr, ns, name, until, 0, timeout, out)
+}
+
+// RunWatchGen is RunWatch with a generation gate: a terminal phase is honored
+// only once status.observedGeneration >= minGeneration (see
+// MatchPhaseAtLeastGeneration). Pass the generation returned by the apply so
+// the watch cannot match a stale terminal result the controller has not
+// re-confirmed for this apply. minGeneration == 0 is the ungated RunWatch.
+func RunWatchGen(ctx context.Context, cfg *rest.Config, gvr schema.GroupVersionResource, ns, name, until string, minGeneration int64, timeout time.Duration, out io.Writer) error {
 	dyn, err := dynamic.NewForConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("build dynamic client: %w", err)
@@ -74,7 +98,7 @@ func RunWatch(ctx context.Context, cfg *rest.Config, gvr schema.GroupVersionReso
 		if err := enc.Encode(obj.Object); err != nil {
 			return false, fmt.Errorf("encode NDJSON: %w", err)
 		}
-		return MatchPhase(obj, until)
+		return MatchPhaseAtLeastGeneration(obj, until, minGeneration)
 	}
 
 	watchCtx, cancel := context.WithTimeout(ctx, timeout)
