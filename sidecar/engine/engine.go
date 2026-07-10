@@ -266,13 +266,17 @@ func (e *Engine) runTaskSync(ctx context.Context, id string, taskType TaskType, 
 	// cases, leave the store untouched: on shutdown the row stays 'running' so
 	// RehydrateStaleTasks resumes it on restart (persisting a spurious Failed
 	// would strand an in-flight sign-tx); on DELETE the handler already removed
-	// the row, so writing nothing is the true-deletion outcome. Keying on
-	// ctx.Err() (not only a context.Canceled-wrapping error) also suppresses
-	// the case where cancellation surfaces as an unrelated handler error,
-	// avoiding a confusing Failed row after the row is already gone. A run that
+	// the row, so writing nothing is the true-deletion outcome. Keying on a
+	// cancelled context (not only a context.Canceled-wrapping error) also
+	// suppresses the case where cancellation surfaces as an unrelated handler
+	// error, avoiding a confusing Failed row after the row is already gone. The
+	// guard matches only context.Canceled, never any ctx error: a
+	// context.DeadlineExceeded (e.g. a per-task timeout added to newTaskContext)
+	// falls through to the normal Failed-persistence path so a timed-out one-shot
+	// task reaches Failed rather than being stranded in 'running'. A run that
 	// SUCCEEDED (err == nil) is always persisted, even under cancellation, so a
 	// completed non-idempotent task is never re-run on restart.
-	if err != nil && (errors.Is(err, context.Canceled) || ctx.Err() != nil) {
+	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)) {
 		log.Info("task cancelled; leaving store untouched",
 			"type", taskType, "id", id, "run", run)
 		return

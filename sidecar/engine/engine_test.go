@@ -642,10 +642,9 @@ func TestRemoveRehydratedTaskCancels(t *testing.T) {
 	}
 }
 
-// The residual race the design flagged: a handler that surfaces cancellation as
-// an unrelated (non-context.Canceled) error must not resurrect a Failed row
-// after DELETE already removed it. The ctx.Err() guard keys the no-op on the
-// cancelled context, not only on a context.Canceled-wrapping error.
+// A handler that surfaces cancellation as a non-context.Canceled error must not
+// resurrect a Failed row after DELETE removed it: the ctx.Err() guard keys the
+// no-op on the cancelled context, not only on a context.Canceled-wrapping error.
 func TestRunTaskSyncSuppressesErrorUnderCancellation(t *testing.T) {
 	eng := newTestEngine(t, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
