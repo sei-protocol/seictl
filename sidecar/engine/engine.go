@@ -43,23 +43,31 @@ type Engine struct {
 
 	// cancels holds the cancel func of every currently running task, keyed by
 	// task ID, so RemoveResult can stop a task's goroutine. Each entry carries
-	// the run that registered it so cleanup is a compare-and-delete: a retry
-	// resubmits under the same ID with an incremented run and overwrites the
-	// entry, and the superseded run's late cleanup must not touch the newer
-	// run's cancel func. Guarded by mu.
+	// the generation that registered it so cleanup is a compare-and-delete: a
+	// resubmit under the same ID registers a fresh entry with a newer generation
+	// and overwrites the prior one, and a superseded registration's late cleanup
+	// must not touch the newer entry. Guarded by mu.
 	cancels map[string]cancelEntry
+
+	// gen mints a strictly-increasing, process-lifetime-unique generation for
+	// every newTaskContext registration. It discriminates a superseded
+	// registration's late cleanup from a newer registration's entry even when
+	// both share a row's run number — run is scoped to a row's lifetime and
+	// resets to 1 after a delete, so it collides across a DELETE-then-resubmit;
+	// gen never repeats.
+	gen atomic.Int64
 
 	// Config is set once during single-threaded startup before Submit
 	// is reachable; read-only thereafter. No synchronization.
 	Config ExecutionConfig
 }
 
-// cancelEntry is a registered task's cancel func tagged with the run that
-// registered it, so clearCancel can distinguish "my run's entry" from "a newer
-// run's entry that overwrote mine".
+// cancelEntry is a registered task's cancel func tagged with the generation that
+// registered it, so clearCancel and RemoveResult can distinguish "my
+// registration's entry" from "a newer registration that overwrote mine".
 type cancelEntry struct {
 	cancel context.CancelFunc
-	run    int
+	gen    int64
 }
 
 // NewEngine creates a new Engine. The engine runs until ctx is cancelled.
@@ -105,9 +113,9 @@ func (e *Engine) RehydrateStaleTasks() {
 			log.Info("rehydrating hold synchronously before other tasks",
 				"type", tr.Type, "id", tr.ID, "run", tr.Run)
 			e.mu.Lock()
-			ctx := e.newTaskContext(tr.ID, tr.Run)
+			ctx, gen := e.newTaskContext(tr.ID)
 			e.mu.Unlock()
-			e.runTaskSync(ctx, tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
+			e.runTaskSync(ctx, tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run, gen)
 		}
 	}
 
@@ -139,9 +147,9 @@ func (e *Engine) RehydrateStaleTasks() {
 		if handler, ok := e.resolveStaleHandler(tr); ok {
 			log.Info("rehydrating stale task", "type", tr.Type, "id", tr.ID, "run", tr.Run)
 			e.mu.Lock()
-			ctx := e.newTaskContext(tr.ID, tr.Run)
+			ctx, gen := e.newTaskContext(tr.ID)
 			e.mu.Unlock()
-			e.runTask(ctx, tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
+			e.runTask(ctx, tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run, gen)
 		}
 	}
 }
@@ -231,42 +239,46 @@ func (e *Engine) Submit(task Task) (string, error) {
 
 	log.Info("task submitted", "type", task.Type, "id", id, "run", run)
 	taskSubmissions.WithLabelValues(string(task.Type)).Inc()
-	e.runTask(e.newTaskContext(id, run), id, task.Type, handler, task.Params, now, run)
+	ctx, gen := e.newTaskContext(id)
+	e.runTask(ctx, id, task.Type, handler, task.Params, now, run, gen)
 
 	return id, nil
 }
 
 // newTaskContext derives a cancellable, task-tagged context from the engine
-// root and registers its cancel func under id, tagged with run, so RemoveResult
-// can stop the task and clearCancel can tell this run's entry from a newer
-// run's. The task id is threaded through ctx for handlers that need it (e.g.
-// sign-tx memo tagging). Callers MUST hold e.mu; clearCancel removes the entry
-// when the task terminates.
-func (e *Engine) newTaskContext(id string, run int) context.Context {
+// root and registers its cancel func under id, tagged with a freshly-minted
+// generation, so RemoveResult can stop the task and clearCancel can tell this
+// registration's entry from a newer one's. It returns the context and the
+// generation it minted; the caller threads that generation to clearCancel so
+// cleanup removes only its own entry. The task id is threaded through ctx for
+// handlers that need it (e.g. sign-tx memo tagging). Callers MUST hold e.mu;
+// clearCancel removes the entry when the task terminates.
+func (e *Engine) newTaskContext(id string) (context.Context, int64) {
+	gen := e.gen.Add(1)
 	ctx, cancel := context.WithCancel(e.ctx)
-	e.cancels[id] = cancelEntry{cancel: cancel, run: run}
-	return WithTaskID(ctx, id)
+	e.cancels[id] = cancelEntry{cancel: cancel, gen: gen}
+	return WithTaskID(ctx, id), gen
 }
 
 // clearCancel cancels and unregisters a task's context when its run reaches a
 // terminal state, so completed/failed tasks do not leak cancel funcs. It is a
-// compare-and-delete on (id, run): if a retry has already overwritten the entry
-// with a newer run, this superseded run leaves the newer entry untouched and
-// does NOT cancel it — otherwise a stale run's late cleanup would kill the
-// retry's live context. Idempotent: a no-op when RemoveResult or a newer run
-// already removed this run's entry.
-func (e *Engine) clearCancel(id string, run int) {
+// compare-and-delete on (id, gen): if a newer registration has overwritten the
+// entry, this superseded registration leaves the newer entry untouched and does
+// NOT cancel it — otherwise a stale run's late cleanup would kill a live
+// context. Idempotent: a no-op when RemoveResult or a newer registration already
+// removed this entry.
+func (e *Engine) clearCancel(id string, gen int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if entry, ok := e.cancels[id]; ok && entry.run == run {
+	if entry, ok := e.cancels[id]; ok && entry.gen == gen {
 		entry.cancel()
 		delete(e.cancels, id)
 	}
 }
 
 // runTask spawns a goroutine to run the handler and persist the result.
-func (e *Engine) runTask(ctx context.Context, id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
-	go e.runTaskSync(ctx, id, taskType, handler, params, submittedAt, run)
+func (e *Engine) runTask(ctx context.Context, id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int, gen int64) {
+	go e.runTaskSync(ctx, id, taskType, handler, params, submittedAt, run, gen)
 }
 
 // runTaskSync runs the handler and persists the result, blocking until done.
@@ -274,8 +286,8 @@ func (e *Engine) runTask(ctx context.Context, id string, taskType TaskType, hand
 // stale mark-not-ready that must complete (purge + readiness flip) before any
 // other stale task is dispatched. ctx is the per-task cancellable context from
 // newTaskContext.
-func (e *Engine) runTaskSync(ctx context.Context, id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
-	defer e.clearCancel(id, run)
+func (e *Engine) runTaskSync(ctx context.Context, id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int, gen int64) {
+	defer e.clearCancel(id, gen)
 	result, err := e.executeRecovered(ctx, taskType, handler, params)
 
 	// The task's context was cancelled — either engine shutdown (e.ctx) or an
@@ -464,7 +476,7 @@ func (e *Engine) RemoveResult(id string) (bool, error) {
 
 	if hadEntry {
 		e.mu.Lock()
-		if cur, ok := e.cancels[id]; ok && cur.run == entry.run {
+		if cur, ok := e.cancels[id]; ok && cur.gen == entry.gen {
 			delete(e.cancels, id)
 		}
 		e.mu.Unlock()

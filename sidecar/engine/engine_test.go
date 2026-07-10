@@ -643,35 +643,86 @@ func TestRemoveRehydratedTaskCancels(t *testing.T) {
 	}
 }
 
-// Retry race (Finding 1): a Failed task resubmitted under the same ID starts a
-// new run whose newTaskContext overwrites the cancel entry. If the superseded
-// run's runTaskSync defer fires AFTER the retry registered, its clearCancel must
-// not cancel or drop the retry's entry — the blind delete-by-ID this replaced
-// would kill the retry's live context. This drives clearCancel directly to make
-// the interleaving deterministic under -race.
+// A superseded registration's late cleanup must not cancel or drop a newer
+// registration's entry under the same ID: cleanup is a compare-and-delete on the
+// generation the registration minted, so the newer run's live context and entry
+// survive. Driving newTaskContext/clearCancel directly makes the interleaving
+// deterministic under -race.
 func TestClearCancelIgnoresSupersededRun(t *testing.T) {
 	eng := newTestEngine(t, nil)
 	const id = "aaaaaaaa-1111-2222-3333-444444444444"
 
 	eng.mu.Lock()
-	retryCtx := eng.newTaskContext(id, 2) // run 2 (the retry) wins registration
+	_, gen1 := eng.newTaskContext(id)        // first registration
+	retryCtx, gen2 := eng.newTaskContext(id) // second overwrites the entry
 	eng.mu.Unlock()
 
-	eng.clearCancel(id, 1) // run 1's late defer must be a no-op
+	eng.clearCancel(id, gen1) // the superseded registration's late defer must be a no-op
 
 	if retryCtx.Err() != nil {
-		t.Fatal("run 1's stale clearCancel cancelled the retry's context")
+		t.Fatal("the superseded run's stale clearCancel cancelled the live context")
 	}
 	if cancelRegistrySize(eng) != 1 {
-		t.Fatalf("retry entry must survive the superseded run's cleanup; size %d", cancelRegistrySize(eng))
+		t.Fatalf("the live entry must survive the superseded run's cleanup; size %d", cancelRegistrySize(eng))
 	}
 
-	eng.clearCancel(id, 2) // run 2's own cleanup still cancels and removes it
+	eng.clearCancel(id, gen2) // the live registration's own cleanup still cancels and removes it
 	if retryCtx.Err() == nil {
-		t.Fatal("run 2's own clearCancel must cancel its context")
+		t.Fatal("the live run's own clearCancel must cancel its context")
 	}
 	if cancelRegistrySize(eng) != 0 {
-		t.Fatalf("run 2's entry must be removed by its own clearCancel; size %d", cancelRegistrySize(eng))
+		t.Fatalf("the live run's entry must be removed by its own clearCancel; size %d", cancelRegistrySize(eng))
+	}
+}
+
+// A resubmit after a delete reuses the row-scoped run number (run resets to 1
+// once the row is gone), so cleanup must key on the never-reused generation, not
+// run. When a registration's context is cancelled and its entry removed (as a
+// successful RemoveResult does) and a fresh registration then lands under the
+// same ID with the same run number before the first's goroutine wakes, the
+// first's late cleanup must leave the fresh registration's context and entry
+// intact. Driven through the real registry mutation path so the run-number
+// collision is genuine, not simulated.
+func TestClearCancelIgnoresSupersededRunAfterResubmit(t *testing.T) {
+	eng := newTestEngine(t, nil)
+	const id = "aaaaaaaa-1111-2222-3333-444444444444"
+
+	// Registration A. In a live run this is Submit's newTaskContext with run 1.
+	eng.mu.Lock()
+	ctxA, genA := eng.newTaskContext(id)
+	eng.mu.Unlock()
+
+	// RemoveResult cancels A's context and removes its entry on a successful
+	// delete. A's goroutine has not yet woken to run its deferred clearCancel.
+	eng.mu.Lock()
+	if entry, ok := eng.cancels[id]; ok && entry.gen == genA {
+		entry.cancel()
+		delete(eng.cancels, id)
+	}
+	eng.mu.Unlock()
+	if ctxA.Err() == nil {
+		t.Fatal("the delete should have cancelled registration A's context")
+	}
+
+	// A fresh resubmit lands under the same ID. run would again be 1 here (the
+	// row is gone), but the generation is strictly newer.
+	eng.mu.Lock()
+	ctxB, genB := eng.newTaskContext(id)
+	eng.mu.Unlock()
+	if genB <= genA {
+		t.Fatalf("generation must be strictly increasing: genA=%d genB=%d", genA, genB)
+	}
+
+	// A finally wakes and runs its deferred cleanup. Under a run-keyed registry
+	// both A and B carry run 1, so this would match and cancel B; keyed on the
+	// generation it is a no-op.
+	eng.clearCancel(id, genA)
+
+	if ctxB.Err() != nil {
+		t.Fatal("registration A's stale cleanup cancelled the resubmit's live context")
+	}
+	if cancelRegistrySize(eng) != 1 {
+		t.Fatalf("the resubmit's entry must survive A's stale cleanup; size %d", cancelRegistrySize(eng))
 	}
 }
 
@@ -689,12 +740,12 @@ func (s *toggleDeleteFailStore) Delete(id string) (bool, error) {
 	return s.SQLiteStore.Delete(id)
 }
 
-// Failed delete must not strand (Finding 2): when store.Delete fails, RemoveResult
-// still cancels the goroutine (work stops) but surfaces the error and leaves the
-// row 'running' so it stays recoverable — a DELETE retry (or rehydration on
-// restart) can still act on it. The old code removed the registry entry before
-// confirming the delete and reported not-found, leaving a 'running' row with no
-// goroutine that Submit's dedup would refuse to re-run: permanently stranded.
+// When store.Delete fails, RemoveResult still cancels the goroutine (work stops)
+// but surfaces the error and leaves the row 'running' so it stays recoverable —
+// a DELETE retry (or rehydration on restart) can still act on it. It must not
+// report the row removed, and it must not drop the registry entry, so the row is
+// never stranded 'running' with no goroutine that Submit's dedup would refuse to
+// re-run.
 func TestRemoveResultFailedDeleteDoesNotStrand(t *testing.T) {
 	inner, err := NewMemoryStore()
 	if err != nil {
@@ -778,7 +829,7 @@ func TestRunTaskSyncSuppressesErrorUnderCancellation(t *testing.T) {
 	const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // the task's context is already cancelled, as after RemoveResult
-	eng.runTaskSync(WithTaskID(ctx, id), id, TaskConfigPatch, eng.handlers[TaskConfigPatch], nil, time.Now().UTC(), 1)
+	eng.runTaskSync(WithTaskID(ctx, id), id, TaskConfigPatch, eng.handlers[TaskConfigPatch], nil, time.Now().UTC(), 1, 1)
 
 	if r := eng.GetResult(id); r != nil {
 		t.Fatalf("non-context error under a cancelled ctx must not persist; got %q row", r.Status)

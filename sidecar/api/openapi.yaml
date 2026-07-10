@@ -159,6 +159,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: >-
+            Transient store failure; the task is left recoverable and the
+            DELETE is safe to retry. A Retry-After header advises the delay.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
 components:
   securitySchemes:
