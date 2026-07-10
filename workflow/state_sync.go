@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/urfave/cli/v3"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/sei-protocol/seictl/internal/cliutil"
 )
@@ -19,6 +22,52 @@ const stateSyncPreset = "state-sync"
 // command waits for. Reaching it exits 0; the Failed dual exits nonzero (via
 // cliutil.MatchPhase), giving kubectl-wait-compatible semantics.
 const phaseComplete = "Complete"
+
+// phaseFailed is the SeiNodeTaskWorkflow terminal-failure phase.
+const phaseFailed = "Failed"
+
+// forceDeleteAnnotation mirrors the controller's
+// v1alpha1.WorkflowForceDeleteAnnotation. seictl does not import the controller
+// api, so the published API string is duplicated here for the refusal guidance.
+const forceDeleteAnnotation = "sei.io/force-delete-workflow"
+
+// preflightPhaseError returns an actionable refusal when a same-named workflow
+// already sits in a terminal phase, and nil otherwise. Re-running is not an
+// in-place edit: spec params are immutable (CEL rejects a change), a no-op SSA
+// leaves the stale terminal status in place, and the list-first watch would
+// then match it — exiting 0 on a stale Complete, or replaying a stale failure
+// on Failed — having done nothing.
+func preflightPhaseError(ns, name, phase string) error {
+	switch phase {
+	case phaseComplete:
+		return cliutil.UsageError(
+			"workflow %s/%s is already Complete (its hold released on completion). "+
+				"Delete it (`seictl workflow delete %s`) and re-run, or use --name for a fresh run.",
+			ns, name, name)
+	case phaseFailed:
+		return cliutil.UsageError(
+			"workflow %s/%s previously Failed and still holds the node. Recovery is a "+
+				"force-delete (annotate it %s=<reason>, see docs) then re-run, or --name for a fresh run.",
+			ns, name, forceDeleteAnnotation)
+	}
+	return nil
+}
+
+// preflight refuses to watch when a same-named workflow is already terminal.
+// A NotFound (first run) or a non-terminal phase (join an in-progress run)
+// passes.
+func preflight(ctx context.Context, kcli client.Client, ns, name string) error {
+	obj := kind.New()
+	err := kcli.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, obj)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("preflight get SeiNodeTaskWorkflow %s/%s: %w", ns, name, err)
+	}
+	phase, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
+	return preflightPhaseError(ns, name, phase)
+}
 
 func stateSyncAction(ctx context.Context, c *cli.Command) error {
 	node := c.StringArg("node")
@@ -76,6 +125,18 @@ func stateSyncAction(ctx context.Context, c *cli.Command) error {
 		cliutil.EmitStatus(os.Stderr, err)
 		return cli.Exit("", 1)
 	}
+
+	// Refuse a re-run over a same-named terminal workflow before touching it:
+	// the no-op SSA + list-first watch would false-green on a stale Complete or
+	// replay a stale Failed. Only guards the watch path (dry-run/--no-watch do
+	// not watch, so there is nothing to false-green).
+	if !dryRun && !noWatch {
+		if err := preflight(ctx, kcli, resolvedNS, name); err != nil {
+			cliutil.EmitStatus(os.Stderr, err)
+			return cli.Exit("", 1)
+		}
+	}
+
 	if err := kind.Apply(ctx, kcli, obj, dryRun); err != nil {
 		cliutil.EmitStatus(os.Stderr, fmt.Errorf("apply SeiNodeTaskWorkflow %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
 		return cli.Exit("", 1)
@@ -92,8 +153,14 @@ func stateSyncAction(ctx context.Context, c *cli.Command) error {
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "seictl: watching %s/%s until %s (timeout %s)\n", resolvedNS, name, phaseComplete, timeout)
-	if err := cliutil.RunWatch(ctx, cfg, kind.GVR, resolvedNS, name, phaseComplete, timeout, os.Stdout); err != nil {
+	// Gate the watch on the controller observing at least the generation this
+	// apply produced, so a terminal phase left by a prior run is never honored
+	// until the controller re-confirms it for this apply (kills the false-green
+	// and the re-run TOCTOU). SSA stamped the live generation onto obj.
+	appliedGen := obj.GetGeneration()
+	fmt.Fprintf(os.Stderr, "seictl: watching %s/%s until %s at generation >= %d (timeout %s)\n",
+		resolvedNS, name, phaseComplete, appliedGen, timeout)
+	if err := cliutil.RunWatchGen(ctx, cfg, kind.GVR, resolvedNS, name, phaseComplete, appliedGen, timeout, os.Stdout); err != nil {
 		cliutil.EmitStatus(os.Stderr, err)
 		return cli.Exit("", 1)
 	}
@@ -101,7 +168,10 @@ func stateSyncAction(ctx context.Context, c *cli.Command) error {
 }
 
 var stateSyncCmd = cli.Command{
-	Name:                      "state-sync",
+	Name: "state-sync",
+	// urfave/cli's StringSliceFlag splits values on `,` by default, which would
+	// mangle repeatable values (a --set TOML list, or witness endpoints passed
+	// to --rpc-servers). Same precedent as `node apply`.
 	DisableSliceFlagSeparator: true,
 	Usage:                     "Re-bootstrap a node through CometBFT state sync and watch it to completion",
 	Description: "Renders the StateSync recipe against <node> from the embedded " +
@@ -117,6 +187,11 @@ var stateSyncCmd = cli.Command{
 		"[state-store] evm-ss-split=true for the giga migration); " +
 		"--rpc-servers overrides witness resolution (>=2 or the controller " +
 		"fails the plan closed). " +
+		"\n\n" +
+		"Re-run semantics: spec params are immutable, so re-running over a " +
+		"same-named workflow already in a terminal phase is refused — delete a " +
+		"Complete run, force-delete a Failed one (it holds the node), or pass " +
+		"--name for a fresh run. " +
 		"\n\n" +
 		"Cluster + namespace resolve from --kubeconfig and -n exactly as " +
 		"`node apply`; the resolved target prints on stderr before applying.",

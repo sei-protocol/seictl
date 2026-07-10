@@ -76,7 +76,10 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 }
 
 var applyCmd = cli.Command{
-	Name:                      "apply",
+	Name: "apply",
+	// urfave/cli's StringSliceFlag splits values on `,` by default, which would
+	// mangle repeatable values (a --set TOML list, or witness endpoints passed
+	// to --rpc-servers). Same precedent as `node apply`.
 	DisableSliceFlagSeparator: true,
 	Usage:                     "Render a preset and server-side-apply the resulting SeiNodeTaskWorkflow",
 	Description: "The raw-resource GitOps path: loads the named preset, applies " +

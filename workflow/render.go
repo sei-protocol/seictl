@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -11,6 +12,11 @@ import (
 
 	"github.com/sei-protocol/seictl/internal/cliutil"
 )
+
+// seiNodePhases is the SeiNodePhase enum (the target node's phase). Used to
+// validate --require-phase client-side, so a typo is a crisp usage error rather
+// than an apiserver Invalid wall.
+var seiNodePhases = []string{"Pending", "Initializing", "Running", "Failed", "Terminating"}
 
 type renderArgs struct {
 	preset       string
@@ -58,6 +64,10 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		return nil, fmt.Errorf("apply --target: %w", err)
 	}
 	if args.requirePhase != "" {
+		if !slices.Contains(seiNodePhases, args.requirePhase) {
+			return nil, cliutil.UsageError("--require-phase %q invalid; legal SeiNode phases: %s",
+				args.requirePhase, strings.Join(seiNodePhases, ", "))
+		}
 		if err := unstructured.SetNestedField(u.Object, args.requirePhase, "spec", "target", "requirePhase"); err != nil {
 			return nil, fmt.Errorf("apply --require-phase: %w", err)
 		}
@@ -117,7 +127,7 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 
 // loadConfigPatch reads a YAML/JSON config-patch file into the
 // file -> section-or-key -> value shape spec.stateSync.configPatch expects
-// (the config-patch task's wire form). For STO-624:
+// (the config-patch task's wire form), e.g.:
 //
 //	app.toml:
 //	  state-store:
@@ -137,6 +147,14 @@ func loadConfigPatch(path string) (map[string]interface{}, error) {
 	}
 	if len(patch) == 0 {
 		return nil, fmt.Errorf("--config-patch file %q is empty", path)
+	}
+	// Each top-level file key must map to a section table (file -> section ->
+	// value); a scalar here is a malformed patch the sidecar would reject.
+	for file, section := range patch {
+		if _, ok := section.(map[string]interface{}); !ok {
+			return nil, fmt.Errorf("--config-patch file %q: %q must map to a section table (file -> section -> value), got %T",
+				path, file, section)
+		}
 	}
 	return patch, nil
 }

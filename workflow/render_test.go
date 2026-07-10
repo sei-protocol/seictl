@@ -18,7 +18,7 @@ func writeConfigPatch(t *testing.T, body string) string {
 	return p
 }
 
-// evmSSSplitPatch is the STO-624 config patch: app.toml [state-store]
+// evmSSSplitPatch is an example config patch: app.toml [state-store]
 // evm-ss-split = true.
 const evmSSSplitPatch = `
 app.toml:
@@ -113,5 +113,21 @@ func TestRender_RequirePhaseOverride(t *testing.T) {
 	rp, _, _ := unstructured.NestedString(got.Object, "spec", "target", "requirePhase")
 	if rp != "Running" {
 		t.Errorf("spec.target.requirePhase = %q; want Running", rp)
+	}
+}
+
+func TestRender_InvalidRequirePhaseRejected(t *testing.T) {
+	_, err := render(renderArgs{preset: "state-sync", name: "n-state-sync", target: "n", requirePhase: "Bogus"})
+	if err == nil {
+		t.Fatal("expected a usage error for a --require-phase outside the SeiNode enum")
+	}
+}
+
+func TestRender_ConfigPatchScalarSectionRejected(t *testing.T) {
+	// A file key mapping to a scalar (not a section table) is a malformed patch.
+	path := writeConfigPatch(t, "app.toml: not-a-map\n")
+	_, err := render(renderArgs{preset: "state-sync", name: "n-state-sync", target: "n", configPatch: path})
+	if err == nil {
+		t.Fatal("expected an error when a config-patch file maps a file to a scalar")
 	}
 }

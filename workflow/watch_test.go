@@ -28,34 +28,40 @@ func TestWorkflowWatch_PhaseVocab(t *testing.T) {
 // --until (exit 0), Failed is a terminal error carrying the plan's failure
 // detail (nonzero), Running keeps streaming.
 func TestWorkflowWatch_MatchPhase(t *testing.T) {
-	complete := &unstructured.Unstructured{Object: map[string]interface{}{
-		"status": map[string]interface{}{"phase": "Complete"},
-	}}
-	ok, err := cliutil.MatchPhase(complete, phaseComplete)
-	if err != nil || !ok {
-		t.Errorf("Complete: got (ok=%v err=%v); want (true, nil)", ok, err)
+	cases := []struct {
+		name         string
+		phase        string
+		failedDetail string
+		wantDone     bool
+		wantErrSub   string
+	}{
+		{"complete satisfies until", "Complete", "", true, ""},
+		{"running keeps streaming", "Running", "", false, ""},
+		{"failed is terminal with detail", "Failed", "reset-data: seid RPC is serving", false, "reset-data: seid RPC is serving"},
 	}
-
-	running := &unstructured.Unstructured{Object: map[string]interface{}{
-		"status": map[string]interface{}{"phase": "Running"},
-	}}
-	if ok, err := cliutil.MatchPhase(running, phaseComplete); ok || err != nil {
-		t.Errorf("Running: got (ok=%v err=%v); want (false, nil) — keep streaming", ok, err)
-	}
-
-	failed := &unstructured.Unstructured{Object: map[string]interface{}{
-		"status": map[string]interface{}{
-			"phase": "Failed",
-			"plan": map[string]interface{}{
-				"failedTaskDetail": map[string]interface{}{"error": "reset-data: seid RPC is serving"},
-			},
-		},
-	}}
-	ok, err = cliutil.MatchPhase(failed, phaseComplete)
-	if ok || err == nil {
-		t.Fatalf("Failed: got (ok=%v err=%v); want (false, terminal error)", ok, err)
-	}
-	if !strings.Contains(err.Error(), "reset-data: seid RPC is serving") {
-		t.Errorf("Failed error must carry the plan failure detail; got %q", err.Error())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := &unstructured.Unstructured{Object: map[string]interface{}{
+				"status": map[string]interface{}{"phase": tc.phase},
+			}}
+			if tc.failedDetail != "" {
+				_ = unstructured.SetNestedField(obj.Object, tc.failedDetail, "status", "plan", "failedTaskDetail", "error")
+			}
+			done, err := cliutil.MatchPhase(obj, phaseComplete)
+			if done != tc.wantDone {
+				t.Errorf("done = %v; want %v", done, tc.wantDone)
+			}
+			if tc.wantErrSub == "" && err != nil {
+				t.Errorf("err = %v; want nil", err)
+			}
+			if tc.wantErrSub != "" {
+				if err == nil {
+					t.Fatalf("err = nil; want containing %q", tc.wantErrSub)
+				}
+				if !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("err = %q; want containing %q", err.Error(), tc.wantErrSub)
+				}
+			}
+		})
 	}
 }

@@ -64,6 +64,45 @@ func TestMatchPhase(t *testing.T) {
 	}
 }
 
+func crWithGen(phase string, failedErr string, observedGen int64) *unstructured.Unstructured {
+	obj := crWithPhase("SeiNodeTaskWorkflow", phase, failedErr)
+	_ = unstructured.SetNestedField(obj.Object, observedGen, "status", "observedGeneration")
+	return obj
+}
+
+func TestMatchPhaseAtLeastGeneration(t *testing.T) {
+	cases := []struct {
+		name     string
+		obj      *unstructured.Unstructured
+		until    string
+		minGen   int64
+		wantDone bool
+		wantErr  bool
+	}{
+		// A terminal phase from a prior run (generation behind the apply) must
+		// not be honored — no false-green, no replayed stale failure.
+		{"complete but generation behind", crWithGen("Complete", "", 1), "Complete", 2, false, false},
+		{"failed but generation behind not replayed", crWithGen("Failed", "boom", 1), "Complete", 2, false, false},
+		// Once the controller catches up to the applied generation, honor it.
+		{"complete and caught up", crWithGen("Complete", "", 2), "Complete", 2, true, false},
+		{"complete and ahead", crWithGen("Complete", "", 3), "Complete", 2, true, false},
+		{"failed and caught up errors", crWithGen("Failed", "boom", 2), "Complete", 2, false, true},
+		// minGen 0 is the ungated case (existing RunWatch callers).
+		{"ungated behaves like matchphase", crWithGen("Complete", "", 0), "Complete", 0, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			done, err := MatchPhaseAtLeastGeneration(tc.obj, tc.until, tc.minGen)
+			if done != tc.wantDone {
+				t.Errorf("done = %v; want %v", done, tc.wantDone)
+			}
+			if (err != nil) != tc.wantErr {
+				t.Errorf("err = %v; wantErr = %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestWatchExitError_TimeoutShapedAsStatus(t *testing.T) {
 	err := WatchExitError(context.DeadlineExceeded, "demo", "nightly", "Ready", 5*time.Minute)
 	var apiErr apierrors.APIStatus
