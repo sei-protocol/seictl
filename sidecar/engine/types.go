@@ -75,7 +75,7 @@ func TaskIDFromContext(ctx context.Context) string {
 }
 
 // WithTaskID attaches a task ID to ctx for handler consumption. The engine
-// calls this in runTask; tests use it to bypass Submit.
+// calls this in newTaskContext; tests use it to bypass Submit.
 func WithTaskID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, taskIDKey{}, id)
 }

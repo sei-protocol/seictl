@@ -41,6 +41,10 @@ type Engine struct {
 	store    ResultStore
 	mu       sync.Mutex
 
+	// cancels holds the cancel func of every currently running task, keyed by
+	// task ID, so RemoveResult can stop a task's goroutine. Guarded by mu.
+	cancels map[string]context.CancelFunc
+
 	// Config is set once during single-threaded startup before Submit
 	// is reachable; read-only thereafter. No synchronization.
 	Config ExecutionConfig
@@ -54,6 +58,7 @@ func NewEngine(ctx context.Context, handlers map[TaskType]TaskHandler, store Res
 		handlers: handlers,
 		ctx:      ctx,
 		store:    store,
+		cancels:  make(map[string]context.CancelFunc),
 	}
 }
 
@@ -87,7 +92,10 @@ func (e *Engine) RehydrateStaleTasks() {
 		if handler, ok := e.resolveStaleHandler(tr); ok {
 			log.Info("rehydrating hold synchronously before other tasks",
 				"type", tr.Type, "id", tr.ID, "run", tr.Run)
-			e.runTaskSync(tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
+			e.mu.Lock()
+			ctx := e.newTaskContext(tr.ID)
+			e.mu.Unlock()
+			e.runTaskSync(ctx, tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
 		}
 	}
 
@@ -118,7 +126,10 @@ func (e *Engine) RehydrateStaleTasks() {
 		}
 		if handler, ok := e.resolveStaleHandler(tr); ok {
 			log.Info("rehydrating stale task", "type", tr.Type, "id", tr.ID, "run", tr.Run)
-			e.runTask(tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
+			e.mu.Lock()
+			ctx := e.newTaskContext(tr.ID)
+			e.mu.Unlock()
+			e.runTask(ctx, tr.ID, TaskType(tr.Type), handler, tr.Params, tr.SubmittedAt, tr.Run)
 		}
 	}
 }
@@ -208,33 +219,61 @@ func (e *Engine) Submit(task Task) (string, error) {
 
 	log.Info("task submitted", "type", task.Type, "id", id, "run", run)
 	taskSubmissions.WithLabelValues(string(task.Type)).Inc()
-	e.runTask(id, task.Type, handler, task.Params, now, run)
+	e.runTask(e.newTaskContext(id), id, task.Type, handler, task.Params, now, run)
 
 	return id, nil
 }
 
+// newTaskContext derives a cancellable, task-tagged context from the engine
+// root and registers its cancel func under id so RemoveResult can stop the
+// task. The task id is threaded through ctx for handlers that need it (e.g.
+// sign-tx memo tagging). Callers MUST hold e.mu; clearCancel removes the entry
+// when the task terminates.
+func (e *Engine) newTaskContext(id string) context.Context {
+	ctx, cancel := context.WithCancel(e.ctx)
+	e.cancels[id] = cancel
+	return WithTaskID(ctx, id)
+}
+
+// clearCancel cancels and unregisters a task's context. Called when a task
+// reaches any terminal state so completed/failed tasks do not leak cancel
+// funcs. Idempotent: a no-op when RemoveResult already cancelled the task.
+func (e *Engine) clearCancel(id string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if cancel, ok := e.cancels[id]; ok {
+		cancel()
+		delete(e.cancels, id)
+	}
+}
+
 // runTask spawns a goroutine to run the handler and persist the result.
-func (e *Engine) runTask(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
-	go e.runTaskSync(id, taskType, handler, params, submittedAt, run)
+func (e *Engine) runTask(ctx context.Context, id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
+	go e.runTaskSync(ctx, id, taskType, handler, params, submittedAt, run)
 }
 
 // runTaskSync runs the handler and persists the result, blocking until done.
 // runTask wraps it in a goroutine; RehydrateStaleTasks calls it directly for a
 // stale mark-not-ready that must complete (purge + readiness flip) before any
-// other stale task is dispatched.
-func (e *Engine) runTaskSync(id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
-	// Thread the task id through ctx for handlers that need it (e.g.
-	// sign-tx memo tagging).
-	ctx := WithTaskID(e.ctx, id)
+// other stale task is dispatched. ctx is the per-task cancellable context from
+// newTaskContext.
+func (e *Engine) runTaskSync(ctx context.Context, id string, taskType TaskType, handler TaskHandler, params map[string]any, submittedAt time.Time, run int) {
+	defer e.clearCancel(id)
 	result, err := e.executeRecovered(ctx, taskType, handler, params)
 
-	// Engine shutdown truncated the task — leave it 'running' so
-	// RehydrateStaleTasks resumes it on restart, rather than persisting a
-	// spurious Failed (which would strand an in-flight sign-tx). Safe: this
-	// path uses e.ctx directly (no per-task deadline), so context.Canceled
-	// here is only shutdown.
-	if errors.Is(err, context.Canceled) {
-		log.Info("task truncated by shutdown; left running for rehydration",
+	// The task's context was cancelled — either engine shutdown (e.ctx) or an
+	// explicit DELETE (RemoveResult cancelled this task's context). In both
+	// cases, leave the store untouched: on shutdown the row stays 'running' so
+	// RehydrateStaleTasks resumes it on restart (persisting a spurious Failed
+	// would strand an in-flight sign-tx); on DELETE the handler already removed
+	// the row, so writing nothing is the true-deletion outcome. Keying on
+	// ctx.Err() (not only a context.Canceled-wrapping error) also suppresses
+	// the case where cancellation surfaces as an unrelated handler error,
+	// avoiding a confusing Failed row after the row is already gone. A run that
+	// SUCCEEDED (err == nil) is always persisted, even under cancellation, so a
+	// completed non-idempotent task is never re-run on restart.
+	if err != nil && (errors.Is(err, context.Canceled) || ctx.Err() != nil) {
+		log.Info("task cancelled; leaving store untouched",
 			"type", taskType, "id", id, "run", run)
 		return
 	}
@@ -374,8 +413,18 @@ func (e *Engine) GetResult(id string) *TaskResult {
 	return r
 }
 
-// RemoveResult removes a task by ID. Returns true if found.
+// RemoveResult removes a task by ID. Returns true if found. If the task is
+// currently running, its context is cancelled first so the goroutine stops
+// rather than being orphaned by the row deletion. An already-terminal task has
+// no registered cancel func, so this is a plain delete — unchanged behavior.
 func (e *Engine) RemoveResult(id string) bool {
+	e.mu.Lock()
+	if cancel, ok := e.cancels[id]; ok {
+		cancel()
+		delete(e.cancels, id)
+	}
+	e.mu.Unlock()
+
 	deleted, err := e.store.Delete(id)
 	if err != nil {
 		log.Error("store.Delete failed", "id", id, "err", err)

@@ -62,6 +62,12 @@ func waitForResult(t *testing.T, eng *Engine, id string) *TaskResult {
 	return nil
 }
 
+func cancelRegistrySize(eng *Engine) int {
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	return len(eng.cancels)
+}
+
 // --- Submit tests ---
 
 func TestSubmitAccepts(t *testing.T) {
@@ -535,12 +541,14 @@ func TestRemoveResult(t *testing.T) {
 
 func TestRemoveActiveTaskCancels(t *testing.T) {
 	started := make(chan struct{})
+	stopped := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(ctx context.Context, _ map[string]any) (json.RawMessage, error) {
 			close(started)
 			<-ctx.Done()
+			close(stopped)
 			return nil, ctx.Err()
 		},
 	}, newTestStore(t))
@@ -556,8 +564,102 @@ func TestRemoveActiveTaskCancels(t *testing.T) {
 	if !eng.RemoveResult(id) {
 		t.Fatal("expected remove to return true")
 	}
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("task goroutine did not observe cancellation after RemoveResult")
+	}
 	if eng.GetResult(id) != nil {
 		t.Fatal("expected nil after removal")
+	}
+}
+
+// A task that completes on its own must not leak its cancel func in the
+// registry — otherwise every finished task pins a context until shutdown.
+func TestCancelRegistryClearedOnCompletion(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
+	})
+
+	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
+	waitForResult(t, eng, id)
+
+	// clearCancel runs in the goroutine's defer, just after the result is
+	// persisted, so poll rather than reading the registry once.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cancelRegistrySize(eng) == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("cancel func leaked after completion: registry size %d", cancelRegistrySize(eng))
+}
+
+// Rehydrated tasks must get a per-task cancellable context too, not the engine
+// root — else a stale task resumed after a crash is un-cancellable and DELETE
+// would orphan its goroutine.
+func TestRemoveRehydratedTaskCancels(t *testing.T) {
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	store := newTestStore(t)
+	const id = "cccccccc-1111-2222-3333-444444444444"
+	if err := store.Save(&TaskResult{
+		ID: id, Type: string(TaskConfigPatch), Status: TaskStatusRunning, Run: 1,
+		SubmittedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed stale task: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) (json.RawMessage, error) {
+			close(started)
+			<-ctx.Done()
+			close(stopped)
+			return nil, ctx.Err()
+		},
+	}, store)
+	eng.RehydrateStaleTasks()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for rehydrated task to start")
+	}
+
+	if !eng.RemoveResult(id) {
+		t.Fatal("expected remove to return true")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("rehydrated task goroutine did not observe cancellation")
+	}
+	if eng.GetResult(id) != nil {
+		t.Fatal("expected nil after removal")
+	}
+}
+
+// The residual race the design flagged: a handler that surfaces cancellation as
+// an unrelated (non-context.Canceled) error must not resurrect a Failed row
+// after DELETE already removed it. The ctx.Err() guard keys the no-op on the
+// cancelled context, not only on a context.Canceled-wrapping error.
+func TestRunTaskSyncSuppressesErrorUnderCancellation(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+			return nil, errors.New("boom")
+		},
+	})
+
+	const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the task's context is already cancelled, as after RemoveResult
+	eng.runTaskSync(WithTaskID(ctx, id), id, TaskConfigPatch, eng.handlers[TaskConfigPatch], nil, time.Now().UTC(), 1)
+
+	if r := eng.GetResult(id); r != nil {
+		t.Fatalf("non-context error under a cancelled ctx must not persist; got %q row", r.Status)
 	}
 }
 
