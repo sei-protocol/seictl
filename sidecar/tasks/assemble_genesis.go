@@ -170,6 +170,10 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return nil, err
 		}
 
+		if err := a.populateGenesisValidators(); err != nil {
+			return nil, err
+		}
+
 		genesisHash, err := a.uploadGenesis(ctx, cfg)
 		if err != nil {
 			return nil, err
