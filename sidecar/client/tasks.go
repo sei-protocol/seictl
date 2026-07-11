@@ -47,6 +47,7 @@ const (
 	TaskTypeConfigureGenesis   = string(wire.TaskConfigureGenesis)
 	TaskTypeConfigureStateSync = string(wire.TaskConfigureStateSync)
 	TaskTypeSnapshotUpload     = string(wire.TaskSnapshotUpload)
+	TaskTypeSnapshotUploadOnce = string(wire.TaskSnapshotUploadOnce)
 	TaskTypeResultExport       = string(wire.TaskResultExport)
 	TaskTypeAwaitCondition     = string(wire.TaskAwaitCondition)
 
@@ -106,6 +107,21 @@ func (t SnapshotUploadTask) Validate() error { return nil }
 func (t SnapshotUploadTask) ToTaskRequest() TaskRequest {
 	req := TaskRequest{Type: t.TaskType()}
 	return req
+}
+
+// SnapshotUploadOnceTask runs a single snapshot upload and reaches a real
+// terminal (completed with an outcome, or failed) rather than looping. A poller
+// reads the structured result to distinguish uploaded / noop / error. S3
+// coordinates and the per-task deadline are derived by the sidecar from its
+// environment.
+type SnapshotUploadOnceTask struct{}
+
+func (t SnapshotUploadOnceTask) TaskType() string { return TaskTypeSnapshotUploadOnce }
+
+func (t SnapshotUploadOnceTask) Validate() error { return nil }
+
+func (t SnapshotUploadOnceTask) ToTaskRequest() TaskRequest {
+	return TaskRequest{Type: t.TaskType()}
 }
 
 // ConfigureGenesisTask instructs the sidecar to resolve and write genesis.json.

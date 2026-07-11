@@ -80,6 +80,15 @@ var serveCmd = cli.Command{
 			snapshotUploadInterval = parsed
 		}
 
+		snapshotUploadTimeout := tasks.DefaultUploadTimeout
+		if raw := os.Getenv("SEI_SNAPSHOT_UPLOAD_TIMEOUT"); raw != "" {
+			parsed, err := time.ParseDuration(raw)
+			if err != nil {
+				return fmt.Errorf("invalid SEI_SNAPSHOT_UPLOAD_TIMEOUT %q: %w", raw, err)
+			}
+			snapshotUploadTimeout = parsed
+		}
+
 		execCfg, err := buildExecutionConfig(homeDir)
 		if err != nil {
 			return err
@@ -106,6 +115,7 @@ var serveCmd = cli.Command{
 		if err != nil {
 			return fmt.Errorf("creating snapshot uploader: %w", err)
 		}
+		snapshotUploader.EmitStartupMetrics()
 
 		handlers := map[engine.TaskType]engine.TaskHandler{
 			engine.TaskSnapshotRestore:          snapshotRestorer.Handler(),
@@ -121,6 +131,7 @@ var serveCmd = cli.Command{
 			engine.TaskConfigureGenesis:         tasks.NewGenesisFetcher(homeDir, chainID, genesisBucket, genesisRegion, nil).Handler(),
 			engine.TaskConfigureStateSync:       tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
 			engine.TaskSnapshotUpload:           snapshotUploader.Handler(),
+			engine.TaskSnapshotUploadOnce:       snapshotUploader.OnceHandler(snapshotUploadTimeout),
 			engine.TaskResultExport:             tasks.NewResultExporter(homeDir, chainID, podName, nil).Handler(),
 			engine.TaskAwaitCondition:           tasks.NewConditionWaiter(nil).Handler(),
 			engine.TaskGenerateIdentity:         tasks.NewIdentityGenerator(homeDir).Handler(),

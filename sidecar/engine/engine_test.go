@@ -836,6 +836,58 @@ func TestRunTaskSyncSuppressesErrorUnderCancellation(t *testing.T) {
 	}
 }
 
+// A per-task deadline surfaces as context.DeadlineExceeded, NOT context.Canceled.
+// The suppression guard in runTaskSync keys only on Canceled, so a timed-out task
+// must fall through to Failed-persistence rather than being stranded 'running'.
+// (Deferred regression item R2-1 from the per-task cancellation review, landing
+// now that the one-shot upload's handler-internal timeout exists.)
+func TestRunTaskSyncPersistsFailedOnDeadlineExceeded(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+		ctx  func(t *testing.T) context.Context
+	}{
+		{
+			name: "handler-internal deadline with a live task context",
+			id:   "11111111-1111-1111-1111-111111111111",
+			ctx:  func(*testing.T) context.Context { return context.Background() },
+		},
+		{
+			name: "task context itself deadline-exceeded",
+			id:   "22222222-2222-2222-2222-222222222222",
+			ctx: func(t *testing.T) context.Context {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+				t.Cleanup(cancel)
+				<-ctx.Done()
+				return ctx
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng := newTestEngine(t, map[TaskType]TaskHandler{
+				TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+					return nil, context.DeadlineExceeded
+				},
+			})
+
+			ctx := WithTaskID(tc.ctx(t), tc.id)
+			eng.runTaskSync(ctx, tc.id, TaskConfigPatch, eng.handlers[TaskConfigPatch], nil, time.Now().UTC(), 1, 1)
+
+			r := eng.GetResult(tc.id)
+			if r == nil {
+				t.Fatal("DeadlineExceeded must persist a row; got nil (wrongly suppressed)")
+			}
+			if r.Status != TaskStatusFailed {
+				t.Fatalf("status = %q, want %q", r.Status, TaskStatusFailed)
+			}
+			if !strings.Contains(r.Error, context.DeadlineExceeded.Error()) {
+				t.Fatalf("error = %q, want it to carry %q", r.Error, context.DeadlineExceeded.Error())
+			}
+		})
+	}
+}
+
 // --- Context cancellation ---
 
 func TestContextCancellationStopsEngine(t *testing.T) {
