@@ -18,22 +18,15 @@ import (
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 )
 
-// Terminal upload outcomes, the result-wire contract documented on
-// SnapshotUploadResult in sidecar/tasks/snapshot_upload.go. Duplicated here so
-// the CLI does not import the handler package (and its S3/seid deps) just to
-// classify a result.
-const (
-	outcomeUploaded = "uploaded"
-	outcomeNoop     = "noop"
-)
-
 // snapshotUploadResult is the CLI's read-side view of the handler's structured
-// result, parsed off TaskResult.Result.
+// result, parsed off TaskResult.Result. Outcome/NoopReason are typed against the
+// single wire definition (re-exported by sidecar/client), so a handler-side
+// rename is a compile error here rather than a silent misclassification.
 type snapshotUploadResult struct {
-	Outcome    string `json:"outcome"`
-	NoopReason string `json:"noopReason"`
-	Height     int64  `json:"height"`
-	Key        string `json:"key"`
+	Outcome    sidecar.UploadOutcome `json:"outcome"`
+	NoopReason sidecar.NoopReason    `json:"noopReason"`
+	Height     int64                 `json:"height"`
+	Key        string                `json:"key"`
 }
 
 func snapshotUploadAction(ctx context.Context, c *cli.Command) error {
@@ -89,6 +82,10 @@ func snapshotUploadAction(ctx context.Context, c *cli.Command) error {
 	}
 
 	msg, cerr := classifyUpload(res)
+	// The stdout JSON payload is best-effort: the exit code is driven by
+	// classifyUpload, not by whether the render succeeds, so a write error here
+	// must not mask the verdict (unlike the sibling verbs, whose payload is the
+	// whole point and whose printJSON error is checked).
 	_ = printJSON(os.Stdout, res)
 	if cerr != nil {
 		cliutil.EmitStatus(os.Stderr, cerr)
@@ -112,8 +109,13 @@ func runSnapshotUpload(ctx context.Context, sc *sidecar.SidecarClient, id uuid.U
 }
 
 // pollUntilTerminal GETs the task on interval until it reaches completed or
-// failed, or ctx expires. A cancelled ctx returns its own error (DeadlineExceeded
-// on timeout) so the caller can map the timeout to a distinct exit message.
+// failed, or ctx expires. A transient GetTask error while ctx is still live
+// (e.g. a brief rbac-proxy restart mid-upload) is logged to stderr and the poll
+// continues to the next tick: the sidecar keeps running the upload, so aborting
+// here would only strand a multi-GB upload and let Job backoff submit a
+// redundant concurrent one. Only ctx expiry ends the loop with an error
+// (DeadlineExceeded on timeout), which the caller maps to a distinct exit
+// message. A persistent GET failure stays visible on stderr across ticks.
 func pollUntilTerminal(ctx context.Context, sc *sidecar.SidecarClient, id uuid.UUID, interval time.Duration) (*sidecar.TaskResult, error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -123,11 +125,12 @@ func pollUntilTerminal(ctx context.Context, sc *sidecar.SidecarClient, id uuid.U
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
 			}
-			return nil, err
-		}
-		switch res.Status {
-		case sidecar.Completed, sidecar.Failed:
-			return res, nil
+			fmt.Fprintf(os.Stderr, "seictl: polling snapshot-upload-once %s: %v (retrying next tick)\n", id, err)
+		} else {
+			switch res.Status {
+			case sidecar.Completed, sidecar.Failed:
+				return res, nil
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -146,14 +149,14 @@ func classifyUpload(res *sidecar.TaskResult) (string, error) {
 	case sidecar.Completed:
 		r := parseUploadResult(res)
 		switch r.Outcome {
-		case outcomeUploaded:
+		case sidecar.OutcomeUploaded:
 			return fmt.Sprintf("uploaded snapshot at height %d (%s)", r.Height, r.Key), nil
-		case outcomeNoop:
+		case sidecar.OutcomeNoop:
 			return fmt.Sprintf("noop (%s) — healthy: chain has not advanced a snapshot interval since the last upload", r.NoopReason), nil
 		default:
 			return "", failStatus(metav1.StatusReasonInternalError, http.StatusInternalServerError,
 				"snapshot-upload-once completed without a recognized outcome (got %q); expected %q or %q",
-				r.Outcome, outcomeUploaded, outcomeNoop)
+				r.Outcome, sidecar.OutcomeUploaded, sidecar.OutcomeNoop)
 		}
 	case sidecar.Failed:
 		detail := "(no error detail)"
@@ -220,7 +223,7 @@ var snapshotUploadCmd = cli.Command{
 		nodeFlag(false),
 		&cli.StringFlag{
 			Name:  "chain",
-			Usage: "Chain to discover a snapshot-publish node for (mutually exclusive with --node)",
+			Usage: "Chain ID to discover a snapshot-publish node for — exact match against the sei.io/chain label (mutually exclusive with --node)",
 		},
 		&cli.DurationFlag{
 			Name:  "timeout",

@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
+	"github.com/sei-protocol/seictl/sidecar/wire"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -39,22 +40,21 @@ const (
 // S3 bucket, region, and prefix are derived from the sidecar's environment.
 type SnapshotUploadRequest struct{}
 
-// UploadOutcome is the terminal classification of an Upload call. A one-shot
-// poller keys its verdict on this, so the values are a result-wire contract.
-type UploadOutcome string
-
-const (
-	OutcomeUploaded UploadOutcome = "uploaded"
-	OutcomeNoop     UploadOutcome = "noop"
-	OutcomeError    UploadOutcome = "error"
+// UploadOutcome and NoopReason are the snapshot-upload result-wire contract.
+// They live in sidecar/wire (the dependency-free contract home) and are aliased
+// here so handler call sites and the CLI poller reference one definition.
+type (
+	UploadOutcome = wire.UploadOutcome
+	NoopReason    = wire.NoopReason
 )
 
-// NoopReason explains why an Upload returned OutcomeNoop. Empty on OutcomeUploaded.
-type NoopReason string
-
 const (
-	NoopFewerThanTwoSnapshots NoopReason = "fewer-than-2-snapshots"
-	NoopAlreadyUploaded       NoopReason = "already-uploaded"
+	OutcomeUploaded = wire.OutcomeUploaded
+	OutcomeNoop     = wire.OutcomeNoop
+	OutcomeError    = wire.OutcomeError
+
+	NoopFewerThanTwoSnapshots = wire.NoopFewerThanTwoSnapshots
+	NoopAlreadyUploaded       = wire.NoopAlreadyUploaded
 )
 
 // SnapshotUploadResult is the structured result both handlers return through the

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
-	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -30,9 +28,8 @@ const sidecarProxyPort int32 = 8443
 // a hung connection fails fast rather than stalling a poll iteration.
 const requestTimeout = 10 * time.Second
 
-// Discovery labels for snapshot-upload target selection. The publish label
-// ships in a separate controller change; until it lands, discovery selects
-// nothing and --node is the working path.
+// Discovery labels for snapshot-upload target selection. Discovery selects
+// nothing when no pods carry the label; --node is the working path.
 const (
 	labelSnapshotPublish = "sei.io/snapshot-publish"
 	labelChain           = "sei.io/chain"
@@ -53,52 +50,24 @@ func resolveKube(c *cli.Command) (*rest.Config, string, error) {
 	return cfg, ns, nil
 }
 
-// newSidecarClient builds a SidecarClient targeting one pod's proxy, carrying
-// the resolved kube identity as an Authorization: Bearer header so the proxy's
-// TokenReview passes. It reuses the established NewSidecarClientFromPodDNS
-// addressing (http scheme, pod headless-service DNS) rather than inventing a
-// new client path.
+// newSidecarClient builds a SidecarClient targeting one pod's proxy. The HTTP
+// client is derived from the resolved rest.Config via rest.HTTPClientFor, so the
+// full client-go auth chain (inline token, token file, exec plugin, auth
+// provider) injects the caller's identity uniformly — the in-pod
+// kube-rbac-proxy's TokenReview passes regardless of kubeconfig auth mode
+// (in-cluster SA, EKS exec plugin, cert, OIDC). The composed transport's TLS
+// settings are inert against the plaintext http:// proxy; auth injection is
+// scheme-independent. requestTimeout rides through as the client's per-request
+// Timeout. The config is copied so the per-request bound does not leak onto the
+// shared cfg used by discovery.
 func newSidecarClient(cfg *rest.Config, ns, node string, port int32) (*sidecar.SidecarClient, error) {
-	token, err := bearerToken(cfg)
+	authCfg := rest.CopyConfig(cfg)
+	authCfg.Timeout = requestTimeout
+	hc, err := rest.HTTPClientFor(authCfg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("building authenticated HTTP client: %w", err)
 	}
-	doer := &bearerDoer{
-		inner: &http.Client{Timeout: requestTimeout},
-		token: token,
-	}
-	return sidecar.NewSidecarClientFromPodDNS(node, ns, port, sidecar.WithHTTPDoer(doer))
-}
-
-// bearerDoer injects the resolved kube bearer token on every request so the
-// in-pod kube-rbac-proxy can authenticate the caller. An empty token (a
-// cert-based kubeconfig, or an unauthenticated-mode sidecar) sends no header.
-type bearerDoer struct {
-	inner sidecar.HttpRequestDoer
-	token string
-}
-
-func (d *bearerDoer) Do(req *http.Request) (*http.Response, error) {
-	if d.token != "" {
-		req.Header.Set("Authorization", "Bearer "+d.token)
-	}
-	return d.inner.Do(req)
-}
-
-// bearerToken extracts the bearer token from the resolved rest.Config: the
-// inline token first, then the token file an in-cluster SA config points at.
-func bearerToken(cfg *rest.Config) (string, error) {
-	if cfg.BearerToken != "" {
-		return cfg.BearerToken, nil
-	}
-	if cfg.BearerTokenFile != "" {
-		b, err := os.ReadFile(cfg.BearerTokenFile)
-		if err != nil {
-			return "", fmt.Errorf("read bearer token file %s: %w", cfg.BearerTokenFile, err)
-		}
-		return strings.TrimSpace(string(b)), nil
-	}
-	return "", nil
+	return sidecar.NewSidecarClientFromPodDNS(node, ns, port, sidecar.WithHTTPDoer(hc))
 }
 
 // discoverPublishNode label-selects snapshot-publish pods for the chain and
@@ -119,7 +88,7 @@ func discoverPublishNode(ctx context.Context, cfg *rest.Config, ns, chain string
 		return "", fmt.Errorf("list snapshot-publish pods for chain %s in %s: %w", chain, ns, err)
 	}
 	if len(pods.Items) == 0 {
-		return "", fmt.Errorf("no pods match %s=true,%s=%s in %s (discovery needs the controller's publish-label change; use --node until it lands)",
+		return "", fmt.Errorf("no pods match %s=true,%s=%s in %s; use --node to target a node explicitly",
 			labelSnapshotPublish, labelChain, chain, ns)
 	}
 	pod := pods.Items[rand.IntN(len(pods.Items))].GetName()

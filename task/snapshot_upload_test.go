@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,12 +39,12 @@ func TestClassifyUpload(t *testing.T) {
 	}{
 		{
 			name:    "uploaded is success",
-			res:     &sidecar.TaskResult{Status: sidecar.Completed, Result: rawResult(t, snapshotUploadResult{Outcome: outcomeUploaded, Height: 42, Key: "snap/42.tar"})},
+			res:     &sidecar.TaskResult{Status: sidecar.Completed, Result: rawResult(t, snapshotUploadResult{Outcome: sidecar.OutcomeUploaded, Height: 42, Key: "snap/42.tar"})},
 			wantMsg: "height 42",
 		},
 		{
 			name:    "noop is healthy success",
-			res:     &sidecar.TaskResult{Status: sidecar.Completed, Result: rawResult(t, snapshotUploadResult{Outcome: outcomeNoop, NoopReason: "already-uploaded"})},
+			res:     &sidecar.TaskResult{Status: sidecar.Completed, Result: rawResult(t, snapshotUploadResult{Outcome: sidecar.OutcomeNoop, NoopReason: sidecar.NoopAlreadyUploaded})},
 			wantMsg: "noop (already-uploaded)",
 		},
 		{
@@ -73,7 +74,7 @@ func TestClassifyUpload(t *testing.T) {
 					t.Fatalf("expected error, got msg %q", msg)
 				}
 				var se *apierrors.StatusError
-				if !isStatusErr(err, &se) {
+				if !errors.As(err, &se) {
 					t.Fatalf("error is not a StatusError: %v", err)
 				}
 				if se.ErrStatus.Reason != tc.wantReason {
@@ -91,22 +92,16 @@ func TestClassifyUpload(t *testing.T) {
 	}
 }
 
-func isStatusErr(err error, target **apierrors.StatusError) bool {
-	se, ok := err.(*apierrors.StatusError)
-	if ok {
-		*target = se
-	}
-	return ok
-}
-
 // fakeSidecar serves POST /v0/tasks and GET /v0/tasks/{id}. It echoes the
 // caller-supplied task ID and returns `running` until the GET count reaches
-// completeAfter, then the terminal result.
+// completeAfter, then the terminal result. GET calls at or below errorGetsUntil
+// return 503 first, standing in for a transient rbac-proxy blip mid-poll.
 type fakeSidecar struct {
-	completeAfter int32
-	terminal      sidecar.TaskResult
-	submittedID   atomic.Value // uuid.UUID observed on POST
-	gets          atomic.Int32
+	completeAfter  int32
+	errorGetsUntil int32
+	terminal       sidecar.TaskResult
+	submittedID    atomic.Value // uuid.UUID observed on POST
+	gets           atomic.Int32
 }
 
 func (f *fakeSidecar) handler(t *testing.T) http.Handler {
@@ -131,6 +126,10 @@ func (f *fakeSidecar) handler(t *testing.T) http.Handler {
 	})
 	mux.HandleFunc("GET /v0/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		n := f.gets.Add(1)
+		if n <= f.errorGetsUntil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		res := sidecar.TaskResult{Id: f.terminal.Id, Type: sidecar.TaskTypeSnapshotUploadOnce}
 		if n >= f.completeAfter {
 			res = f.terminal
@@ -150,7 +149,7 @@ func TestRunSnapshotUpload_PollsToTerminal(t *testing.T) {
 		terminal: sidecar.TaskResult{
 			Id:     id,
 			Status: sidecar.Completed,
-			Result: rawResult(t, snapshotUploadResult{Outcome: outcomeUploaded, Height: 100, Key: "snap/100.tar"}),
+			Result: rawResult(t, snapshotUploadResult{Outcome: sidecar.OutcomeUploaded, Height: 100, Key: "snap/100.tar"}),
 		},
 	}
 	srv := httptest.NewServer(fake.handler(t))
@@ -172,6 +171,39 @@ func TestRunSnapshotUpload_PollsToTerminal(t *testing.T) {
 	}
 	if _, cerr := classifyUpload(res); cerr != nil {
 		t.Errorf("classifyUpload on uploaded result errored: %v", cerr)
+	}
+}
+
+// A transient GET failure (e.g. an rbac-proxy restart) must not abort the run:
+// the sidecar keeps uploading, so the poll has to survive the blip and read the
+// eventual terminal rather than fail and trigger a redundant resubmit.
+func TestPollUntilTerminal_SurvivesTransientGetError(t *testing.T) {
+	id := uuid.New()
+	fake := &fakeSidecar{
+		completeAfter:  3,
+		errorGetsUntil: 1, // first GET 503s, then running, then terminal
+		terminal: sidecar.TaskResult{
+			Id:     id,
+			Status: sidecar.Completed,
+			Result: rawResult(t, snapshotUploadResult{Outcome: sidecar.OutcomeUploaded, Height: 7, Key: "snap/7.tar"}),
+		},
+	}
+	srv := httptest.NewServer(fake.handler(t))
+	t.Cleanup(srv.Close)
+	sc, err := sidecar.NewSidecarClient(srv.URL)
+	if err != nil {
+		t.Fatalf("NewSidecarClient: %v", err)
+	}
+
+	res, err := runSnapshotUpload(context.Background(), sc, id, time.Millisecond)
+	if err != nil {
+		t.Fatalf("runSnapshotUpload should have survived one transient GET error: %v", err)
+	}
+	if res.Status != sidecar.Completed {
+		t.Fatalf("status = %q, want completed", res.Status)
+	}
+	if got := fake.gets.Load(); got < 3 {
+		t.Errorf("GET count = %d, want >= 3 (the run must poll past the 503)", got)
 	}
 }
 
