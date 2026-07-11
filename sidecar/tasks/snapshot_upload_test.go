@@ -422,12 +422,15 @@ func TestOnceHandler_ReturnsDistinguishableOutcomes(t *testing.T) {
 }
 
 // A handler-internal deadline must surface as context.DeadlineExceeded so the
-// engine persists Failed rather than stranding the task in 'running'.
+// engine persists Failed rather than stranding the task in 'running'. Unlike a
+// context.Canceled, a DeadlineExceeded is a genuine upload failure and must tick
+// the error outcome counter — the recordError suppression keys only on Canceled.
 func TestOnceHandler_DeadlineFailsCleanly(t *testing.T) {
 	home := t.TempDir()
 	setupSnapshotDirs(t, home, []int64{1000, 2000})
+	chain := "once-deadline"
 	factory := func(context.Context, string) (seis3.Uploader, error) { return blockingUploader{}, nil }
-	uploader, err := NewSnapshotUploader(home, "b", "r", "once-deadline", 0, factory)
+	uploader, err := NewSnapshotUploader(home, "b", "r", chain, 0, factory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,6 +438,45 @@ func TestOnceHandler_DeadlineFailsCleanly(t *testing.T) {
 	_, err = uploader.OnceHandler(50*time.Millisecond)(context.Background(), nil)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("handler error = %v, want context.DeadlineExceeded", err)
+	}
+	if got := testutil.ToFloat64(snapshotUploadOutcomes.WithLabelValues(chain, string(OutcomeError))); got != 1 {
+		t.Errorf("deadline-exceeded is a genuine failure: error outcome counter = %v, want 1", got)
+	}
+}
+
+// A canceled context — an operator DELETE or a node drain mid-upload — must not
+// tick the error counter. It mirrors the engine's cancellation-suppression
+// contract: a canceled task leaves no terminal record, so a drain is not counted
+// as an upload failure. The result still carries OutcomeError, but the engine
+// suppresses it on the canceled path so its value there is inert.
+func TestUpload_CanceledDoesNotTickErrorCounter(t *testing.T) {
+	home := t.TempDir()
+	setupSnapshotDirs(t, home, []int64{1000, 2000})
+	chain := "cancel-no-tick"
+	factory := func(context.Context, string) (seis3.Uploader, error) { return blockingUploader{}, nil }
+	uploader, err := NewSnapshotUploader(home, "b", "r", chain, 0, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	result, err := uploader.Upload(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Upload error = %v, want context.Canceled", err)
+	}
+	if result.Outcome != OutcomeError {
+		t.Errorf("result outcome = %q, want %q", result.Outcome, OutcomeError)
+	}
+	if got := testutil.ToFloat64(snapshotUploadOutcomes.WithLabelValues(chain, string(OutcomeError))); got != 0 {
+		t.Errorf("canceled upload must not tick error counter, got %v", got)
+	}
+	if got := testutil.ToFloat64(snapshotUploadLastRunSuccess.WithLabelValues(chain)); got != 0 {
+		t.Errorf("canceled path must not refresh last run success, got %v", got)
 	}
 }
 

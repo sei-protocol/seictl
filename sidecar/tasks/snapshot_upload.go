@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -169,7 +170,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, er
 
 	height, err := pickUploadCandidate(snapshotsDir)
 	if err != nil {
-		return u.recordError(), err
+		return u.recordError(ctx), err
 	}
 	if height == 0 {
 		uploadLog.Debug("fewer than 2 snapshots on disk, nothing to upload")
@@ -186,7 +187,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, er
 
 	uploader, err := u.s3UploaderFactory(ctx, u.region)
 	if err != nil {
-		return u.recordError(), fmt.Errorf("building S3 uploader: %w", err)
+		return u.recordError(ctx), fmt.Errorf("building S3 uploader: %w", err)
 	}
 
 	prefix := u.chainID + "/state-sync/"
@@ -194,7 +195,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, er
 	archiveKey := fmt.Sprintf("%s%d.tar.gz", prefix, height)
 	uploadLog.Info("streaming archive to S3", "key", archiveKey)
 	if err := u.streamUpload(ctx, uploader, u.bucket, archiveKey, snapshotsDir, height); err != nil {
-		return u.recordError(), fmt.Errorf("uploading %s: %w", archiveKey, err)
+		return u.recordError(ctx), fmt.Errorf("uploading %s: %w", archiveKey, err)
 	}
 
 	latestKey := prefix + "latest.txt"
@@ -205,12 +206,12 @@ func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, er
 		Body:   bytes.NewReader(latestBody),
 	})
 	if err != nil {
-		return u.recordError(), fmt.Errorf("uploading %s: %w", latestKey, err)
+		return u.recordError(ctx), fmt.Errorf("uploading %s: %w", latestKey, err)
 	}
 	uploadLog.Info("updated latest.txt", "key", latestKey, "height", height)
 
 	if err := u.writeUploadState(uploadState{LastUploadedHeight: height, LastUploadedAt: time.Now().Unix()}); err != nil {
-		return u.recordError(), err
+		return u.recordError(ctx), err
 	}
 
 	return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeUploaded, Height: height, Key: archiveKey}), nil
@@ -232,12 +233,21 @@ func (u *SnapshotUploader) recordTerminal(result SnapshotUploadResult) SnapshotU
 }
 
 // recordError increments the chain-labeled outcome counter for a failed Upload
-// and returns an error-tagged result so callers can `return u.recordError(),
+// and returns an error-tagged result so callers can `return u.recordError(ctx),
 // err` in one line. It deliberately leaves last-run-success and the uploaded
 // gauges untouched — those are clean-terminal-only signals — so a failing
 // uploader is visible on the outcome counter without falsely refreshing health.
-func (u *SnapshotUploader) recordError() SnapshotUploadResult {
-	snapshotUploadOutcomes.WithLabelValues(u.chainID, string(OutcomeError)).Inc()
+//
+// A context.Canceled error does not tick the counter: it mirrors the engine's
+// cancellation-suppression contract (a canceled task leaves no terminal record),
+// so a deploy draining a node or an operator DELETE mid-upload is not counted as
+// an upload failure. The predicate matches the engine's exactly — only
+// context.Canceled is suppressed; a context.DeadlineExceeded (per-task timeout)
+// or a genuine S3 failure still ticks.
+func (u *SnapshotUploader) recordError(ctx context.Context) SnapshotUploadResult {
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		snapshotUploadOutcomes.WithLabelValues(u.chainID, string(OutcomeError)).Inc()
+	}
 	return SnapshotUploadResult{Outcome: OutcomeError}
 }
 
