@@ -205,10 +205,10 @@ var snapshotUploadCmd = cli.Command{
 		"Selects one target, submits a snapshot-upload-once with a fresh unique " +
 		"task ID, and polls it to a terminal state. " +
 		"\n\n" +
-		"Target: --node names one explicitly (works today). --chain discovers a " +
+		"Target: --node names one explicitly. --chain discovers a " +
 		"random pod labelled sei.io/snapshot-publish=true,sei.io/chain=<chain> — " +
-		"discovery requires the controller's publish-label change, which has not " +
-		"landed yet; use --node until it does. " +
+		"when no pods carry the labels, discovery reports that and --node " +
+		"targets a node directly. " +
 		"\n\n" +
 		"Exit codes are kubectl-wait-compatible: 0 when the task completes with a " +
 		"uploaded or noop outcome (a noop is healthy — the chain has not advanced " +
