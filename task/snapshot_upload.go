@@ -41,6 +41,17 @@ func snapshotUploadAction(ctx context.Context, c *cli.Command) error {
 		return cli.Exit("", 1)
 	}
 
+	interval := c.Duration("poll-interval")
+	if interval <= 0 {
+		cliutil.EmitStatus(os.Stderr, cliutil.UsageError("--poll-interval must be positive (got %s)", interval))
+		return cli.Exit("", 1)
+	}
+	timeout := c.Duration("timeout")
+	if timeout <= 0 {
+		cliutil.EmitStatus(os.Stderr, cliutil.UsageError("--timeout must be positive (got %s)", timeout))
+		return cli.Exit("", 1)
+	}
+
 	cfg, ns, err := resolveKube(c)
 	if err != nil {
 		cliutil.EmitStatus(os.Stderr, err)
@@ -63,8 +74,6 @@ func snapshotUploadAction(ctx context.Context, c *cli.Command) error {
 	}
 
 	id := uuid.New()
-	interval := c.Duration("poll-interval")
-	timeout := c.Duration("timeout")
 	fmt.Fprintf(os.Stderr, "seictl: submitting snapshot-upload-once %s to %s/%s (poll every %s, timeout %s)\n",
 		id, ns, node, interval, timeout)
 
@@ -75,6 +84,10 @@ func snapshotUploadAction(ctx context.Context, c *cli.Command) error {
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			cliutil.EmitStatus(os.Stderr, timeoutStatus(id, node, timeout))
+			return cli.Exit("", 1)
+		}
+		if errors.Is(err, errTaskDeleted) {
+			cliutil.EmitStatus(os.Stderr, deletedStatus(id, node))
 			return cli.Exit("", 1)
 		}
 		cliutil.EmitStatus(os.Stderr, fmt.Errorf("snapshot-upload-once %s on %s: %w", id, node, err))
@@ -108,20 +121,31 @@ func runSnapshotUpload(ctx context.Context, sc *sidecar.SidecarClient, id uuid.U
 	return pollUntilTerminal(ctx, sc, id, interval)
 }
 
+// errTaskDeleted signals a 404 on GET after a successful submit: the task row is
+// gone (deleted or cancelled out-of-band), so it will never reach terminal and
+// the poll returns at once rather than burning the full --timeout. Distinct from
+// a transient GET error and from a task that ran and failed.
+var errTaskDeleted = errors.New("task deleted while awaiting completion")
+
 // pollUntilTerminal GETs the task on interval until it reaches completed or
 // failed, or ctx expires. A transient GetTask error while ctx is still live
 // (e.g. a brief rbac-proxy restart mid-upload) is logged to stderr and the poll
 // continues to the next tick: the sidecar keeps running the upload, so aborting
 // here would only strand a multi-GB upload and let Job backoff submit a
-// redundant concurrent one. Only ctx expiry ends the loop with an error
-// (DeadlineExceeded on timeout), which the caller maps to a distinct exit
-// message. A persistent GET failure stays visible on stderr across ticks.
+// redundant concurrent one. A 404 (ErrNotFound) is the exception — the row is
+// gone and cannot become terminal, so the poll returns errTaskDeleted at once.
+// Only ctx expiry otherwise ends the loop with an error (DeadlineExceeded on
+// timeout), which the caller maps to a distinct exit message. A persistent GET
+// failure stays visible on stderr across ticks.
 func pollUntilTerminal(ctx context.Context, sc *sidecar.SidecarClient, id uuid.UUID, interval time.Duration) (*sidecar.TaskResult, error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		res, err := sc.GetTask(ctx, id)
 		if err != nil {
+			if errors.Is(err, sidecar.ErrNotFound) {
+				return nil, errTaskDeleted
+			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
 			}
@@ -186,6 +210,16 @@ func timeoutStatus(id uuid.UUID, node string, timeout time.Duration) error {
 	return failStatus(metav1.StatusReasonTimeout, http.StatusGatewayTimeout,
 		"snapshot-upload-once %s timed out after %s; the task may still be running server-side — cancel it with `seictl task delete %s --node %s`",
 		id, timeout, id, node)
+}
+
+// deletedStatus shapes the 404-mid-poll verdict: the task row vanished while
+// being awaited, so it never ran to a verdict — distinct from a timeout and from
+// a task that ran and failed. Reason NotFound so the `jq -r .reason`
+// discriminator tells the three apart.
+func deletedStatus(id uuid.UUID, node string) error {
+	return failStatus(metav1.StatusReasonNotFound, http.StatusNotFound,
+		"snapshot-upload-once %s on %s was deleted while awaiting completion; it will not complete — a delete or cancel raced the poll",
+		id, node)
 }
 
 func failStatus(reason metav1.StatusReason, code int32, format string, args ...interface{}) error {
