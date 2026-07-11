@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,15 +28,54 @@ var uploadLog = seilog.NewLogger("seictl", "task", "snapshot-upload")
 const (
 	uploadStateFile       = ".sei-sidecar-last-upload.json"
 	defaultUploadInterval = 7 * 24 * time.Hour // weekly
+
+	// defaultUploadTimeout bounds a single one-shot upload. Uploads on large
+	// chains legitimately run 60-90 min, so the default is generous; a wedged
+	// S3 stream fails at the deadline rather than sitting 'running' forever.
+	defaultUploadTimeout = 2 * time.Hour
 )
 
 // SnapshotUploadRequest holds the parameters for the snapshot upload task.
 // S3 bucket, region, and prefix are derived from the sidecar's environment.
 type SnapshotUploadRequest struct{}
 
-// uploadState tracks the last successfully uploaded snapshot height.
+// UploadOutcome is the terminal classification of an Upload call. A one-shot
+// poller keys its verdict on this, so the values are a result-wire contract.
+type UploadOutcome string
+
+const (
+	OutcomeUploaded UploadOutcome = "uploaded"
+	OutcomeNoop     UploadOutcome = "noop"
+	OutcomeError    UploadOutcome = "error"
+)
+
+// NoopReason explains why an Upload returned OutcomeNoop. Empty on OutcomeUploaded.
+type NoopReason string
+
+const (
+	NoopFewerThanTwoSnapshots NoopReason = "fewer-than-2-snapshots"
+	NoopAlreadyUploaded       NoopReason = "already-uploaded"
+)
+
+// SnapshotUploadResult is the structured result both handlers return through the
+// engine so a one-shot poller can distinguish uploaded / noop / error: an error
+// return carries Outcome=OutcomeError alongside the error string. On the loop
+// path it is discarded; the engine persists it on TaskResult.Result for the
+// one-shot path.
+type SnapshotUploadResult struct {
+	Outcome    UploadOutcome `json:"outcome"`
+	NoopReason NoopReason    `json:"noopReason,omitempty"`
+	Height     int64         `json:"height,omitempty"`
+	Key        string        `json:"key,omitempty"`
+}
+
+// uploadState tracks the last successfully uploaded snapshot height and when it
+// was uploaded. LastUploadedAt (unix seconds) is persisted so the uploaded
+// gauges can be re-emitted on sidecar startup, avoiding a false-stale reading
+// after the uploading pod restarts.
 type uploadState struct {
 	LastUploadedHeight int64 `json:"lastUploadedHeight"`
+	LastUploadedAt     int64 `json:"lastUploadedAt,omitempty"`
 }
 
 // SnapshotUploader scans for locally produced Tendermint state-sync snapshots
@@ -84,10 +124,29 @@ func (u *SnapshotUploader) Handler() engine.TaskHandler {
 	})
 }
 
+// OnceHandler returns an engine.TaskHandler for the one-shot snapshot-upload
+// task. It runs Upload exactly once and returns the structured result so the
+// task reaches a real terminal (completed with an outcome, or failed with the
+// error). The execution is bounded by a handler-internal deadline so a wedged
+// S3 stream fails cleanly rather than stranding the task in 'running'. The
+// deadline lives on a child context: it surfaces as context.DeadlineExceeded,
+// which the engine persists as Failed (its cancellation-suppression guard keys
+// only on context.Canceled).
+func (u *SnapshotUploader) OnceHandler(timeout time.Duration) engine.TaskHandler {
+	if timeout <= 0 {
+		timeout = defaultUploadTimeout
+	}
+	return engine.TypedHandlerWithResult(func(ctx context.Context, _ SnapshotUploadRequest) (SnapshotUploadResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return u.Upload(ctx)
+	})
+}
+
 func (u *SnapshotUploader) runLoop(ctx context.Context) error {
 	uploadLog.Info("starting snapshot upload loop", "interval", u.uploadInterval, "bucket", u.bucket)
 	for {
-		if err := u.Upload(ctx); err != nil {
+		if _, err := u.Upload(ctx); err != nil {
 			uploadLog.Warn("upload attempt failed, will retry next interval", "error", err)
 		}
 
@@ -106,29 +165,29 @@ func (u *SnapshotUploader) runLoop(ctx context.Context) error {
 //
 // The archive is streamed through an io.Pipe so it never needs to be buffered
 // entirely in memory; the transfermanager handles multipart upload automatically.
-func (u *SnapshotUploader) Upload(ctx context.Context) error {
+func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, error) {
 	snapshotsDir := filepath.Join(u.homeDir, "data", "snapshots")
 
 	height, err := pickUploadCandidate(snapshotsDir)
 	if err != nil {
-		return err
+		return u.recordError(ctx), err
 	}
 	if height == 0 {
 		uploadLog.Debug("fewer than 2 snapshots on disk, nothing to upload")
-		return nil
+		return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeNoop, NoopReason: NoopFewerThanTwoSnapshots}), nil
 	}
 
 	last := u.readUploadState()
 	if last.LastUploadedHeight >= height {
 		uploadLog.Debug("height already uploaded", "height", height, "last-uploaded", last.LastUploadedHeight)
-		return nil
+		return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeNoop, NoopReason: NoopAlreadyUploaded, Height: height}), nil
 	}
 
 	uploadLog.Info("uploading snapshot", "height", height, "bucket", u.bucket, "region", u.region)
 
 	uploader, err := u.s3UploaderFactory(ctx, u.region)
 	if err != nil {
-		return fmt.Errorf("building S3 uploader: %w", err)
+		return u.recordError(ctx), fmt.Errorf("building S3 uploader: %w", err)
 	}
 
 	prefix := u.chainID + "/state-sync/"
@@ -136,7 +195,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context) error {
 	archiveKey := fmt.Sprintf("%s%d.tar.gz", prefix, height)
 	uploadLog.Info("streaming archive to S3", "key", archiveKey)
 	if err := u.streamUpload(ctx, uploader, u.bucket, archiveKey, snapshotsDir, height); err != nil {
-		return fmt.Errorf("uploading %s: %w", archiveKey, err)
+		return u.recordError(ctx), fmt.Errorf("uploading %s: %w", archiveKey, err)
 	}
 
 	latestKey := prefix + "latest.txt"
@@ -147,11 +206,65 @@ func (u *SnapshotUploader) Upload(ctx context.Context) error {
 		Body:   bytes.NewReader(latestBody),
 	})
 	if err != nil {
-		return fmt.Errorf("uploading %s: %w", latestKey, err)
+		return u.recordError(ctx), fmt.Errorf("uploading %s: %w", latestKey, err)
 	}
 	uploadLog.Info("updated latest.txt", "key", latestKey, "height", height)
 
-	return u.writeUploadState(uploadState{LastUploadedHeight: height})
+	if err := u.writeUploadState(uploadState{LastUploadedHeight: height, LastUploadedAt: time.Now().Unix()}); err != nil {
+		return u.recordError(ctx), err
+	}
+
+	return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeUploaded, Height: height, Key: archiveKey}), nil
+}
+
+// recordTerminal emits the metrics for a clean terminal and returns the result
+// unchanged so callers can `return u.recordTerminal(...), nil` in one line. Any
+// clean terminal (uploaded or noop) refreshes the last-run-success gauge and the
+// outcome counter; only a real upload advances the uploaded gauges.
+func (u *SnapshotUploader) recordTerminal(result SnapshotUploadResult) SnapshotUploadResult {
+	now := time.Now()
+	snapshotUploadLastRunSuccess.WithLabelValues(u.chainID).Set(float64(now.Unix()))
+	snapshotUploadOutcomes.WithLabelValues(u.chainID, string(result.Outcome)).Inc()
+	if result.Outcome == OutcomeUploaded {
+		snapshotUploadLastUploaded.WithLabelValues(u.chainID).Set(float64(now.Unix()))
+		snapshotUploadLastUploadedHeight.WithLabelValues(u.chainID).Set(float64(result.Height))
+	}
+	return result
+}
+
+// recordError increments the chain-labeled outcome counter for a failed Upload
+// and returns an error-tagged result so callers can `return u.recordError(ctx),
+// err` in one line. It deliberately leaves last-run-success and the uploaded
+// gauges untouched — those are clean-terminal-only signals — so a failing
+// uploader is visible on the outcome counter without falsely refreshing health.
+//
+// A context.Canceled error does not tick the counter: it mirrors the engine's
+// cancellation-suppression contract (a canceled task leaves no terminal record),
+// so a deploy draining a node or an operator DELETE mid-upload is not counted as
+// an upload failure. The predicate matches the engine's exactly — only
+// context.Canceled is suppressed; a context.DeadlineExceeded (per-task timeout)
+// or a genuine S3 failure still ticks.
+func (u *SnapshotUploader) recordError(ctx context.Context) SnapshotUploadResult {
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		snapshotUploadOutcomes.WithLabelValues(u.chainID, string(OutcomeError)).Inc()
+	}
+	return SnapshotUploadResult{Outcome: OutcomeError}
+}
+
+// EmitStartupMetrics re-emits the last-uploaded gauges from persisted state so a
+// restarted sidecar does not report a false-stale reading before its first run.
+// The last-run-success gauge is deliberately left unset: it is the "no clean run
+// in N hours" alert signal, and re-emitting a persisted timestamp there would
+// mask a genuinely stalled uploader after a restart.
+func (u *SnapshotUploader) EmitStartupMetrics() {
+	st := u.readUploadState()
+	if st.LastUploadedHeight <= 0 {
+		return
+	}
+	snapshotUploadLastUploadedHeight.WithLabelValues(u.chainID).Set(float64(st.LastUploadedHeight))
+	if st.LastUploadedAt > 0 {
+		snapshotUploadLastUploaded.WithLabelValues(u.chainID).Set(float64(st.LastUploadedAt))
+	}
 }
 
 // streamUpload pipes a tar.gz archive directly into the transfermanager,
@@ -340,13 +453,41 @@ func (u *SnapshotUploader) readUploadState() uploadState {
 	return state
 }
 
+// writeUploadState persists state atomically: a temp file in the same directory
+// is written, synced, and renamed over the target. A crash mid-write leaves the
+// previous complete state intact rather than a torn file that readUploadState
+// would parse as zero, silently re-uploading everything from height 0.
 func (u *SnapshotUploader) writeUploadState(state uploadState) error {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("marshaling upload state: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(u.homeDir, uploadStateFile), data, 0o644); err != nil {
-		return fmt.Errorf("writing upload state: %w", err)
+
+	tmp, err := os.CreateTemp(u.homeDir, uploadStateFile+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("creating temp upload state: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("writing temp upload state: %w", err)
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temp upload state: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("syncing temp upload state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing temp upload state: %w", err)
+	}
+
+	if err := os.Rename(tmpName, filepath.Join(u.homeDir, uploadStateFile)); err != nil {
+		return fmt.Errorf("renaming upload state: %w", err)
 	}
 	return nil
 }

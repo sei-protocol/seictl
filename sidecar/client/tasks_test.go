@@ -82,6 +82,20 @@ func TestSnapshotUploadRoundTrip(t *testing.T) {
 	properties.TestingRun(t)
 }
 
+func TestSnapshotUploadOnceRoundTrip(t *testing.T) {
+	task := SnapshotUploadOnceTask{}
+	if err := task.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+	req := task.ToTaskRequest()
+	if req.Type != TaskTypeSnapshotUploadOnce {
+		t.Errorf("Type = %q, want %q", req.Type, TaskTypeSnapshotUploadOnce)
+	}
+	if req.Params != nil {
+		t.Errorf("Params = %v, want nil (empty params)", req.Params)
+	}
+}
+
 func TestConfigureGenesisRoundTrip_S3(t *testing.T) {
 	properties := gopter.NewProperties(gopter.DefaultTestParameters())
 	properties.Property("ConfigureGenesisTask round-trips through TaskRequest", prop.ForAll(

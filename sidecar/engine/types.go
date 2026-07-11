@@ -28,6 +28,7 @@ const (
 	TaskConfigureGenesis         = wire.TaskConfigureGenesis
 	TaskConfigureStateSync       = wire.TaskConfigureStateSync
 	TaskSnapshotUpload           = wire.TaskSnapshotUpload
+	TaskSnapshotUploadOnce       = wire.TaskSnapshotUploadOnce
 	TaskResultExport             = wire.TaskResultExport
 	TaskAwaitCondition           = wire.TaskAwaitCondition
 	TaskGenerateIdentity         = wire.TaskGenerateIdentity
