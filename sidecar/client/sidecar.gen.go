@@ -624,6 +624,7 @@ type DeleteTaskResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON404      *ErrorResponse
+	JSON503      *ErrorResponse
 }
 
 // Status returns HTTPResponse.Status
@@ -855,6 +856,13 @@ func ParseDeleteTaskResponse(rsp *http.Response) (*DeleteTaskResponse, error) {
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 

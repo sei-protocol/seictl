@@ -159,14 +159,14 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 
 	t.Run("remove_task", func(t *testing.T) {
 		const failID = "22222222-2222-2222-2222-222222222222"
-		if !eng.RemoveResult(failID) {
-			t.Fatal("expected remove to return true")
+		if deleted, err := eng.RemoveResult(failID); err != nil || !deleted {
+			t.Fatalf("expected remove to return (true, nil), got (%v, %v)", deleted, err)
 		}
 		if eng.GetResult(failID) != nil {
 			t.Fatal("expected nil after removal")
 		}
-		if eng.RemoveResult(failID) {
-			t.Fatal("second remove should return false")
+		if deleted, err := eng.RemoveResult(failID); err != nil || deleted {
+			t.Fatalf("second remove should return (false, nil), got (%v, %v)", deleted, err)
 		}
 	})
 

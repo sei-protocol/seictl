@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,6 +61,12 @@ func waitForResult(t *testing.T, eng *Engine, id string) *TaskResult {
 	}
 	t.Fatalf("timed out waiting for result %s", id)
 	return nil
+}
+
+func cancelRegistrySize(eng *Engine) int {
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	return len(eng.cancels)
 }
 
 // --- Submit tests ---
@@ -522,11 +529,11 @@ func TestRemoveResult(t *testing.T) {
 	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 	waitForResult(t, eng, id)
 
-	if !eng.RemoveResult(id) {
-		t.Fatal("expected remove to return true")
+	if deleted, err := eng.RemoveResult(id); err != nil || !deleted {
+		t.Fatalf("expected remove to return (true, nil), got (%v, %v)", deleted, err)
 	}
-	if eng.RemoveResult(id) {
-		t.Fatal("second remove should return false")
+	if deleted, err := eng.RemoveResult(id); err != nil || deleted {
+		t.Fatalf("second remove should return (false, nil), got (%v, %v)", deleted, err)
 	}
 	if eng.GetResult(id) != nil {
 		t.Fatal("expected nil after removal")
@@ -535,12 +542,14 @@ func TestRemoveResult(t *testing.T) {
 
 func TestRemoveActiveTaskCancels(t *testing.T) {
 	started := make(chan struct{})
+	stopped := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	eng := NewEngine(ctx, map[TaskType]TaskHandler{
 		TaskConfigPatch: func(ctx context.Context, _ map[string]any) (json.RawMessage, error) {
 			close(started)
 			<-ctx.Done()
+			close(stopped)
 			return nil, ctx.Err()
 		},
 	}, newTestStore(t))
@@ -553,11 +562,277 @@ func TestRemoveActiveTaskCancels(t *testing.T) {
 		t.Fatal("timed out waiting for task to start")
 	}
 
-	if !eng.RemoveResult(id) {
-		t.Fatal("expected remove to return true")
+	if deleted, err := eng.RemoveResult(id); err != nil || !deleted {
+		t.Fatalf("expected remove to return (true, nil), got (%v, %v)", deleted, err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("task goroutine did not observe cancellation after RemoveResult")
 	}
 	if eng.GetResult(id) != nil {
 		t.Fatal("expected nil after removal")
+	}
+}
+
+// A task that completes on its own must not leak its cancel func in the
+// registry — otherwise every finished task pins a context until shutdown.
+func TestCancelRegistryClearedOnCompletion(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
+	})
+
+	id, _ := eng.Submit(Task{Type: TaskConfigPatch})
+	waitForResult(t, eng, id)
+
+	// clearCancel runs in the goroutine's defer, just after the result is
+	// persisted, so poll rather than reading the registry once.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cancelRegistrySize(eng) == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("cancel func leaked after completion: registry size %d", cancelRegistrySize(eng))
+}
+
+// Rehydrated tasks must get a per-task cancellable context too, not the engine
+// root — else a stale task resumed after a crash is un-cancellable and DELETE
+// would orphan its goroutine.
+func TestRemoveRehydratedTaskCancels(t *testing.T) {
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	store := newTestStore(t)
+	const id = "cccccccc-1111-2222-3333-444444444444"
+	if err := store.Save(&TaskResult{
+		ID: id, Type: string(TaskConfigPatch), Status: TaskStatusRunning, Run: 1,
+		SubmittedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed stale task: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) (json.RawMessage, error) {
+			close(started)
+			<-ctx.Done()
+			close(stopped)
+			return nil, ctx.Err()
+		},
+	}, store)
+	eng.RehydrateStaleTasks()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for rehydrated task to start")
+	}
+
+	if deleted, err := eng.RemoveResult(id); err != nil || !deleted {
+		t.Fatalf("expected remove to return (true, nil), got (%v, %v)", deleted, err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("rehydrated task goroutine did not observe cancellation")
+	}
+	if eng.GetResult(id) != nil {
+		t.Fatal("expected nil after removal")
+	}
+}
+
+// A superseded registration's late cleanup must not cancel or drop a newer
+// registration's entry under the same ID: cleanup is a compare-and-delete on the
+// generation the registration minted, so the newer run's live context and entry
+// survive. Driving newTaskContext/clearCancel directly makes the interleaving
+// deterministic under -race.
+func TestClearCancelIgnoresSupersededRun(t *testing.T) {
+	eng := newTestEngine(t, nil)
+	const id = "aaaaaaaa-1111-2222-3333-444444444444"
+
+	eng.mu.Lock()
+	_, gen1 := eng.newTaskContext(id)        // first registration
+	retryCtx, gen2 := eng.newTaskContext(id) // second overwrites the entry
+	eng.mu.Unlock()
+
+	eng.clearCancel(id, gen1) // the superseded registration's late defer must be a no-op
+
+	if retryCtx.Err() != nil {
+		t.Fatal("the superseded run's stale clearCancel cancelled the live context")
+	}
+	if cancelRegistrySize(eng) != 1 {
+		t.Fatalf("the live entry must survive the superseded run's cleanup; size %d", cancelRegistrySize(eng))
+	}
+
+	eng.clearCancel(id, gen2) // the live registration's own cleanup still cancels and removes it
+	if retryCtx.Err() == nil {
+		t.Fatal("the live run's own clearCancel must cancel its context")
+	}
+	if cancelRegistrySize(eng) != 0 {
+		t.Fatalf("the live run's entry must be removed by its own clearCancel; size %d", cancelRegistrySize(eng))
+	}
+}
+
+// A resubmit after a delete reuses the row-scoped run number (run resets to 1
+// once the row is gone), so cleanup must key on the never-reused generation, not
+// run. When a registration's context is cancelled and its entry removed (as a
+// successful RemoveResult does) and a fresh registration then lands under the
+// same ID with the same run number before the first's goroutine wakes, the
+// first's late cleanup must leave the fresh registration's context and entry
+// intact. Driven through the real registry mutation path so the run-number
+// collision is genuine, not simulated.
+func TestClearCancelIgnoresSupersededRunAfterResubmit(t *testing.T) {
+	eng := newTestEngine(t, nil)
+	const id = "aaaaaaaa-1111-2222-3333-444444444444"
+
+	// Registration A. In a live run this is Submit's newTaskContext with run 1.
+	eng.mu.Lock()
+	ctxA, genA := eng.newTaskContext(id)
+	eng.mu.Unlock()
+
+	// RemoveResult cancels A's context and removes its entry on a successful
+	// delete. A's goroutine has not yet woken to run its deferred clearCancel.
+	eng.mu.Lock()
+	if entry, ok := eng.cancels[id]; ok && entry.gen == genA {
+		entry.cancel()
+		delete(eng.cancels, id)
+	}
+	eng.mu.Unlock()
+	if ctxA.Err() == nil {
+		t.Fatal("the delete should have cancelled registration A's context")
+	}
+
+	// A fresh resubmit lands under the same ID. run would again be 1 here (the
+	// row is gone), but the generation is strictly newer.
+	eng.mu.Lock()
+	ctxB, genB := eng.newTaskContext(id)
+	eng.mu.Unlock()
+	if genB <= genA {
+		t.Fatalf("generation must be strictly increasing: genA=%d genB=%d", genA, genB)
+	}
+
+	// A finally wakes and runs its deferred cleanup. Under a run-keyed registry
+	// both A and B carry run 1, so this would match and cancel B; keyed on the
+	// generation it is a no-op.
+	eng.clearCancel(id, genA)
+
+	if ctxB.Err() != nil {
+		t.Fatal("registration A's stale cleanup cancelled the resubmit's live context")
+	}
+	if cancelRegistrySize(eng) != 1 {
+		t.Fatalf("the resubmit's entry must survive A's stale cleanup; size %d", cancelRegistrySize(eng))
+	}
+}
+
+// toggleDeleteFailStore makes store.Delete fail on demand so a DELETE can be
+// driven through the failure path and then a retry through the success path.
+type toggleDeleteFailStore struct {
+	*SQLiteStore
+	failDelete atomic.Bool
+}
+
+func (s *toggleDeleteFailStore) Delete(id string) (bool, error) {
+	if s.failDelete.Load() {
+		return false, fmt.Errorf("simulated delete failure")
+	}
+	return s.SQLiteStore.Delete(id)
+}
+
+// When store.Delete fails, RemoveResult still cancels the goroutine (work stops)
+// but surfaces the error and leaves the row 'running' so it stays recoverable —
+// a DELETE retry (or rehydration on restart) can still act on it. It must not
+// report the row removed, and it must not drop the registry entry, so the row is
+// never stranded 'running' with no goroutine that Submit's dedup would refuse to
+// re-run.
+func TestRemoveResultFailedDeleteDoesNotStrand(t *testing.T) {
+	inner, err := NewMemoryStore()
+	if err != nil {
+		t.Fatalf("memory store: %v", err)
+	}
+	t.Cleanup(func() { _ = inner.Close() })
+	store := &toggleDeleteFailStore{SQLiteStore: inner}
+	store.failDelete.Store(true)
+
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	eng := NewEngine(ctx, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(ctx context.Context, _ map[string]any) (json.RawMessage, error) {
+			close(started)
+			<-ctx.Done()
+			close(stopped)
+			return nil, ctx.Err()
+		},
+	}, store)
+
+	id, err := eng.Submit(Task{Type: TaskConfigPatch})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for task to start")
+	}
+
+	deleted, err := eng.RemoveResult(id)
+	if err == nil {
+		t.Fatal("RemoveResult must surface the store.Delete failure so the caller can retry")
+	}
+	if deleted {
+		t.Fatal("RemoveResult must not report the row removed when store.Delete failed")
+	}
+
+	// The work is still cancelled — cancellation is unconditional.
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("task goroutine did not observe cancellation despite the delete failure")
+	}
+
+	// The row survives and stays 'running', so it remains actionable.
+	r := eng.GetResult(id)
+	if r == nil {
+		t.Fatal("row must survive a failed delete so it stays recoverable")
+	}
+	if r.Status != TaskStatusRunning {
+		t.Fatalf("row status = %q, want running (recoverable)", r.Status)
+	}
+
+	// A DELETE retry against a now-healthy store recovers it.
+	store.failDelete.Store(false)
+	deleted, err = eng.RemoveResult(id)
+	if err != nil {
+		t.Fatalf("DELETE retry: %v", err)
+	}
+	if !deleted {
+		t.Fatal("DELETE retry should report the row removed")
+	}
+	if eng.GetResult(id) != nil {
+		t.Fatal("row should be gone after a successful DELETE retry")
+	}
+}
+
+// A handler that surfaces cancellation as a non-context.Canceled error must not
+// resurrect a Failed row after DELETE removed it: the ctx.Err() guard keys the
+// no-op on the cancelled context, not only on a context.Canceled-wrapping error.
+func TestRunTaskSyncSuppressesErrorUnderCancellation(t *testing.T) {
+	eng := newTestEngine(t, map[TaskType]TaskHandler{
+		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
+			return nil, errors.New("boom")
+		},
+	})
+
+	const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the task's context is already cancelled, as after RemoveResult
+	eng.runTaskSync(WithTaskID(ctx, id), id, TaskConfigPatch, eng.handlers[TaskConfigPatch], nil, time.Now().UTC(), 1, 1)
+
+	if r := eng.GetResult(id); r != nil {
+		t.Fatalf("non-context error under a cancelled ctx must not persist; got %q row", r.Status)
 	}
 }
 

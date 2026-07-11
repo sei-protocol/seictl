@@ -166,7 +166,7 @@ func (c *SidecarClient) GetTask(ctx context.Context, id uuid.UUID) (*TaskResult,
 	}
 }
 
-// DeleteTask removes a task result or cancels a scheduled task.
+// DeleteTask removes a task result or cancels a running task.
 func (c *SidecarClient) DeleteTask(ctx context.Context, id uuid.UUID) error {
 	resp, err := c.inner.DeleteTaskWithResponse(ctx, id)
 	if err != nil {

@@ -163,7 +163,17 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing task ID")
 		return
 	}
-	if !s.engine.RemoveResult(id) {
+	deleted, err := s.engine.RemoveResult(id)
+	if err != nil {
+		// A failed delete leaves the row recoverable (RemoveResult cancels the
+		// work but keeps the row and its registry entry), so the store hiccup is
+		// transient and the DELETE is safe to retry. 503 + Retry-After signals
+		// that to automated clients, which treat a bare 500 as fatal.
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusServiceUnavailable, "failed to delete task; retry")
+		return
+	}
+	if !deleted {
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
