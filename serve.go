@@ -80,7 +80,7 @@ var serveCmd = cli.Command{
 			snapshotUploadInterval = parsed
 		}
 
-		snapshotUploadTimeout := tasks.DefaultUploadTimeout
+		var snapshotUploadTimeout time.Duration
 		if raw := os.Getenv("SEI_SNAPSHOT_UPLOAD_TIMEOUT"); raw != "" {
 			parsed, err := time.ParseDuration(raw)
 			if err != nil {

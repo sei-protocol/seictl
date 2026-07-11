@@ -839,8 +839,6 @@ func TestRunTaskSyncSuppressesErrorUnderCancellation(t *testing.T) {
 // A per-task deadline surfaces as context.DeadlineExceeded, NOT context.Canceled.
 // The suppression guard in runTaskSync keys only on Canceled, so a timed-out task
 // must fall through to Failed-persistence rather than being stranded 'running'.
-// (Deferred regression item R2-1 from the per-task cancellation review, landing
-// now that the one-shot upload's handler-internal timeout exists.)
 func TestRunTaskSyncPersistsFailedOnDeadlineExceeded(t *testing.T) {
 	cases := []struct {
 		name string

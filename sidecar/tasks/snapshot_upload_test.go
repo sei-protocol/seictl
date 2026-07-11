@@ -119,6 +119,9 @@ func TestUpload_UploadsArchiveAndLatestTxt(t *testing.T) {
 	if result.Outcome != OutcomeUploaded {
 		t.Errorf("outcome = %q, want %q", result.Outcome, OutcomeUploaded)
 	}
+	if result.NoopReason != "" {
+		t.Errorf("NoopReason = %q, want empty on OutcomeUploaded", result.NoopReason)
+	}
 	if result.Height != 1000 {
 		t.Errorf("result height = %d, want 1000", result.Height)
 	}
@@ -436,7 +439,7 @@ func TestOnceHandler_DeadlineFailsCleanly(t *testing.T) {
 }
 
 // The loop must swallow per-iteration errors, keep running, and stop cleanly on
-// context cancellation — the transitional behavior that must survive unchanged.
+// context cancellation.
 func TestRunLoop_SwallowsErrorsAndStopsOnCancel(t *testing.T) {
 	home := t.TempDir()
 	setupSnapshotDirs(t, home, []int64{1000, 2000})
@@ -582,6 +585,40 @@ func TestUpload_EmitsMetrics(t *testing.T) {
 			t.Errorf("noop must not advance uploaded height gauge, got %v", got)
 		}
 	})
+}
+
+// A failed Upload must return OutcomeError (so a poller reading the persisted
+// result can tell failure apart from an empty outcome) and increment the
+// chain-labeled outcome counter, while leaving the clean-terminal gauges
+// untouched so a real S3 outage cannot read as green.
+func TestUpload_ErrorOutcomeOnFailure(t *testing.T) {
+	home := t.TempDir()
+	setupSnapshotDirs(t, home, []int64{1000, 2000})
+	chain := "metrics-error"
+	factory := func(context.Context, string) (seis3.Uploader, error) {
+		return nil, errors.New("s3 down")
+	}
+	uploader, err := NewSnapshotUploader(home, "b", "r", chain, 0, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := uploader.Upload(context.Background())
+	if err == nil {
+		t.Fatal("expected Upload to error when the S3 uploader cannot be built")
+	}
+	if result.Outcome != OutcomeError {
+		t.Errorf("result outcome = %q, want %q", result.Outcome, OutcomeError)
+	}
+	if got := testutil.ToFloat64(snapshotUploadOutcomes.WithLabelValues(chain, string(OutcomeError))); got != 1 {
+		t.Errorf("error outcome counter = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(snapshotUploadLastRunSuccess.WithLabelValues(chain)); got != 0 {
+		t.Errorf("error path must not refresh last run success, got %v", got)
+	}
+	if got := testutil.ToFloat64(snapshotUploadLastUploadedHeight.WithLabelValues(chain)); got != 0 {
+		t.Errorf("error path must not advance uploaded height gauge, got %v", got)
+	}
 }
 
 func TestEmitStartupMetrics_RehydratesUploadedGauges(t *testing.T) {

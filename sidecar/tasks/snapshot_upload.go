@@ -28,10 +28,10 @@ const (
 	uploadStateFile       = ".sei-sidecar-last-upload.json"
 	defaultUploadInterval = 7 * 24 * time.Hour // weekly
 
-	// DefaultUploadTimeout bounds a single one-shot upload. Uploads on large
+	// defaultUploadTimeout bounds a single one-shot upload. Uploads on large
 	// chains legitimately run 60-90 min, so the default is generous; a wedged
 	// S3 stream fails at the deadline rather than sitting 'running' forever.
-	DefaultUploadTimeout = 2 * time.Hour
+	defaultUploadTimeout = 2 * time.Hour
 )
 
 // SnapshotUploadRequest holds the parameters for the snapshot upload task.
@@ -45,6 +45,7 @@ type UploadOutcome string
 const (
 	OutcomeUploaded UploadOutcome = "uploaded"
 	OutcomeNoop     UploadOutcome = "noop"
+	OutcomeError    UploadOutcome = "error"
 )
 
 // NoopReason explains why an Upload returned OutcomeNoop. Empty on OutcomeUploaded.
@@ -56,8 +57,9 @@ const (
 )
 
 // SnapshotUploadResult is the structured result both handlers return through the
-// engine so a one-shot poller can distinguish uploaded / noop / error. On the
-// loop path it is discarded; the engine persists it on TaskResult.Result for the
+// engine so a one-shot poller can distinguish uploaded / noop / error: an error
+// return carries Outcome=OutcomeError alongside the error string. On the loop
+// path it is discarded; the engine persists it on TaskResult.Result for the
 // one-shot path.
 type SnapshotUploadResult struct {
 	Outcome    UploadOutcome `json:"outcome"`
@@ -131,7 +133,7 @@ func (u *SnapshotUploader) Handler() engine.TaskHandler {
 // only on context.Canceled).
 func (u *SnapshotUploader) OnceHandler(timeout time.Duration) engine.TaskHandler {
 	if timeout <= 0 {
-		timeout = DefaultUploadTimeout
+		timeout = defaultUploadTimeout
 	}
 	return engine.TypedHandlerWithResult(func(ctx context.Context, _ SnapshotUploadRequest) (SnapshotUploadResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -167,7 +169,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, er
 
 	height, err := pickUploadCandidate(snapshotsDir)
 	if err != nil {
-		return SnapshotUploadResult{}, err
+		return u.recordError(), err
 	}
 	if height == 0 {
 		uploadLog.Debug("fewer than 2 snapshots on disk, nothing to upload")
@@ -184,7 +186,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, er
 
 	uploader, err := u.s3UploaderFactory(ctx, u.region)
 	if err != nil {
-		return SnapshotUploadResult{}, fmt.Errorf("building S3 uploader: %w", err)
+		return u.recordError(), fmt.Errorf("building S3 uploader: %w", err)
 	}
 
 	prefix := u.chainID + "/state-sync/"
@@ -192,7 +194,7 @@ func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, er
 	archiveKey := fmt.Sprintf("%s%d.tar.gz", prefix, height)
 	uploadLog.Info("streaming archive to S3", "key", archiveKey)
 	if err := u.streamUpload(ctx, uploader, u.bucket, archiveKey, snapshotsDir, height); err != nil {
-		return SnapshotUploadResult{}, fmt.Errorf("uploading %s: %w", archiveKey, err)
+		return u.recordError(), fmt.Errorf("uploading %s: %w", archiveKey, err)
 	}
 
 	latestKey := prefix + "latest.txt"
@@ -203,12 +205,12 @@ func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, er
 		Body:   bytes.NewReader(latestBody),
 	})
 	if err != nil {
-		return SnapshotUploadResult{}, fmt.Errorf("uploading %s: %w", latestKey, err)
+		return u.recordError(), fmt.Errorf("uploading %s: %w", latestKey, err)
 	}
 	uploadLog.Info("updated latest.txt", "key", latestKey, "height", height)
 
 	if err := u.writeUploadState(uploadState{LastUploadedHeight: height, LastUploadedAt: time.Now().Unix()}); err != nil {
-		return SnapshotUploadResult{}, err
+		return u.recordError(), err
 	}
 
 	return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeUploaded, Height: height, Key: archiveKey}), nil
@@ -227,6 +229,16 @@ func (u *SnapshotUploader) recordTerminal(result SnapshotUploadResult) SnapshotU
 		snapshotUploadLastUploadedHeight.WithLabelValues(u.chainID).Set(float64(result.Height))
 	}
 	return result
+}
+
+// recordError increments the chain-labeled outcome counter for a failed Upload
+// and returns an error-tagged result so callers can `return u.recordError(),
+// err` in one line. It deliberately leaves last-run-success and the uploaded
+// gauges untouched — those are clean-terminal-only signals — so a failing
+// uploader is visible on the outcome counter without falsely refreshing health.
+func (u *SnapshotUploader) recordError() SnapshotUploadResult {
+	snapshotUploadOutcomes.WithLabelValues(u.chainID, string(OutcomeError)).Inc()
+	return SnapshotUploadResult{Outcome: OutcomeError}
 }
 
 // EmitStartupMetrics re-emits the last-uploaded gauges from persisted state so a

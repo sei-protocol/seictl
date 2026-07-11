@@ -114,6 +114,10 @@ func (t SnapshotUploadTask) ToTaskRequest() TaskRequest {
 // reads the structured result to distinguish uploaded / noop / error. S3
 // coordinates and the per-task deadline are derived by the sidecar from its
 // environment.
+//
+// Each invocation MUST be submitted with a fresh, unique task ID. The engine
+// coalesces a resubmit onto an existing Completed row without re-running, so a
+// reused ID reads back the prior run's stale result and never uploads.
 type SnapshotUploadOnceTask struct{}
 
 func (t SnapshotUploadOnceTask) TaskType() string { return TaskTypeSnapshotUploadOnce }
