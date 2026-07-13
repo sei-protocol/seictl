@@ -96,3 +96,24 @@ type GovTxResult struct {
 	RawLog          string `json:"rawLog,omitempty"`
 	InclusionStatus string `json:"inclusionStatus"`
 }
+
+// UploadOutcome is the terminal classification of a snapshot-upload-once,
+// carried on the task result's outcome field. A one-shot poller keys its verdict
+// on it, so the values are a result-wire contract shared by the sidecar handler
+// and its CLI/controller consumers.
+type UploadOutcome string
+
+const (
+	OutcomeUploaded UploadOutcome = "uploaded"
+	OutcomeNoop     UploadOutcome = "noop"
+	OutcomeError    UploadOutcome = "error"
+)
+
+// NoopReason explains why a snapshot-upload-once returned OutcomeNoop. Empty on
+// any other outcome.
+type NoopReason string
+
+const (
+	NoopFewerThanTwoSnapshots NoopReason = "fewer-than-2-snapshots"
+	NoopAlreadyUploaded       NoopReason = "already-uploaded"
+)

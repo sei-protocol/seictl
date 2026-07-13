@@ -66,6 +66,22 @@ const (
 	TaskTypeResetData    = string(wire.TaskResetData)
 )
 
+// Snapshot-upload outcome contract, re-exported from wire so CLI consumers
+// classify a result against the same definition the handler emits.
+type (
+	UploadOutcome = wire.UploadOutcome
+	NoopReason    = wire.NoopReason
+)
+
+const (
+	OutcomeUploaded = wire.OutcomeUploaded
+	OutcomeNoop     = wire.OutcomeNoop
+	OutcomeError    = wire.OutcomeError
+
+	NoopFewerThanTwoSnapshots = wire.NoopFewerThanTwoSnapshots
+	NoopAlreadyUploaded       = wire.NoopAlreadyUploaded
+)
+
 // Known condition and action values for AwaitConditionTask.
 const (
 	ConditionHeight     = "height"

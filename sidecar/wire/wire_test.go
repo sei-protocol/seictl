@@ -2,6 +2,27 @@ package wire
 
 import "testing"
 
+// The snapshot-upload outcome values are a wire contract: the CLI poller and the
+// controller classify against these exact strings. A rename here that drifted a
+// value would silently reclassify every upload, so pin the bytes.
+func TestSnapshotUploadWireValues(t *testing.T) {
+	cases := []struct {
+		got  string
+		want string
+	}{
+		{string(OutcomeUploaded), "uploaded"},
+		{string(OutcomeNoop), "noop"},
+		{string(OutcomeError), "error"},
+		{string(NoopFewerThanTwoSnapshots), "fewer-than-2-snapshots"},
+		{string(NoopAlreadyUploaded), "already-uploaded"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("wire value = %q, want %q", c.got, c.want)
+		}
+	}
+}
+
 func TestParseVoteOption(t *testing.T) {
 	cases := []struct {
 		in   string
