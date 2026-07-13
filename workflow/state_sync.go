@@ -192,7 +192,7 @@ var stateSyncCmd = cli.Command{
 		"Complete, nonzero on Failed or --timeout. " +
 		"\n\n" +
 		"The workflow is named <node>-state-sync unless --name is given. " +
-		"The common case is a plain resync (no migration flags). " +
+		"The common case is a standard resync (no migration flags). " +
 		"--migration GigaStore --backend <pebbledb|rocksdb> instead requests a " +
 		"typed store migration: a DESTRUCTIVE, irreversible, slow wipe-and-resync " +
 		"that discards local state and re-bootstraps on the chosen backend — both " +
@@ -222,11 +222,11 @@ var stateSyncCmd = cli.Command{
 		},
 		&cli.StringFlag{
 			Name:  "migration",
-			Usage: "Request a typed store migration instead of a plain resync (kind: GigaStore). DESTRUCTIVE, irreversible, and slow: wipes local state and re-bootstraps. Requires --backend. Omit for the common plain-resync case.",
+			Usage: "Request a typed store migration instead of a standard resync (kind: GigaStore). DESTRUCTIVE, irreversible, and slow: wipes local state and re-bootstraps. Requires --backend. Omit for the common standard-resync case.",
 		},
 		&cli.StringFlag{
 			Name:  "backend",
-			Usage: "Target store backend for --migration (pebbledb|rocksdb). Required with --migration; a plain resync takes no backend.",
+			Usage: "Target store backend for --migration (pebbledb|rocksdb). Required with --migration; a standard resync takes no backend.",
 		},
 		&cli.StringFlag{
 			Name:  "config-patch",

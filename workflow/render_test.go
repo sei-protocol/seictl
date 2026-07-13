@@ -85,7 +85,7 @@ func TestRender_StateSyncBackendRoundTrip(t *testing.T) {
 
 // The minimal render (target only) still produces a valid StateSync workflow:
 // stateSync present (CEL requires it) with no recipe params, and — critically —
-// no migration union at all (a plain resync must not carry a migration).
+// no migration union at all (a standard resync must not carry a migration).
 func TestRender_MinimalStateSync(t *testing.T) {
 	got, err := render(renderArgs{preset: "state-sync", name: "n-state-sync", target: "n"})
 	if err != nil {
@@ -95,7 +95,7 @@ func TestRender_MinimalStateSync(t *testing.T) {
 		t.Error("spec.stateSync must be present for kind=StateSync (CEL requires it)")
 	}
 	if _, found, _ := unstructured.NestedFieldNoCopy(got.Object, "spec", "stateSync", "migration"); found {
-		t.Error("spec.stateSync.migration must be absent for a plain resync (no --migration)")
+		t.Error("spec.stateSync.migration must be absent for a standard resync (no --migration)")
 	}
 	if _, found, _ := unstructured.NestedFieldNoCopy(got.Object, "spec", "stateSync", "rpcServers"); found {
 		t.Error("spec.stateSync.rpcServers should be absent when --rpc-servers is not given")

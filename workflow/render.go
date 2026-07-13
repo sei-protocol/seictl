@@ -33,7 +33,7 @@ type renderArgs struct {
 	namespace    string
 	target       string
 	requirePhase string
-	migration    string // spec.stateSync.migration.kind (verbatim; "" = plain resync)
+	migration    string // spec.stateSync.migration.kind (verbatim; "" = standard resync)
 	backend      string // spec.stateSync.migration.gigaStore.backend
 	rpcServers   []string
 	sets         []string
@@ -46,7 +46,7 @@ type renderArgs struct {
 // missing backend), then the required pairing, then an invalid backend value.
 func validateMigrationFlags(migration, backend string) error {
 	if backend != "" && migration == "" {
-		return cliutil.UsageError("--backend is only valid with --migration; a plain resync takes no backend")
+		return cliutil.UsageError("--backend is only valid with --migration; a standard resync takes no backend")
 	}
 	if migration != "" && !slices.Contains(configMigrationKinds, migration) {
 		return cliutil.UsageError("--migration %q unknown; supported: %s", migration, strings.Join(configMigrationKinds, ", "))
@@ -106,7 +106,7 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 
 	// StateSync recipe parameters. --migration selects the typed migration union
 	// (spec.stateSync.migration); rpcServers overrides witness resolution (the
-	// controller fails the plan closed on fewer than two). A plain resync
+	// controller fails the plan closed on fewer than two). A standard resync
 	// (migration == "") writes nothing under stateSync.
 	if err := validateMigrationFlags(args.migration, args.backend); err != nil {
 		return nil, err
@@ -178,7 +178,7 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 // consumers — the shim is the safe removal).
 func configPatchRemovedError() error {
 	return cliutil.UsageError("--config-patch was removed: config patching is now a typed migration. " +
-		"Use --migration GigaStore --backend <pebbledb|rocksdb>. A plain resync takes no migration flag.")
+		"Use --migration GigaStore --backend <pebbledb|rocksdb>. A standard resync takes no migration flag.")
 }
 
 // emitMigrationPreamble prints the loud destructive-migration warning to w

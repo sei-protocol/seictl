@@ -77,10 +77,10 @@ func TestJSONContract_StateSyncRender(t *testing.T) {
 	}
 }
 
-// A plain resync (no --migration) must emit no migration union at all — the
+// A standard resync (no --migration) must emit no migration union at all — the
 // apiserver sees spec.stateSync with no migration key. `jq -e` on a missing path
 // yields null and a nonzero exit, which is exactly the absence we assert.
-func TestJSONContract_PlainResyncHasNoMigration(t *testing.T) {
+func TestJSONContract_StandardResyncHasNoMigration(t *testing.T) {
 	obj, err := render(renderArgs{
 		preset:    "state-sync",
 		name:      "n-state-sync",
@@ -95,7 +95,7 @@ func TestJSONContract_PlainResyncHasNoMigration(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	if out, ok := runJQ(t, j, "-e", ".spec.stateSync.migration"); ok {
-		t.Errorf(".spec.stateSync.migration = %q; want absent (null) for a plain resync", trimNL(out))
+		t.Errorf(".spec.stateSync.migration = %q; want absent (null) for a standard resync", trimNL(out))
 	}
 }
 
