@@ -30,16 +30,19 @@ func trimNL(s string) string {
 }
 
 // The rendered CR must satisfy the SeiNodeTaskWorkflow schema's locked field
-// paths: spec.kind, spec.target.nodeRef.name, spec.stateSync.{configPatch,
-// rpcServers}. Asserted through jq on the exact JSON the apiserver receives.
+// paths: spec.kind, spec.target.nodeRef.name, the typed migration union
+// spec.stateSync.migration.{kind,gigaStore.backend}, and spec.stateSync.rpcServers.
+// Asserted through jq on the exact JSON the apiserver receives — the guardrail
+// against a silent path-string typo.
 func TestJSONContract_StateSyncRender(t *testing.T) {
 	obj, err := render(renderArgs{
-		preset:      "state-sync",
-		name:        "n-state-sync",
-		namespace:   "sei",
-		target:      "chaos-rpc-0",
-		configPatch: writeConfigPatch(t, evmSSSplitPatch),
-		rpcServers:  []string{"a:26657", "b:26657"},
+		preset:     "state-sync",
+		name:       "n-state-sync",
+		namespace:  "sei",
+		target:     "chaos-rpc-0",
+		migration:  "GigaStore",
+		backend:    "rocksdb",
+		rpcServers: []string{"a:26657", "b:26657"},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -56,7 +59,8 @@ func TestJSONContract_StateSyncRender(t *testing.T) {
 	}{
 		{"spec.kind", ".spec.kind", "StateSync"},
 		{"spec.target.nodeRef.name", ".spec.target.nodeRef.name", "chaos-rpc-0"},
-		{"configPatch nested value", `.spec.stateSync.configPatch."app.toml"."state-store"."evm-ss-split"`, "true"},
+		{"migration.kind", ".spec.stateSync.migration.kind", "GigaStore"},
+		{"migration.gigaStore.backend", ".spec.stateSync.migration.gigaStore.backend", "rocksdb"},
 		{"rpcServers[0]", ".spec.stateSync.rpcServers[0]", "a:26657"},
 		{"rpcServers length", ".spec.stateSync.rpcServers | length", "2"},
 	}
@@ -70,6 +74,28 @@ func TestJSONContract_StateSyncRender(t *testing.T) {
 				t.Errorf("%s = %q; want %q", tc.filter, got, tc.want)
 			}
 		})
+	}
+}
+
+// A plain resync (no --migration) must emit no migration union at all — the
+// apiserver sees spec.stateSync with no migration key. `jq -e` on a missing path
+// yields null and a nonzero exit, which is exactly the absence we assert.
+func TestJSONContract_PlainResyncHasNoMigration(t *testing.T) {
+	obj, err := render(renderArgs{
+		preset:    "state-sync",
+		name:      "n-state-sync",
+		namespace: "sei",
+		target:    "chaos-rpc-0",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	j, err := json.Marshal(obj.Object)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if out, ok := runJQ(t, j, "-e", ".spec.stateSync.migration"); ok {
+		t.Errorf(".spec.stateSync.migration = %q; want absent (null) for a plain resync", trimNL(out))
 	}
 }
 
