@@ -14,6 +14,19 @@ seictl workflow state-sync <node>
 
 The node holds, wipes, reconfigures, restarts, and begins catching up. Its config is unchanged.
 
+### Plain Resync Steps
+
+seictl renders the workflow and applies it to the cluster. If a workflow with the same name already finished or failed, the command refuses and explains what to do. Once the node has no other work in flight, the controller picks up the workflow, records the plan, and runs six steps in order:
+
+1. **mark-not-ready** starts the hold. The sidecar marks the node not ready, so seid cannot start again until the workflow allows it. It also clears any earlier mark-ready records so nothing can release the node by accident.
+2. **stop-seid** stops the node process. seid gets a graceful shutdown signal and the task confirms it exited. Kubernetes restarts the container, and the restart waits at the hold instead of starting seid.
+3. **reset-data** clears the chain data. Only the `data/` directory is wiped. The node's identity keys, its config files, and the sidecar's task history all stay in place, and a fresh empty `priv_validator_state` file is written back.
+4. **configure-state-sync** sets up the resync. The sidecar asks the witnesses for a trusted block height and hash and writes them into the node's config. The two-witness minimum is enforced earlier, when the plan is built, so a node is never wiped for an under-witnessed config (see Witnesses).
+5. **mark-ready** releases the hold. seid starts on the empty data directory, downloads a recent snapshot from its peers, and checks it against the witnesses' trusted block.
+6. **await-condition** waits for the node to catch up to the head of the chain.
+
+When the last step finishes the workflow is Complete, the node goes back to normal operation, and seictl exits 0.
+
 ## Witnesses
 
 State sync verifies the snapshot it restores against a trusted header. `--rpc-servers` sets the CometBFT light-client servers (a primary plus witnesses) used for that verification. The flag is optional; when omitted, the node's resolved state-syncers are used. When you set it, the servers are bare `host:port`, repeatable, and at least two are required or the plan refuses to compile.
@@ -32,9 +45,21 @@ A migration runs a named seid config change inside the resync. Today the one sup
 seictl workflow state-sync <node> --migration GigaStore --backend pebbledb
 ```
 
-This is destructive and slow, and it is not reversible without another resync. It discards the node's local state and re-bootstraps on the chosen backend. Both tokens are required, so a migration cannot be triggered by a single flag. `--backend` is `pebbledb` or `rocksdb`, where rocksdb needs a seid image built with `-tags rocksdbBackend`. The migration sets the giga flags itself (`ss-enable`, `evm-ss-split`, and `sc-enable`); the backend is the only operator input.
+This is destructive and slow, and it is not reversible without another resync. It discards the node's local state and re-bootstraps on the chosen backend. Both tokens are required, so a migration cannot be triggered by a single flag. `--backend` is `pebbledb` or `rocksdb`, where rocksdb needs a seid image built with `-tags rocksdbBackend`. The migration sets the giga flags itself (`ss-enable`, `evm-ss-split`, `ss-backend`, and `sc-enable`); the backend value is the only operator input.
 
 When `--migration` is set, the command prints a `seictl:` destructive-migration warning to stderr before it applies anything. Run `--dry-run` first to see the rendered workflow, including the migration, without persisting it.
+
+### Migration Steps
+
+A migration follows the same steps with one addition. The migration's config changes are computed and checked when the plan is built, before anything runs, so an invalid migration fails immediately and the node is untouched. The plan also records exactly which config keys will change, so you can read what a migration did after the fact.
+
+1. **mark-not-ready**, **stop-seid**, and **reset-data** run exactly as in a plain resync. The node is held, seid stops, and the chain data is cleared while identity and config stay in place.
+2. **config-patch** applies the migration's config changes. For the giga store split this sets `ss-enable`, `evm-ss-split`, and `ss-backend` under `[state-store]` in `app.toml`, and `sc-enable` under `[state-commit]`.
+3. **configure-state-sync** sets up the resync from the witnesses, as in a plain resync.
+4. **mark-ready** releases the hold. seid starts under the new storage layout for the first time, and the snapshot restore fills the new store as it downloads.
+5. **await-condition** waits for catch-up. seid refuses to start if the new store layout is empty while the split is enabled, so a node that catches up and serves EVM requests is solid evidence the migration worked.
+
+If a migration fails partway, the node stays held with its data already cleared. seid stays down and the sidecar stays reachable for diagnosis. Recovery is another resync. Force-delete the failed workflow and run a new one, with the same migration or without it.
 
 ## Plain Versus Migration
 
