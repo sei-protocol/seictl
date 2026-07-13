@@ -36,3 +36,25 @@ func TestPreflightPhaseError(t *testing.T) {
 		t.Errorf("Failed refusal must explain the node stays held; got %q", failed.Error())
 	}
 }
+
+// The Complete handoff hands the operator the node-side catch-up check: the
+// workflow completes at release, so the resync runs after exit 0 and the
+// printed commands are the verification path.
+func TestEmitCompleteHandoff(t *testing.T) {
+	var b strings.Builder
+	emitCompleteHandoff(&b, "pacific-1", "rpc-node-0")
+	out := b.String()
+	for _, want := range []string{
+		"node rpc-node-0 released",
+		"seictl node watch rpc-node-0 --until=caught-up -n pacific-1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("handoff output missing %q; got:\n%s", want, out)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if !strings.HasPrefix(line, "seictl:") {
+			t.Errorf("handoff line lacks the seictl: stderr prefix: %q", line)
+		}
+	}
+}

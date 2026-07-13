@@ -1,6 +1,6 @@
 # State-Sync Workflow
 
-`seictl workflow state-sync` re-bootstraps a SeiNode through CometBFT state sync. It renders the StateSync recipe against a target node, server-side-applies the resulting `SeiNodeTaskWorkflow`, and streams the plan's progress until the workflow reaches a terminal phase. The recipe holds the node's readiness gate, stops seid, wipes the data directory, reconfigures state sync against the witnesses, releases the gate so seid restarts, and waits for the node to begin catching up.
+`seictl workflow state-sync` re-bootstraps a SeiNode through CometBFT state sync. It renders the StateSync recipe against a target node, server-side-applies the resulting `SeiNodeTaskWorkflow`, and streams the plan's progress until the workflow reaches a terminal phase. The recipe holds the node's readiness gate, stops seid, wipes the data directory, reconfigures state sync against the witnesses, and releases the gate so seid restarts into the resync. The workflow completes at release. Catch-up happens after Complete, on the node, and the command prints the watch command that verifies it.
 
 There are two ways to run it. A standard resync clears the node's data and lets it re-catch-up on its existing config. A store migration does the same wipe-and-resync but also changes seid's storage configuration on the way. The standard resync is the common case and takes no extra flags; the migration is a deliberate, destructive operation behind its own flags.
 
@@ -16,16 +16,21 @@ The node holds, wipes, reconfigures, restarts, and begins catching up. Its confi
 
 ### Standard Resync Steps
 
-seictl renders the workflow and applies it to the cluster. If a workflow with the same name already finished or failed, the command refuses and explains what to do. Once the node has no other work in flight, the controller picks up the workflow, records the plan, and runs six steps in order:
+seictl renders the workflow and applies it to the cluster. If a workflow with the same name already finished or failed, the command refuses and explains what to do. Once the node has no other work in flight, the controller picks up the workflow, records the plan, and runs five steps in order:
 
 1. **mark-not-ready** starts the hold. The sidecar marks the node not ready, so seid cannot start again until the workflow allows it. It also clears any earlier mark-ready records so nothing can release the node by accident.
 2. **stop-seid** stops the node process. seid gets a graceful shutdown signal and the task confirms it exited. Kubernetes restarts the container, and the restart waits at the hold instead of starting seid.
 3. **reset-data** clears the chain data. Only the `data/` directory is wiped. The node's identity keys, its config files, and the sidecar's task history all stay in place, and a fresh empty `priv_validator_state` file is written back.
 4. **configure-state-sync** sets up the resync. The sidecar asks the witnesses for a trusted block height and hash and writes them into the node's config. The two-witness minimum is enforced earlier, when the plan is built, so a node is never wiped for an under-witnessed config (see Witnesses).
-5. **mark-ready** releases the hold. seid starts on the empty data directory, downloads a recent snapshot from its peers, and checks it against the witnesses' trusted block.
-6. **await-condition** waits for the node to catch up to the head of the chain.
+5. **mark-ready** releases the hold. That release is the last step, so the workflow is Complete and seictl exits 0. Only then does seid start on the empty data directory, download a recent snapshot from its peers, and verify it against the witnesses' trusted block.
 
-When the last step finishes the workflow is Complete, the node goes back to normal operation, and seictl exits 0.
+Complete means every step ran and the node was released. The resync runs after Complete, so verify catch-up on the node (seictl prints this command on success):
+
+```
+seictl node watch <node> --until=caught-up -n <namespace>
+```
+
+The watch waits for the node to rejoin consensus and report caught up, using the same SDK readiness gates the nightly integration harness uses: a committed height above 1 with `catching_up` false, plus the EVM endpoint serving when the node publishes one. It exits 0 on caught-up, and it dials the node's published RPC endpoint directly, so run it from a machine with cluster network reachability and raise its `--timeout` when catch-up outlasts the 15m default. A Failed workflow always means the node is still held (see Re-Run Semantics for recovery).
 
 ## Witnesses
 
@@ -56,10 +61,13 @@ A migration follows the same steps with one addition. The migration's config cha
 1. **mark-not-ready**, **stop-seid**, and **reset-data** run exactly as in a standard resync. The node is held, seid stops, and the chain data is cleared while identity and config stay in place.
 2. **config-patch** applies the migration's config changes. For the giga store split this sets `ss-enable`, `evm-ss-split`, and `ss-backend` under `[state-store]` in `app.toml`, and `sc-enable` under `[state-commit]`.
 3. **configure-state-sync** sets up the resync from the witnesses, as in a standard resync.
-4. **mark-ready** releases the hold. seid starts under the new storage layout for the first time, and the snapshot restore fills the new store as it downloads.
-5. **await-condition** waits for catch-up. seid refuses to start if the new store layout is empty while the split is enabled, so a node that catches up and serves EVM requests is solid evidence the migration worked.
+4. **mark-ready** releases the hold and completes the workflow. seid starts under the new storage layout for the first time, and the snapshot restore fills the new store as it downloads.
+
+Verification carries extra weight for a migration. seid refuses to start if the new store layout is empty while the split is enabled, so a node that catches up and serves EVM requests is solid evidence the migration worked. Run the same catch-up watch as a standard resync. A giga-split node serves EVM, so the watch gates on its EVM endpoint too, which is exactly the evidence a migration needs.
 
 If a migration fails partway, the node stays held with its data already cleared. seid stays down and the sidecar stays reachable for diagnosis. Recovery is another resync. Force-delete the failed workflow and run a new one, with the same migration or without it.
+
+A separate, rare post-Complete case has a similar fix with a different starting point. The workflow already reached Complete (exit 0, node released), yet seid crash-loops after a mid-restore restart, reporting an empty EVM store while the Cosmos store has history. Another resync fixes it too, but recover it as a Complete run (delete the workflow, then re-run), not as a held failure.
 
 ## Standard Versus Migration
 
@@ -81,7 +89,7 @@ The flags map onto the `SeiNodeTaskWorkflow` spec:
 - `--backend <backend>` sets `spec.stateSync.migration.gigaStore.backend`
 - `--rpc-servers` sets `spec.stateSync.rpcServers`
 
-`--dry-run` emits this CR so you can read it back before applying. The controller compiles the spec into the ordered task plan (mark-not-ready, stop-seid, reset-data, the migration's config-patch step when present, configure-state-sync, mark-ready, await catching-up) and drives it.
+`--dry-run` emits this CR so you can read it back before applying. The controller compiles the spec into the ordered task plan (mark-not-ready, stop-seid, reset-data, the migration's config-patch step when present, configure-state-sync, mark-ready) and drives it.
 
 ## Re-Run Semantics
 
@@ -97,9 +105,9 @@ The command is built for scripts and agents:
 
 - The exit code is kubectl-wait-compatible: 0 when `.status.phase` reaches Complete, and nonzero on a Failed phase, a `--timeout`, or an apply or watch error.
 - stdout is NDJSON. In watch mode each line is the full workflow object as observed, re-emitted on every change, so a caller reads `.status.phase` for the terminal transition and `.status.plan.tasks` for per-step progress. Under `--dry-run` or `--no-watch` stdout is instead the single rendered CR.
-- stderr carries two kinds of output. Progress and diagnostic lines are human-readable and prefixed `seictl:` (the target line, the migration warning, the watch line). On failure the last thing written to stderr is a single `metav1.Status` JSON object.
+- stderr carries two kinds of output. Progress and diagnostic lines are human-readable and prefixed `seictl:` (the target line, the migration warning, the watch line, the Complete handoff). On failure the last thing written to stderr is a single `metav1.Status` JSON object.
 - To read the failure cause programmatically, capture stderr separately from the NDJSON stdout, then strip the `seictl:` lines and parse the Status, for example `seictl workflow state-sync <node> 2>err.log; grep -v '^seictl:' err.log | jq -r .reason`. Keeping stderr off stdout leaves the NDJSON event stream clean. The `.reason` is `Timeout` for a `--timeout`, `InternalError` for a terminal Failed phase, and the apiserver's own reason for an API error.
-- `--timeout` bounds the watch. A full state sync can be slow, so size it for the target's dataset.
+- `--timeout` bounds the watch and defaults to 15m. The watch ends when the workflow releases the node, which takes minutes on a healthy node; clearing a very large data directory is the slow step. A timeout usually means a wedged recipe step, so inspect the workflow before re-running anything. An archive-scale data directory can legitimately push reset-data past the default, so raise `--timeout` for those nodes instead of reading the timeout as a wedge.
 
 See `seictl workflow state-sync --help` for the full flag list.
 
