@@ -5,7 +5,6 @@ package tasks
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -14,7 +13,16 @@ import (
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seictl/sidecar/wire"
+	"github.com/sei-protocol/seilog"
 )
+
+var govResultLog = seilog.NewLogger("seictl", "task", "gov-result")
+
+// submitProposalMsgType is the message type URL baseapp stamps on a
+// MsgSubmitProposal's TxMsgData entry — guards parseProposalID against
+// decoding a different message's response (e.g. a vote's) as a
+// proposal-submit result.
+var submitProposalMsgType = sdk.MsgTypeURL(&govtypes.MsgSubmitProposal{})
 
 var txBroadcastTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
@@ -58,37 +66,49 @@ func classifyGovResult(taskType engine.TaskType, r *SignAndBroadcastResult) (*wi
 	}
 }
 
-// parseProposalID extracts the proposal_id from a committed tx's
-// submit_proposal event, or 0 if absent (votes, non-gov txs, or a not-yet-
-// included tx). It checks both event representations a /tx response may carry:
-// the parsed string events under Logs, and the raw ABCI events (byte-keyed)
-// under Events — which one is populated depends on the SDK version.
+// parseProposalID extracts the minted proposal ID from a committed
+// MsgSubmitProposal tx's result data, or 0 if none is present: a
+// not-yet-included tx (empty result data), a non-submit-proposal task such
+// as a vote (index 0 is a different message's response), or a malformed
+// result. SignAndBroadcastInput carries exactly one Msg per tx (never
+// batched), so a MsgSubmitProposal response is always index 0 of the
+// baseapp-encoded TxMsgData when present, regardless of the proposal's
+// Content (software-upgrade or param-change) — the MsgType check guards
+// that assumption rather than trusting the index blindly.
+// This fork's gov keeper emits the proposal ID on the proposal_deposit
+// event, not submit_proposal, so the tx's own result data is the one place
+// the ID is unconditionally present.
 func parseProposalID(resp *sdk.TxResponse) uint64 {
-	for _, msgLog := range resp.Logs {
-		for _, ev := range msgLog.Events {
-			if ev.Type != govtypes.EventTypeSubmitProposal {
-				continue
-			}
-			for _, attr := range ev.Attributes {
-				if attr.Key == govtypes.AttributeKeyProposalID {
-					if id, err := strconv.ParseUint(attr.Value, 10, 64); err == nil {
-						return id
-					}
-				}
-			}
-		}
+	var txMsgData sdk.TxMsgData
+	if err := txMsgData.Unmarshal([]byte(resp.Data)); err != nil {
+		govResultLog.Warn("decode tx result data", "txHash", resp.TxHash, "height", resp.Height, "err", err)
+		return 0
 	}
-	for _, ev := range resp.Events {
-		if ev.Type != govtypes.EventTypeSubmitProposal {
-			continue
-		}
-		for _, attr := range ev.Attributes {
-			if string(attr.Key) == govtypes.AttributeKeyProposalID {
-				if id, err := strconv.ParseUint(string(attr.Value), 10, 64); err == nil {
-					return id
-				}
-			}
-		}
+	if len(txMsgData.Data) == 0 {
+		return 0 // not-yet-included (CheckTx-only response) or a non-Msg-service tx
 	}
-	return 0
+	if txMsgData.Data[0].MsgType != submitProposalMsgType {
+		return 0 // a different message's response (e.g. a vote) — not ours to parse
+	}
+	var msgResp govtypes.MsgSubmitProposalResponse
+	if err := msgResp.Unmarshal(txMsgData.Data[0].Data); err != nil {
+		govResultLog.Warn("decode MsgSubmitProposalResponse", "txHash", resp.TxHash, "height", resp.Height, "err", err)
+		return 0
+	}
+	return msgResp.ProposalId
+}
+
+// requireProposalID escalates a committed-ok gov result with no minted
+// proposal ID to a Terminal error. A committed MsgSubmitProposal tx always
+// mints an ID >= 1 (DefaultStartingProposalID); a 0 there is parseProposalID
+// failing to decode it, not a legitimate outcome, and must not silently
+// latch the task Complete. Callers whose result never carries a proposal ID
+// (gov-vote) must not call this — cerr is returned unchanged for any
+// inclusion status other than committed-ok, so it composes safely with the
+// pending/committed-failed paths classifyGovResult already produces.
+func requireProposalID(out *wire.GovTxResult, cerr error) error {
+	if cerr == nil && out.InclusionStatus == wire.InclusionCommittedOK && out.ProposalID == 0 {
+		return Terminal(fmt.Errorf("tx %s committed but minted no proposal ID (parse failure)", out.TxHash))
+	}
+	return cerr
 }
