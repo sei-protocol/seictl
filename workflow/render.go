@@ -1,9 +1,8 @@
 package workflow
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 	"slices"
 	"strings"
 
@@ -18,15 +17,47 @@ import (
 // than an apiserver Invalid wall.
 var seiNodePhases = []string{"Pending", "Initializing", "Running", "Failed", "Terminating"}
 
+// configMigrationKinds is the spec.stateSync.migration.kind enum. Validated
+// client-side so a typo is a crisp usage error rather than the CRD's kind<->payload
+// CEL wall. GigaStore is the only migration today.
+var configMigrationKinds = []string{"GigaStore"}
+
+// gigaStoreBackends is the spec.stateSync.migration.gigaStore.backend enum
+// (mirrors the CRD enum pebbledb;rocksdb). --backend is required with --migration:
+// the explicit two-token form is the safety property, not the CRD default.
+var gigaStoreBackends = []string{"pebbledb", "rocksdb"}
+
 type renderArgs struct {
 	preset       string
 	name         string
 	namespace    string
 	target       string
 	requirePhase string
-	configPatch  string // path to a YAML/JSON config-patch file
+	migration    string // spec.stateSync.migration.kind (verbatim; "" = plain resync)
+	backend      string // spec.stateSync.migration.gigaStore.backend
 	rpcServers   []string
 	sets         []string
+}
+
+// validateMigrationFlags enforces the client-side --migration/--backend contract
+// (checked before render touches the object), mirroring the --require-phase enum
+// check. Order names the actual mistake: an orphan --backend first, then an
+// unknown migration kind (so --migration Bogus reports the bad kind, not a
+// missing backend), then the required pairing, then an invalid backend value.
+func validateMigrationFlags(migration, backend string) error {
+	if backend != "" && migration == "" {
+		return cliutil.UsageError("--backend is only valid with --migration; a plain resync takes no backend")
+	}
+	if migration != "" && !slices.Contains(configMigrationKinds, migration) {
+		return cliutil.UsageError("--migration %q unknown; supported: %s", migration, strings.Join(configMigrationKinds, ", "))
+	}
+	if migration != "" && backend == "" {
+		return cliutil.UsageError("--migration GigaStore requires --backend <pebbledb|rocksdb>")
+	}
+	if backend != "" && !slices.Contains(gigaStoreBackends, backend) {
+		return cliutil.UsageError("--backend %q invalid; supported: %s", backend, strings.Join(gigaStoreBackends, ", "))
+	}
+	return nil
 }
 
 // render builds a SeiNodeTaskWorkflow CR from an embedded preset and the CLI
@@ -73,16 +104,32 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		}
 	}
 
-	// StateSync recipe parameters. configPatch is the config-patch task's
-	// file -> section-or-key -> value wire shape; rpcServers overrides witness
-	// resolution (the controller fails the plan closed on fewer than two).
-	if args.configPatch != "" {
-		patch, err := loadConfigPatch(args.configPatch)
-		if err != nil {
-			return nil, cliutil.UsageError("%s", err.Error())
+	// StateSync recipe parameters. --migration selects the typed migration union
+	// (spec.stateSync.migration); rpcServers overrides witness resolution (the
+	// controller fails the plan closed on fewer than two). A plain resync
+	// (migration == "") writes nothing under stateSync.
+	if err := validateMigrationFlags(args.migration, args.backend); err != nil {
+		return nil, err
+	}
+	if args.migration != "" {
+		// apply can render other presets; migration is StateSync-only. Gate on the
+		// rendered recipe kind so a --migration against a non-StateSync preset is a
+		// crisp usage error, not a stray field the CEL union would reject.
+		if recipe, _, _ := unstructured.NestedString(u.Object, "spec", "kind"); recipe != "StateSync" {
+			return nil, cliutil.UsageError("--migration only applies to the StateSync recipe")
 		}
-		if err := unstructured.SetNestedField(u.Object, patch, "spec", "stateSync", "configPatch"); err != nil {
-			return nil, fmt.Errorf("apply --config-patch: %w", err)
+		if err := unstructured.SetNestedField(u.Object, args.migration, "spec", "stateSync", "migration", "kind"); err != nil {
+			return nil, fmt.Errorf("apply --migration: %w", err)
+		}
+		// The CRD's kind<->payload CEL requires the gigaStore payload present when
+		// kind=GigaStore. The backend write below already materializes it (--backend
+		// is required); this explicit payload write documents the union requirement
+		// and stays correct if a future kind carries an all-optional payload.
+		if err := unstructured.SetNestedField(u.Object, map[string]interface{}{}, "spec", "stateSync", "migration", "gigaStore"); err != nil {
+			return nil, fmt.Errorf("apply --migration gigaStore payload: %w", err)
+		}
+		if err := unstructured.SetNestedField(u.Object, args.backend, "spec", "stateSync", "migration", "gigaStore", "backend"); err != nil {
+			return nil, fmt.Errorf("apply --backend: %w", err)
 		}
 	}
 	if len(args.rpcServers) > 0 {
@@ -125,36 +172,20 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	return u, nil
 }
 
-// loadConfigPatch reads a YAML/JSON config-patch file into the
-// file -> section-or-key -> value shape spec.stateSync.configPatch expects
-// (the config-patch task's wire form), e.g.:
-//
-//	app.toml:
-//	  state-store:
-//	    evm-ss-split: true
-func loadConfigPatch(path string) (map[string]interface{}, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read --config-patch file %q: %w", path, err)
-	}
-	jsonBytes, err := yaml.YAMLToJSON(data)
-	if err != nil {
-		return nil, fmt.Errorf("parse --config-patch file %q: %w", path, err)
-	}
-	var patch map[string]interface{}
-	if err := json.Unmarshal(jsonBytes, &patch); err != nil {
-		return nil, fmt.Errorf("decode --config-patch file %q (want a file->section->value map): %w", path, err)
-	}
-	if len(patch) == 0 {
-		return nil, fmt.Errorf("--config-patch file %q is empty", path)
-	}
-	// Each top-level file key must map to a section table (file -> section ->
-	// value); a scalar here is a malformed patch the sidecar would reject.
-	for file, section := range patch {
-		if _, ok := section.(map[string]interface{}); !ok {
-			return nil, fmt.Errorf("--config-patch file %q: %q must map to a section table (file -> section -> value), got %T",
-				path, file, section)
-		}
-	}
-	return patch, nil
+// configPatchRemovedError is the erroring shim for the removed --config-patch
+// flag. The flag stays defined so urfave recognizes it; a non-empty value is a
+// hard usage error rather than a silent auto-translate (alpha, no external
+// consumers — the shim is the safe removal).
+func configPatchRemovedError() error {
+	return cliutil.UsageError("--config-patch was removed: config patching is now a typed migration. " +
+		"Use --migration GigaStore --backend <pebbledb|rocksdb>. A plain resync takes no migration flag.")
+}
+
+// emitMigrationPreamble prints the loud destructive-migration warning to w
+// before Apply (fires for --dry-run too), matching the "seictl: ..." line style.
+func emitMigrationPreamble(w io.Writer, migration, backend, node string) {
+	// w is an io.Writer interface, so errcheck (enabled in .golangci.yml) requires
+	// the return handled — its default exclusion only covers a literal os.Stderr.
+	_, _ = fmt.Fprintf(w, "seictl: MIGRATION %s backend=%s DESTRUCTIVE wipe-and-resync of %s; "+
+		"local state discarded, node re-bootstraps on %s\n", migration, backend, node, backend)
 }

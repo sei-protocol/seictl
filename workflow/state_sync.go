@@ -80,13 +80,19 @@ func stateSyncAction(ctx context.Context, c *cli.Command) error {
 		name = node + "-state-sync"
 	}
 
+	if cp := c.String("config-patch"); cp != "" {
+		cliutil.EmitStatus(os.Stderr, configPatchRemovedError())
+		return cli.Exit("", 1)
+	}
+
 	args := renderArgs{
 		preset:       stateSyncPreset,
 		name:         name,
 		namespace:    c.String("namespace"),
 		target:       node,
 		requirePhase: c.String("require-phase"),
-		configPatch:  c.String("config-patch"),
+		migration:    c.String("migration"),
+		backend:      c.String("backend"),
 		rpcServers:   c.StringSlice("rpc-servers"),
 		sets:         c.StringSlice("set"),
 	}
@@ -119,6 +125,9 @@ func stateSyncAction(ctx context.Context, c *cli.Command) error {
 	}
 	fmt.Fprintf(os.Stderr, "seictl: %s SeiNodeTaskWorkflow %s/%s (state-sync target=%s) to %s\n",
 		mode, obj.GetNamespace(), obj.GetName(), node, cfg.Host)
+	if args.migration != "" {
+		emitMigrationPreamble(os.Stderr, args.migration, args.backend, node)
+	}
 
 	kcli, err := cliutil.NewClient(cfg)
 	if err != nil {
@@ -183,10 +192,12 @@ var stateSyncCmd = cli.Command{
 		"Complete, nonzero on Failed or --timeout. " +
 		"\n\n" +
 		"The workflow is named <node>-state-sync unless --name is given. " +
-		"--config-patch merges seid config before the resync (e.g. app.toml " +
-		"[state-store] evm-ss-split=true for the giga migration); " +
-		"--rpc-servers overrides witness resolution (>=2 or the controller " +
-		"fails the plan closed). " +
+		"The common case is a plain resync (no migration flags). " +
+		"--migration GigaStore --backend <pebbledb|rocksdb> instead requests a " +
+		"typed store migration: a DESTRUCTIVE, irreversible, slow wipe-and-resync " +
+		"that discards local state and re-bootstraps on the chosen backend — both " +
+		"tokens are required. --rpc-servers overrides witness resolution (>=2 or " +
+		"the controller fails the plan closed). " +
 		"\n\n" +
 		"Re-run semantics: spec params are immutable, so re-running over a " +
 		"same-named workflow already in a terminal phase is refused — delete a " +
@@ -210,8 +221,16 @@ var stateSyncCmd = cli.Command{
 			Usage: "metadata.name of the workflow CR (default: <node>-state-sync)",
 		},
 		&cli.StringFlag{
+			Name:  "migration",
+			Usage: "Request a typed store migration instead of a plain resync (kind: GigaStore). DESTRUCTIVE, irreversible, and slow: wipes local state and re-bootstraps. Requires --backend. Omit for the common plain-resync case.",
+		},
+		&cli.StringFlag{
+			Name:  "backend",
+			Usage: "Target store backend for --migration (pebbledb|rocksdb). Required with --migration; a plain resync takes no backend.",
+		},
+		&cli.StringFlag{
 			Name:  "config-patch",
-			Usage: "Path to a YAML/JSON config-patch file merged before the resync (file -> section -> value; e.g. app.toml: {state-store: {evm-ss-split: true}})",
+			Usage: "REMOVED: config patching is now a typed migration. Use --migration GigaStore --backend <pebbledb|rocksdb>. Passing a value is an error.",
 		},
 		&cli.StringSliceFlag{
 			Name:  "rpc-servers",

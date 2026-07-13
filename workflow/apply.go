@@ -18,13 +18,19 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		return cli.Exit("", 1)
 	}
 
+	if cp := c.String("config-patch"); cp != "" {
+		cliutil.EmitStatus(os.Stderr, configPatchRemovedError())
+		return cli.Exit("", 1)
+	}
+
 	args := renderArgs{
 		preset:       c.String("preset"),
 		name:         name,
 		namespace:    c.String("namespace"),
 		target:       c.String("target"),
 		requirePhase: c.String("require-phase"),
-		configPatch:  c.String("config-patch"),
+		migration:    c.String("migration"),
+		backend:      c.String("backend"),
 		rpcServers:   c.StringSlice("rpc-servers"),
 		sets:         c.StringSlice("set"),
 	}
@@ -55,6 +61,9 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 	}
 	fmt.Fprintf(os.Stderr, "seictl: %s SeiNodeTaskWorkflow %s/%s to %s\n",
 		mode, obj.GetNamespace(), obj.GetName(), cfg.Host)
+	if args.migration != "" {
+		emitMigrationPreamble(os.Stderr, args.migration, args.backend, args.target)
+	}
 
 	kcli, err := cliutil.NewClient(cfg)
 	if err != nil {
@@ -111,8 +120,16 @@ var applyCmd = cli.Command{
 			Required: true,
 		},
 		&cli.StringFlag{
+			Name:  "migration",
+			Usage: "Request a typed store migration on the StateSync recipe (kind: GigaStore). DESTRUCTIVE, irreversible, slow. Requires --backend.",
+		},
+		&cli.StringFlag{
+			Name:  "backend",
+			Usage: "Target store backend for --migration (pebbledb|rocksdb). Required with --migration.",
+		},
+		&cli.StringFlag{
 			Name:  "config-patch",
-			Usage: "Path to a YAML/JSON config-patch file merged before the resync (file -> section -> value)",
+			Usage: "REMOVED: config patching is now a typed migration. Use --migration GigaStore --backend <pebbledb|rocksdb>. Passing a value is an error.",
 		},
 		&cli.StringSliceFlag{
 			Name:  "rpc-servers",

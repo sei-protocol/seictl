@@ -1,39 +1,21 @@
 package workflow
 
 import (
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// writeConfigPatch writes a config-patch YAML fixture and returns its path.
-func writeConfigPatch(t *testing.T, body string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "patch.yaml")
-	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
-		t.Fatalf("write config-patch fixture: %v", err)
-	}
-	return p
-}
-
-// evmSSSplitPatch is an example config patch: app.toml [state-store]
-// evm-ss-split = true.
-const evmSSSplitPatch = `
-app.toml:
-  state-store:
-    evm-ss-split: true
-`
-
 func TestRender_StateSyncGolden(t *testing.T) {
 	got, err := render(renderArgs{
-		preset:      "state-sync",
-		name:        "pacific-1-rpc-0-state-sync",
-		namespace:   "pacific-1",
-		target:      "pacific-1-rpc-0",
-		configPatch: writeConfigPatch(t, evmSSSplitPatch),
-		rpcServers:  []string{"a.example:26657", "b.example:26657"},
+		preset:     "state-sync",
+		name:       "pacific-1-rpc-0-state-sync",
+		namespace:  "pacific-1",
+		target:     "pacific-1-rpc-0",
+		migration:  "GigaStore",
+		backend:    "pebbledb",
+		rpcServers: []string{"a.example:26657", "b.example:26657"},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -63,18 +45,47 @@ func TestRender_StateSyncGolden(t *testing.T) {
 		t.Errorf("spec.stateSync.rpcServers = %v (found=%v); want [a.example:26657 b.example:26657]", servers, found)
 	}
 
-	// configPatch nests exactly file -> section -> {key: value}.
-	split, found, err := unstructured.NestedBool(got.Object, "spec", "stateSync", "configPatch", "app.toml", "state-store", "evm-ss-split")
+	// The typed migration union: spec.stateSync.migration.kind is the workflow
+	// kind, and the kind<->payload CEL requires gigaStore present with a backend.
+	migKind, found, err := unstructured.NestedString(got.Object, "spec", "stateSync", "migration", "kind")
 	if err != nil || !found {
-		t.Fatalf("spec.stateSync.configPatch[app.toml][state-store][evm-ss-split] not found (found=%v err=%v)", found, err)
+		t.Fatalf("spec.stateSync.migration.kind not found (found=%v err=%v)", found, err)
 	}
-	if !split {
-		t.Errorf("evm-ss-split = %v; want true", split)
+	if migKind != "GigaStore" {
+		t.Errorf("spec.stateSync.migration.kind = %q; want GigaStore", migKind)
+	}
+	backend, found, err := unstructured.NestedString(got.Object, "spec", "stateSync", "migration", "gigaStore", "backend")
+	if err != nil || !found {
+		t.Fatalf("spec.stateSync.migration.gigaStore.backend not found (found=%v err=%v)", found, err)
+	}
+	if backend != "pebbledb" {
+		t.Errorf("spec.stateSync.migration.gigaStore.backend = %q; want pebbledb", backend)
+	}
+}
+
+// The backend value must land verbatim under gigaStore for each legal backend.
+func TestRender_StateSyncBackendRoundTrip(t *testing.T) {
+	for _, backend := range gigaStoreBackends {
+		got, err := render(renderArgs{
+			preset:    "state-sync",
+			name:      "n-state-sync",
+			target:    "n",
+			migration: "GigaStore",
+			backend:   backend,
+		})
+		if err != nil {
+			t.Fatalf("render backend=%s: %v", backend, err)
+		}
+		gotBackend, found, _ := unstructured.NestedString(got.Object, "spec", "stateSync", "migration", "gigaStore", "backend")
+		if !found || gotBackend != backend {
+			t.Errorf("spec.stateSync.migration.gigaStore.backend = %q (found=%v); want %q", gotBackend, found, backend)
+		}
 	}
 }
 
 // The minimal render (target only) still produces a valid StateSync workflow:
-// stateSync present (CEL requires it) with no recipe params.
+// stateSync present (CEL requires it) with no recipe params, and — critically —
+// no migration union at all (a plain resync must not carry a migration).
 func TestRender_MinimalStateSync(t *testing.T) {
 	got, err := render(renderArgs{preset: "state-sync", name: "n-state-sync", target: "n"})
 	if err != nil {
@@ -83,8 +94,8 @@ func TestRender_MinimalStateSync(t *testing.T) {
 	if _, found, _ := unstructured.NestedMap(got.Object, "spec", "stateSync"); !found {
 		t.Error("spec.stateSync must be present for kind=StateSync (CEL requires it)")
 	}
-	if _, found, _ := unstructured.NestedFieldNoCopy(got.Object, "spec", "stateSync", "configPatch"); found {
-		t.Error("spec.stateSync.configPatch should be absent when --config-patch is not given")
+	if _, found, _ := unstructured.NestedFieldNoCopy(got.Object, "spec", "stateSync", "migration"); found {
+		t.Error("spec.stateSync.migration must be absent for a plain resync (no --migration)")
 	}
 	if _, found, _ := unstructured.NestedFieldNoCopy(got.Object, "spec", "stateSync", "rpcServers"); found {
 		t.Error("spec.stateSync.rpcServers should be absent when --rpc-servers is not given")
@@ -123,11 +134,49 @@ func TestRender_InvalidRequirePhaseRejected(t *testing.T) {
 	}
 }
 
-func TestRender_ConfigPatchScalarSectionRejected(t *testing.T) {
-	// A file key mapping to a scalar (not a section table) is a malformed patch.
-	path := writeConfigPatch(t, "app.toml: not-a-map\n")
-	_, err := render(renderArgs{preset: "state-sync", name: "n-state-sync", target: "n", configPatch: path})
-	if err == nil {
-		t.Fatal("expected an error when a config-patch file maps a file to a scalar")
+// The client-side --migration/--backend contract: each combination that render
+// must refuse before touching the object. Guards the path strings and the
+// two-token safety property against a silent regression.
+func TestRender_MigrationFlagValidation(t *testing.T) {
+	cases := []struct {
+		name      string
+		migration string
+		backend   string
+		wantErr   string // substring the UsageError message must contain
+	}{
+		{"backend without migration", "", "pebbledb", "--backend is only valid with --migration"},
+		{"migration without backend", "GigaStore", "", "--migration GigaStore requires --backend"},
+		{"unknown migration kind", "Bogus", "pebbledb", `--migration "Bogus" unknown`},
+		// An unknown kind without a backend names the bad kind, not the missing
+		// backend: the enum check is ordered before the required-pairing check.
+		{"unknown kind without backend", "Bogus", "", `--migration "Bogus" unknown`},
+		{"invalid backend value", "GigaStore", "leveldb", `--backend "leveldb" invalid`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := render(renderArgs{
+				preset:    "state-sync",
+				name:      "n-state-sync",
+				target:    "n",
+				migration: tc.migration,
+				backend:   tc.backend,
+			})
+			if err == nil {
+				t.Fatalf("expected a usage error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q; want substring %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// A valid pair renders without error (the happy path of the same contract).
+func TestRender_MigrationValidPairAccepted(t *testing.T) {
+	if _, err := render(renderArgs{
+		preset: "state-sync", name: "n-state-sync", target: "n",
+		migration: "GigaStore", backend: "rocksdb",
+	}); err != nil {
+		t.Fatalf("render valid migration pair: %v", err)
 	}
 }
