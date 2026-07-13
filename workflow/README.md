@@ -2,9 +2,9 @@
 
 `seictl workflow state-sync` re-bootstraps a SeiNode through CometBFT state sync. It renders the StateSync recipe against a target node, server-side-applies the resulting `SeiNodeTaskWorkflow`, and streams the plan's progress until the workflow reaches a terminal phase. The recipe holds the node's readiness gate, stops seid, wipes the data directory, reconfigures state sync against the witnesses, releases the gate so seid restarts, and waits for the node to begin catching up.
 
-There are two ways to run it. A plain resync clears the node's data and lets it re-catch-up on its existing config. A store migration does the same wipe-and-resync but also changes seid's storage configuration on the way. The plain resync is the common case and takes no extra flags; the migration is a deliberate, destructive operation behind its own flags.
+There are two ways to run it. A standard resync clears the node's data and lets it re-catch-up on its existing config. A store migration does the same wipe-and-resync but also changes seid's storage configuration on the way. The standard resync is the common case and takes no extra flags; the migration is a deliberate, destructive operation behind its own flags.
 
-## Plain Resync
+## Standard Resync
 
 No migration flags. This clears the data directory and re-bootstraps the node from peer snapshot data on its existing config:
 
@@ -14,7 +14,7 @@ seictl workflow state-sync <node>
 
 The node holds, wipes, reconfigures, restarts, and begins catching up. Its config is unchanged.
 
-### Plain Resync Steps
+### Standard Resync Steps
 
 seictl renders the workflow and applies it to the cluster. If a workflow with the same name already finished or failed, the command refuses and explains what to do. Once the node has no other work in flight, the controller picks up the workflow, records the plan, and runs six steps in order:
 
@@ -53,24 +53,24 @@ When `--migration` is set, the command prints a `seictl:` destructive-migration 
 
 A migration follows the same steps with one addition. The migration's config changes are computed and checked when the plan is built, before anything runs, so an invalid migration fails immediately and the node is untouched. The plan also records exactly which config keys will change, so you can read what a migration did after the fact.
 
-1. **mark-not-ready**, **stop-seid**, and **reset-data** run exactly as in a plain resync. The node is held, seid stops, and the chain data is cleared while identity and config stay in place.
+1. **mark-not-ready**, **stop-seid**, and **reset-data** run exactly as in a standard resync. The node is held, seid stops, and the chain data is cleared while identity and config stay in place.
 2. **config-patch** applies the migration's config changes. For the giga store split this sets `ss-enable`, `evm-ss-split`, and `ss-backend` under `[state-store]` in `app.toml`, and `sc-enable` under `[state-commit]`.
-3. **configure-state-sync** sets up the resync from the witnesses, as in a plain resync.
+3. **configure-state-sync** sets up the resync from the witnesses, as in a standard resync.
 4. **mark-ready** releases the hold. seid starts under the new storage layout for the first time, and the snapshot restore fills the new store as it downloads.
 5. **await-condition** waits for catch-up. seid refuses to start if the new store layout is empty while the split is enabled, so a node that catches up and serves EVM requests is solid evidence the migration worked.
 
 If a migration fails partway, the node stays held with its data already cleared. seid stays down and the sidecar stays reachable for diagnosis. Recovery is another resync. Force-delete the failed workflow and run a new one, with the same migration or without it.
 
-## Plain Versus Migration
+## Standard Versus Migration
 
-| | Plain resync | Store migration |
+| | Standard resync | Store migration |
 |---|---|---|
 | Flags | none | `--migration GigaStore --backend <backend>` |
 | Config | unchanged | giga SS store flags set |
 | Effect | re-catch-up on existing config | wipe, switch storage engine, re-catch-up |
 | Destructive | yes, data cleared then re-synced | yes, data cleared, engine changed, not reversible without another resync |
 
-Both paths wipe and re-sync. The migration additionally changes the storage engine. Omitting the migration flags is always the plain path.
+Both paths wipe and re-sync. The migration additionally changes the storage engine. Omitting the migration flags is always the standard path.
 
 ## Recipe Mapping
 
@@ -105,4 +105,4 @@ See `seictl workflow state-sync --help` for the full flag list.
 
 ## Migrating Off Config-Patch
 
-`--config-patch` is not a valid flag; passing it is an error that names the replacement. Config patching is a typed migration. For the giga store split use `--migration GigaStore --backend <pebbledb|rocksdb>`. A plain resync takes no migration flag.
+`--config-patch` is not a valid flag; passing it is an error that names the replacement. Config patching is a typed migration. For the giga store split use `--migration GigaStore --backend <pebbledb|rocksdb>`. A standard resync takes no migration flag.
