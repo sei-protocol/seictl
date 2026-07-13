@@ -1,15 +1,41 @@
 package tasks
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
-	abci "github.com/sei-protocol/sei-chain/sei-tendermint/abci/types"
 
 	"github.com/sei-protocol/seictl/sidecar/wire"
 )
+
+// mustMarshalTxMsgData builds the baseapp-encoded TxMsgData bytes a
+// committed tx carries in its result Data, wrapping one message response
+// under the given type URL — the shape parseProposalID decodes. Mirrors
+// baseapp's runMsgs (sei-cosmos abci.pb.go's TxMsgData/MsgData wrapping a
+// raw, non-Any response).
+func mustMarshalTxMsgData(t *testing.T, msgType string, respBytes []byte) string {
+	t.Helper()
+	dataBytes, err := (&sdk.TxMsgData{Data: []*sdk.MsgData{{
+		MsgType: msgType,
+		Data:    respBytes,
+	}}}).Marshal()
+	if err != nil {
+		t.Fatalf("marshal TxMsgData: %v", err)
+	}
+	return string(dataBytes)
+}
+
+func mustMarshalSubmitProposalResponse(t *testing.T, proposalID uint64) string {
+	t.Helper()
+	respBytes, err := (&govtypes.MsgSubmitProposalResponse{ProposalId: proposalID}).Marshal()
+	if err != nil {
+		t.Fatalf("marshal MsgSubmitProposalResponse: %v", err)
+	}
+	return mustMarshalTxMsgData(t, submitProposalMsgType, respBytes)
+}
 
 func TestClassifyGovResult_CommittedOK(t *testing.T) {
 	now := time.Now().UTC()
@@ -50,34 +76,117 @@ func TestClassifyGovResult_Pending_NonTerminal(t *testing.T) {
 }
 
 func TestParseProposalID(t *testing.T) {
-	resp := &sdk.TxResponse{Logs: sdk.ABCIMessageLogs{{
-		Events: sdk.StringEvents{{
-			Type: "submit_proposal",
-			Attributes: []sdk.Attribute{
-				{Key: "proposal_id", Value: "42"},
-			},
-		}},
-	}}}
+	resp := &sdk.TxResponse{
+		TxHash: "ABC",
+		Height: 10,
+		Data:   mustMarshalSubmitProposalResponse(t, 42),
+	}
 	if got := parseProposalID(resp); got != 42 {
 		t.Fatalf("proposal id = %d, want 42", got)
 	}
+}
+
+// A tx result carrying no message responses (empty Data) yields 0, not a panic
+// — e.g. a vote or non-Msg-service tx passed through the same helper.
+func TestParseProposalID_EmptyData(t *testing.T) {
 	if got := parseProposalID(&sdk.TxResponse{}); got != 0 {
-		t.Fatalf("absent event should yield 0, got %d", got)
+		t.Fatalf("empty Data should yield 0, got %d", got)
 	}
 }
 
-// B2: a /tx response may carry the event as raw ABCI events with byte-keyed
-// attributes (SDK-version dependent) rather than parsed Logs.
-func TestParseProposalID_FromRawEvents(t *testing.T) {
-	resp := &sdk.TxResponse{Events: []abci.Event{{
-		Type: "submit_proposal",
-		Attributes: []abci.EventAttribute{
-			{Key: []byte("proposal_id"), Value: []byte("42")},
-		},
-	}}}
-	if got := parseProposalID(resp); got != 42 {
-		t.Fatalf("proposal id from raw events = %d, want 42", got)
+// Garbage Data (not a valid TxMsgData) yields 0, not a panic or error.
+func TestParseProposalID_MalformedData(t *testing.T) {
+	resp := &sdk.TxResponse{TxHash: "ABC", Height: 10, Data: "not a valid protobuf message"}
+	if got := parseProposalID(resp); got != 0 {
+		t.Fatalf("malformed Data should yield 0, got %d", got)
 	}
+}
+
+// TxMsgData with zero message responses yields 0, not an index panic.
+func TestParseProposalID_NoMessageResponses(t *testing.T) {
+	dataBytes, err := (&sdk.TxMsgData{}).Marshal()
+	if err != nil {
+		t.Fatalf("marshal empty TxMsgData: %v", err)
+	}
+	resp := &sdk.TxResponse{TxHash: "ABC", Height: 10, Data: string(dataBytes)}
+	if got := parseProposalID(resp); got != 0 {
+		t.Fatalf("zero message responses should yield 0, got %d", got)
+	}
+}
+
+// A vote's response at index 0 must not be decoded as a MsgSubmitProposal
+// response: MsgVoteResponse is an empty message, so a naive decode would
+// succeed and silently return 0 for the wrong reason — the MsgType guard
+// must reject it before the decode is even attempted. Pins the guard
+// against a future message type whose response DOES have a field 1, which
+// would otherwise decode into a plausible-looking, wrong proposal ID.
+func TestParseProposalID_WrongMsgType(t *testing.T) {
+	respBytes, err := (&govtypes.MsgVoteResponse{}).Marshal()
+	if err != nil {
+		t.Fatalf("marshal MsgVoteResponse: %v", err)
+	}
+	resp := &sdk.TxResponse{
+		TxHash: "ABC", Height: 10,
+		Data: mustMarshalTxMsgData(t, sdk.MsgTypeURL(&govtypes.MsgVote{}), respBytes),
+	}
+	if got := parseProposalID(resp); got != 0 {
+		t.Fatalf("a vote response must not be decoded as MsgSubmitProposalResponse, got %d", got)
+	}
+}
+
+// Index 0 is the MsgSubmitProposal response even when the tx result carries
+// additional message responses after it — pins the index-0, not-last
+// semantics the fix relies on (SignAndBroadcastInput never actually batches
+// today, but this documents why index 0 specifically is correct).
+func TestParseProposalID_MultipleMessageResponses(t *testing.T) {
+	submitBytes, err := (&govtypes.MsgSubmitProposalResponse{ProposalId: 7}).Marshal()
+	if err != nil {
+		t.Fatalf("marshal MsgSubmitProposalResponse: %v", err)
+	}
+	voteBytes, err := (&govtypes.MsgVoteResponse{}).Marshal()
+	if err != nil {
+		t.Fatalf("marshal MsgVoteResponse: %v", err)
+	}
+	dataBytes, err := (&sdk.TxMsgData{Data: []*sdk.MsgData{
+		{MsgType: submitProposalMsgType, Data: submitBytes},
+		{MsgType: sdk.MsgTypeURL(&govtypes.MsgVote{}), Data: voteBytes},
+	}}).Marshal()
+	if err != nil {
+		t.Fatalf("marshal TxMsgData: %v", err)
+	}
+	resp := &sdk.TxResponse{TxHash: "ABC", Height: 10, Data: string(dataBytes)}
+	if got := parseProposalID(resp); got != 7 {
+		t.Fatalf("proposal id = %d, want 7 (from index 0)", got)
+	}
+}
+
+func TestRequireProposalID(t *testing.T) {
+	t.Run("committed-ok with zero ID is escalated to Terminal", func(t *testing.T) {
+		out := &wire.GovTxResult{TxHash: "ABC", InclusionStatus: wire.InclusionCommittedOK, ProposalID: 0}
+		err := requireProposalID(out, nil)
+		if err == nil || !IsTerminal(err) {
+			t.Fatalf("want a Terminal error, got %v", err)
+		}
+	})
+	t.Run("committed-ok with a real ID passes through nil", func(t *testing.T) {
+		out := &wire.GovTxResult{TxHash: "ABC", InclusionStatus: wire.InclusionCommittedOK, ProposalID: 5}
+		if err := requireProposalID(out, nil); err != nil {
+			t.Fatalf("want nil, got %v", err)
+		}
+	})
+	t.Run("pending with zero ID is not escalated — a vote or not-yet-included tx legitimately has no ID", func(t *testing.T) {
+		out := &wire.GovTxResult{TxHash: "ABC", InclusionStatus: wire.InclusionPending, ProposalID: 0}
+		if err := requireProposalID(out, nil); err != nil {
+			t.Fatalf("pending must not be escalated, got %v", err)
+		}
+	})
+	t.Run("an existing cerr is preserved, not overridden", func(t *testing.T) {
+		out := &wire.GovTxResult{TxHash: "ABC", InclusionStatus: wire.InclusionCommittedFailed, ProposalID: 0}
+		want := Terminal(fmt.Errorf("committed but failed"))
+		if got := requireProposalID(out, want); got != want {
+			t.Fatalf("want the original error preserved, got %v", got)
+		}
+	})
 }
 
 // TestVoteOptionValuesMatchGovtypes guards the wire.VoteOption consts against

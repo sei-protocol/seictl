@@ -85,6 +85,7 @@ func (g *GovSoftwareUpgrader) Handler() engine.TaskHandler {
 			return nil, err
 		}
 		out, cerr := classifyGovResult(engine.TaskGovSoftwareUpgrade, result)
+		cerr = requireProposalID(out, cerr)
 		govSoftwareUpgradeLog.Info("proposal broadcast",
 			"taskId", engine.TaskIDFromContext(ctx),
 			"chainId", params.ChainID,

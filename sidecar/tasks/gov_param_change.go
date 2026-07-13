@@ -96,6 +96,7 @@ func (g *GovParamChanger) Handler() engine.TaskHandler {
 			return nil, err
 		}
 		out, cerr := classifyGovResult(engine.TaskGovParamChange, result)
+		cerr = requireProposalID(out, cerr)
 		keys := make([]string, 0, len(params.Changes))
 		for _, c := range params.Changes {
 			keys = append(keys, c.Subspace+"/"+c.Key)
