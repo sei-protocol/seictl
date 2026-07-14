@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -173,7 +174,18 @@ func stateSyncAction(ctx context.Context, c *cli.Command) error {
 		cliutil.EmitStatus(os.Stderr, err)
 		return cli.Exit("", 1)
 	}
+	emitCompleteHandoff(os.Stderr, resolvedNS, node)
 	return nil
+}
+
+// emitCompleteHandoff hands the operator the node-side catch-up check on
+// workflow Complete. Complete means the recipe's mutations landed and the node
+// was released; the resync runs after Complete, so catch-up is the operator's
+// verification, via the SDK-backed readiness watch.
+func emitCompleteHandoff(w io.Writer, ns, node string) {
+	_, _ = fmt.Fprintf(w, "seictl: workflow Complete: node %s released, seid is restarting and the resync begins now\n", node)
+	_, _ = fmt.Fprintf(w, "seictl: Complete means the recipe's mutations landed, not that the node caught up. Verify catch-up:\n")
+	_, _ = fmt.Fprintf(w, "seictl:   seictl node watch %s --until=caught-up -n %s\n", node, ns)
 }
 
 var stateSyncCmd = cli.Command{
@@ -182,11 +194,16 @@ var stateSyncCmd = cli.Command{
 	// mangle repeatable values (a --set TOML list, or witness endpoints passed
 	// to --rpc-servers). Same precedent as `node apply`.
 	DisableSliceFlagSeparator: true,
-	Usage:                     "Re-bootstrap a node through CometBFT state sync and watch it to completion",
+	Usage:                     "Re-bootstrap a node through CometBFT state sync and watch it to release",
 	Description: "Renders the StateSync recipe against <node> from the embedded " +
 		"state-sync preset, server-side-applies the resulting " +
 		"SeiNodeTaskWorkflow, then streams its plan progress as NDJSON on " +
 		"stdout until the workflow reaches a terminal phase. " +
+		"\n\n" +
+		"Complete means the recipe's mutations landed and the node was " +
+		"released to re-bootstrap; the resync itself runs after Complete, and " +
+		"the command prints the node-side catch-up check on success. A Failed " +
+		"workflow always means the node is still held. " +
 		"\n\n" +
 		"Exit codes are kubectl-wait-compatible: 0 when .status.phase reaches " +
 		"Complete, nonzero on Failed or --timeout. " +
@@ -254,8 +271,8 @@ var stateSyncCmd = cli.Command{
 		},
 		&cli.DurationFlag{
 			Name:  "timeout",
-			Value: 60 * time.Minute,
-			Usage: "Watch timeout; exits with metav1.Status reason=Timeout when exceeded. A full state sync can be slow — size for the target's dataset.",
+			Value: 15 * time.Minute,
+			Usage: "Watch timeout; exits with metav1.Status reason=Timeout when exceeded. The watch ends when the workflow releases the node (minutes on a healthy node; reset-data on a very large data directory is the slow step), so a timeout usually means a wedged recipe step. Raise it for archive-scale data directories, where reset-data can legitimately run long.",
 		},
 		&cli.StringFlag{
 			Name:    "kubeconfig",
