@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 	authtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/types"
+	vestingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/vesting/types"
 	banktypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/bank/types"
 	genutiltypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/genutil/types"
 )
@@ -251,4 +252,143 @@ func containsAddr(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// findAuthAccount returns the genesis account at addr, or nil if absent.
+func findAuthAccount(t *testing.T, genFile, addr string) authtypes.GenesisAccount {
+	t.Helper()
+	cdc, _ := makeCodec()
+	appState, _, err := genutiltypes.GenesisStateFromGenFile(genFile)
+	if err != nil {
+		t.Fatalf("reading genesis: %v", err)
+	}
+	auth := authtypes.GetGenesisStateFromAppState(cdc, appState)
+	accs, err := authtypes.UnpackAccounts(auth.Accounts)
+	if err != nil {
+		t.Fatalf("unpacking accounts: %v", err)
+	}
+	for _, a := range accs {
+		if a.GetAddress().String() == addr {
+			return a
+		}
+	}
+	return nil
+}
+
+func TestAddExternalGenesisAccounts_VestingContinuousByDefault(t *testing.T) {
+	homeDir := t.TempDir()
+	genFile := minimalGenesis(t, homeDir)
+	addr := "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9"
+
+	a := NewGenesisAssembler(homeDir, "bucket", "region", "test-chain-1", nil, nil)
+	err := a.addExternalGenesisAccounts([]GenesisAccountEntry{{
+		Address: addr,
+		Balance: "2000000usei",
+		Vesting: &GenesisAccountVesting{Amount: "1000000usei", EndTime: 1893456000},
+	}})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	// Bank balance carries the full Balance, not just the vesting portion —
+	// vesting locks part of an existing balance, it isn't a separate pot.
+	balances := readBankBalances(t, genFile)
+	found := false
+	for _, b := range balances {
+		if b.Address == addr {
+			found = true
+			if b.Coins.String() != "2000000usei" {
+				t.Errorf("balance: got %s, want 2000000usei", b.Coins.String())
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("address %s not found in bank.balances", addr)
+	}
+
+	acc := findAuthAccount(t, genFile, addr)
+	if acc == nil {
+		t.Fatalf("address %s not found in auth.accounts", addr)
+	}
+	cva, ok := acc.(*vestingtypes.ContinuousVestingAccount)
+	if !ok {
+		t.Fatalf("account type: got %T, want *vestingtypes.ContinuousVestingAccount", acc)
+	}
+	if cva.OriginalVesting.String() != "1000000usei" {
+		t.Errorf("OriginalVesting: got %s, want 1000000usei", cva.OriginalVesting.String())
+	}
+	if cva.EndTime != 1893456000 {
+		t.Errorf("EndTime: got %d, want 1893456000", cva.EndTime)
+	}
+	// StartTime must be the genesis timestamp, not wall-clock "now" — there
+	// is no live block-time at genesis-assembly time. minimalGenesis sets
+	// genesis_time to 2026-01-01T00:00:00Z (1767225600).
+	const wantStartTime = 1767225600
+	if cva.StartTime != wantStartTime {
+		t.Errorf("StartTime: got %d, want genesis time %d", cva.StartTime, wantStartTime)
+	}
+}
+
+func TestAddExternalGenesisAccounts_VestingDelayed(t *testing.T) {
+	homeDir := t.TempDir()
+	genFile := minimalGenesis(t, homeDir)
+	addr := "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9"
+
+	a := NewGenesisAssembler(homeDir, "bucket", "region", "test-chain-1", nil, nil)
+	err := a.addExternalGenesisAccounts([]GenesisAccountEntry{{
+		Address: addr,
+		Balance: "1000000usei",
+		Vesting: &GenesisAccountVesting{Amount: "1000000usei", EndTime: 1893456000, Delayed: true},
+	}})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	acc := findAuthAccount(t, genFile, addr)
+	if acc == nil {
+		t.Fatalf("address %s not found in auth.accounts", addr)
+	}
+	dva, ok := acc.(*vestingtypes.DelayedVestingAccount)
+	if !ok {
+		t.Fatalf("account type: got %T, want *vestingtypes.DelayedVestingAccount", acc)
+	}
+	if dva.OriginalVesting.String() != "1000000usei" {
+		t.Errorf("OriginalVesting: got %s, want 1000000usei", dva.OriginalVesting.String())
+	}
+	if dva.EndTime != 1893456000 {
+		t.Errorf("EndTime: got %d, want 1893456000", dva.EndTime)
+	}
+}
+
+func TestAddExternalGenesisAccounts_VestingAmountExceedsBalanceRejected(t *testing.T) {
+	homeDir := t.TempDir()
+	_ = minimalGenesis(t, homeDir)
+
+	a := NewGenesisAssembler(homeDir, "bucket", "region", "test-chain-1", nil, nil)
+	err := a.addExternalGenesisAccounts([]GenesisAccountEntry{{
+		Address: "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9",
+		Balance: "1000000usei",
+		Vesting: &GenesisAccountVesting{Amount: "2000000usei", EndTime: 1893456000},
+	}})
+	if err == nil {
+		t.Fatal("expected vesting-exceeds-balance error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds balance") {
+		t.Errorf("error: got %q, want substring 'exceeds balance'", err.Error())
+	}
+}
+
+func TestAddExternalGenesisAccounts_VestingRejectsBadAmount(t *testing.T) {
+	homeDir := t.TempDir()
+	_ = minimalGenesis(t, homeDir)
+
+	a := NewGenesisAssembler(homeDir, "bucket", "region", "test-chain-1", nil, nil)
+	err := a.addExternalGenesisAccounts([]GenesisAccountEntry{{
+		Address: "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9",
+		Balance: "1000000usei",
+		Vesting: &GenesisAccountVesting{Amount: "not-a-coin", EndTime: 1893456000},
+	}})
+	if err == nil {
+		t.Fatal("expected vesting amount parse error, got nil")
+	}
 }

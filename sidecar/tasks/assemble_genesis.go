@@ -16,6 +16,7 @@ import (
 
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 	authtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/types"
+	vestingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/vesting/types"
 	banktypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/bank/types"
 	"github.com/sei-protocol/sei-chain/sei-cosmos/x/genutil"
 	genutiltypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/genutil/types"
@@ -61,10 +62,25 @@ type AssembleNodeEntry struct {
 }
 
 // GenesisAccountEntry represents one externally-supplied genesis account.
-// Mirrors SeiNodeDeployment.spec.genesis.accounts[] on the controller side.
+// Mirrors SeiNetwork.Spec.Genesis.Accounts[] on the controller side.
 type GenesisAccountEntry struct {
 	Address string `json:"address"`
 	Balance string `json:"balance"`
+
+	// Vesting, when set, locks Balance under a vesting schedule instead of
+	// a standard account; nil produces today's plain account.
+	Vesting *GenesisAccountVesting `json:"vesting,omitempty"`
+}
+
+// GenesisAccountVesting locks a GenesisAccountEntry's Balance under a vesting
+// schedule, mirroring the (deprecated-for-live-tx) x/auth/vesting account
+// types: ContinuousVestingAccount by default, or DelayedVestingAccount when
+// Delayed is set. The vesting start time is always the network's genesis
+// time — there is no live "now" at genesis-assembly time.
+type GenesisAccountVesting struct {
+	Amount  string `json:"amount"`
+	EndTime int64  `json:"endTime"`
+	Delayed bool   `json:"delayed,omitempty"`
 }
 
 // AssembleGenesisResult is the task's structured result, emitted in-band over
@@ -444,12 +460,36 @@ func (a *GenesisAssembler) addExternalGenesisAccounts(accounts []GenesisAccountE
 			return fmt.Errorf("assemble-genesis: external account %s balance %q: %w", addr.String(), entry.Balance, err)
 		}
 
-		accs = append(accs, authtypes.NewBaseAccount(addr, nil, 0, 0))
+		baseAccount := authtypes.NewBaseAccount(addr, nil, 0, 0)
+		var acc authtypes.GenesisAccount = baseAccount
+
+		if entry.Vesting != nil {
+			vestingCoins, err := sdk.ParseCoinsNormalized(entry.Vesting.Amount)
+			if err != nil {
+				return fmt.Errorf("assemble-genesis: external account %s vesting amount %q: %w", addr.String(), entry.Vesting.Amount, err)
+			}
+			if !coins.IsAllGTE(vestingCoins) {
+				return fmt.Errorf("assemble-genesis: external account %s vesting amount %s exceeds balance %s", addr.String(), vestingCoins, coins)
+			}
+			// Mirrors msg_server.go's (now-deprecated-for-live-tx)
+			// CreateVestingAccount handler, with the genesis timestamp
+			// standing in for ctx.BlockTime() — there is no live "now" at
+			// genesis-assembly time. No admin: genesis-seeded vesting
+			// fixtures have no live tx to have named one.
+			baseVestingAccount := vestingtypes.NewBaseVestingAccount(baseAccount, vestingCoins.Sort(), entry.Vesting.EndTime, nil)
+			if entry.Vesting.Delayed {
+				acc = vestingtypes.NewDelayedVestingAccountRaw(baseVestingAccount)
+			} else {
+				acc = vestingtypes.NewContinuousVestingAccountRaw(baseVestingAccount, genDoc.GenesisTime.Unix())
+			}
+		}
+
+		accs = append(accs, acc)
 		bankGenState.Balances = append(bankGenState.Balances, banktypes.Balance{
 			Address: addr.String(),
 			Coins:   coins.Sort(),
 		})
-		assembleLog.Info("added external genesis account", "address", addr.String(), "balance", entry.Balance)
+		assembleLog.Info("added external genesis account", "address", addr.String(), "balance", entry.Balance, "vesting", entry.Vesting != nil)
 	}
 
 	if err := writeBackAuthAndBank(cdc, genFile, genDoc, appState, authGenState, accs, bankGenState); err != nil {
