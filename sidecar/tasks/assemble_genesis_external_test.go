@@ -392,3 +392,60 @@ func TestAddExternalGenesisAccounts_VestingRejectsBadAmount(t *testing.T) {
 		t.Fatal("expected vesting amount parse error, got nil")
 	}
 }
+
+func TestAddExternalGenesisAccounts_VestingRejectsZeroAmount(t *testing.T) {
+	// "0usei" passes the CRD MinLength=1 string check but ParseCoinsNormalized
+	// normalizes it to empty coins — a degenerate schedule that locks nothing.
+	homeDir := t.TempDir()
+	_ = minimalGenesis(t, homeDir)
+
+	a := NewGenesisAssembler(homeDir, "bucket", "region", "test-chain-1", nil, nil)
+	err := a.addExternalGenesisAccounts([]GenesisAccountEntry{{
+		Address: "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9",
+		Balance: "1000000usei",
+		Vesting: &GenesisAccountVesting{Amount: "0usei", EndTime: 1893456000},
+	}})
+	if err == nil {
+		t.Fatal("expected non-zero-amount error, got nil")
+	}
+	if !strings.Contains(err.Error(), "non-zero") {
+		t.Errorf("error: got %q, want substring 'non-zero'", err.Error())
+	}
+}
+
+func TestAddExternalGenesisAccounts_VestingRejectsEndTimeBeforeGenesis(t *testing.T) {
+	// EndTime at/before genesis time yields a schedule that's already fully
+	// vested at chain start — the account is unlocked, defeating the fixture.
+	// minimalGenesis sets genesis_time to 2026-01-01T00:00:00Z (1767225600).
+	homeDir := t.TempDir()
+	_ = minimalGenesis(t, homeDir)
+
+	a := NewGenesisAssembler(homeDir, "bucket", "region", "test-chain-1", nil, nil)
+
+	// Continuous: EndTime exactly at genesis time.
+	err := a.addExternalGenesisAccounts([]GenesisAccountEntry{{
+		Address: "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9",
+		Balance: "1000000usei",
+		Vesting: &GenesisAccountVesting{Amount: "1000000usei", EndTime: 1767225600},
+	}})
+	if err == nil {
+		t.Fatal("continuous: expected end-time-before-genesis error, got nil")
+	}
+	if !strings.Contains(err.Error(), "after genesis time") {
+		t.Errorf("continuous: error got %q, want substring 'after genesis time'", err.Error())
+	}
+
+	// Delayed with a past EndTime: no start/end ordering check in the account
+	// type itself, so this guard is the only thing catching it.
+	err = a.addExternalGenesisAccounts([]GenesisAccountEntry{{
+		Address: "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9",
+		Balance: "1000000usei",
+		Vesting: &GenesisAccountVesting{Amount: "1000000usei", EndTime: 1, Delayed: true},
+	}})
+	if err == nil {
+		t.Fatal("delayed: expected end-time-before-genesis error, got nil")
+	}
+	if !strings.Contains(err.Error(), "after genesis time") {
+		t.Errorf("delayed: error got %q, want substring 'after genesis time'", err.Error())
+	}
+}

@@ -553,11 +553,9 @@ type GenesisAccountEntry struct {
 	Vesting *GenesisAccountVesting `json:"vesting,omitempty"`
 }
 
-// GenesisAccountVesting locks a GenesisAccountEntry's Balance under a vesting
-// schedule, mirroring the (deprecated-for-live-tx) x/auth/vesting account
-// types: ContinuousVestingAccount by default, or DelayedVestingAccount when
-// Delayed is set. The vesting start time is always the network's genesis
-// time — there is no live "now" at genesis-assembly time.
+// GenesisAccountVesting locks part of a GenesisAccountEntry's Balance on an
+// unlock schedule completing at EndTime: linear from genesis time by default,
+// or all-at-once when Delayed. Amount must not exceed Balance.
 type GenesisAccountVesting struct {
 	Amount  string `json:"amount"`
 	EndTime int64  `json:"endTime"`

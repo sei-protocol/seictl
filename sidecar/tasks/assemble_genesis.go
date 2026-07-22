@@ -72,11 +72,9 @@ type GenesisAccountEntry struct {
 	Vesting *GenesisAccountVesting `json:"vesting,omitempty"`
 }
 
-// GenesisAccountVesting locks a GenesisAccountEntry's Balance under a vesting
-// schedule, mirroring the (deprecated-for-live-tx) x/auth/vesting account
-// types: ContinuousVestingAccount by default, or DelayedVestingAccount when
-// Delayed is set. The vesting start time is always the network's genesis
-// time — there is no live "now" at genesis-assembly time.
+// GenesisAccountVesting locks part of a GenesisAccountEntry's Balance on an
+// unlock schedule completing at EndTime: linear from genesis time by default,
+// or all-at-once when Delayed. Amount must not exceed Balance.
 type GenesisAccountVesting struct {
 	Amount  string `json:"amount"`
 	EndTime int64  `json:"endTime"`
@@ -468,20 +466,44 @@ func (a *GenesisAssembler) addExternalGenesisAccounts(accounts []GenesisAccountE
 			if err != nil {
 				return fmt.Errorf("assemble-genesis: external account %s vesting amount %q: %w", addr.String(), entry.Vesting.Amount, err)
 			}
+			if vestingCoins.Empty() {
+				return fmt.Errorf("assemble-genesis: external account %s vesting amount %q must be non-zero", addr.String(), entry.Vesting.Amount)
+			}
 			if !coins.IsAllGTE(vestingCoins) {
 				return fmt.Errorf("assemble-genesis: external account %s vesting amount %s exceeds balance %s", addr.String(), vestingCoins, coins)
 			}
-			// Mirrors msg_server.go's (now-deprecated-for-live-tx)
-			// CreateVestingAccount handler, with the genesis timestamp
-			// standing in for ctx.BlockTime() — there is no live "now" at
-			// genesis-assembly time. No admin: genesis-seeded vesting
-			// fixtures have no live tx to have named one.
-			baseVestingAccount := vestingtypes.NewBaseVestingAccount(baseAccount, vestingCoins.Sort(), entry.Vesting.EndTime, nil)
-			if entry.Vesting.Delayed {
-				acc = vestingtypes.NewDelayedVestingAccountRaw(baseVestingAccount)
-			} else {
-				acc = vestingtypes.NewContinuousVestingAccountRaw(baseVestingAccount, genDoc.GenesisTime.Unix())
+			// EndTime must be strictly after genesis time for both
+			// schedules: a continuous account with EndTime <= StartTime
+			// is fully vested from block 1 (ContinuousVestingAccount's own
+			// Validate rejects StartTime >= EndTime, but only if something
+			// calls Validate — see below); a delayed account has no
+			// start/end ordering check at all, so an EndTime in the past
+			// silently unlocks everything at genesis with no error either
+			// way. Both would defeat the entire purpose of a vesting
+			// fixture: a balance that's supposed to be locked.
+			if entry.Vesting.EndTime <= genDoc.GenesisTime.Unix() {
+				return fmt.Errorf("assemble-genesis: external account %s vesting end time %d must be after genesis time %d",
+					addr.String(), entry.Vesting.EndTime, genDoc.GenesisTime.Unix())
 			}
+			// Mirrors msg_server.go's (deprecated-for-live-tx) CreateVestingAccount
+			// handler, with the genesis timestamp standing in for
+			// ctx.BlockTime() (no live "now" at genesis-assembly time) and no
+			// admin (no live tx to have named one).
+			baseVestingAccount := vestingtypes.NewBaseVestingAccount(baseAccount, vestingCoins.Sort(), entry.Vesting.EndTime, nil)
+			var vestingAcc authtypes.GenesisAccount
+			if entry.Vesting.Delayed {
+				vestingAcc = vestingtypes.NewDelayedVestingAccountRaw(baseVestingAccount)
+			} else {
+				vestingAcc = vestingtypes.NewContinuousVestingAccountRaw(baseVestingAccount, genDoc.GenesisTime.Unix())
+			}
+			// Belt-and-suspenders: auth.InitGenesis never calls Validate()
+			// on genesis accounts (only the separate validate-genesis CLI
+			// path does), so an invalid vesting schedule would otherwise
+			// reach InitChain unguarded.
+			if err := vestingAcc.Validate(); err != nil {
+				return fmt.Errorf("assemble-genesis: external account %s vesting schedule: %w", addr.String(), err)
+			}
+			acc = vestingAcc
 		}
 
 		accs = append(accs, acc)
