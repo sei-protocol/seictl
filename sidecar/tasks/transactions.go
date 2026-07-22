@@ -115,6 +115,12 @@ func (c *sdkTxClient) QueryTx(ctx context.Context, txHashHex string) (*sdk.TxRes
 		if isTxNotFound(err) {
 			return nil, false, nil
 		}
+		if isTxIndexingDisabled(err) {
+			// Normalize the RPC-vocabulary error into the sentinel here (the
+			// one layer that owns /tx semantics), so callers branch on
+			// errors.Is instead of re-matching the message text.
+			return nil, false, fmt.Errorf("query /tx?hash=%s: %w", txHashHex, errTxIndexingDisabled)
+		}
 		return nil, false, fmt.Errorf("query /tx?hash=%s: %w", txHashHex, err)
 	}
 	resp := &sdk.TxResponse{
@@ -144,6 +150,29 @@ func isTxNotFound(err error) bool {
 		return false
 	}
 	return strings.Contains(rpcErr.Data, "not found")
+}
+
+// errTxIndexingDisabled is the sentinel QueryTx returns when the target node
+// has transaction indexing turned off (tx_index.indexer = "null"), so /tx?hash=
+// cannot answer. The tx may still have committed — this reports that inclusion
+// is unobservable from this node, NOT that the tx failed. Retrying the same
+// node is futile (unlike a transient transport error), so callers fail
+// terminally; the message tells the operator how to unblock.
+var errTxIndexingDisabled = errors.New(
+	"node transaction indexing is disabled (no kvEventSink): the tx may already be on chain — " +
+		"verify via an indexed RPC before re-running, or enable tx_index on the target node")
+
+// isTxIndexingDisabled reports whether err is the node's indexing-disabled
+// response. Same *rpctypes.RPCError fence as isTxNotFound (a transport error is
+// not an RPCError, so it stays transient); like there, the detail lands in
+// Data. "kvEventSink" is the server's internal identifier for the missing sink
+// — a stabler anchor than the surrounding English prose.
+func isTxIndexingDisabled(err error) bool {
+	var rpcErr *rpctypes.RPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	return strings.Contains(rpcErr.Data, "kvEventSink")
 }
 
 // newSignTxInterfaceRegistry registers only the proto interfaces sign-tx

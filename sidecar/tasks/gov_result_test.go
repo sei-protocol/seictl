@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -35,6 +36,25 @@ func mustMarshalSubmitProposalResponse(t *testing.T, proposalID uint64) string {
 		t.Fatalf("marshal MsgSubmitProposalResponse: %v", err)
 	}
 	return mustMarshalTxMsgData(t, submitProposalMsgType, respBytes)
+}
+
+// An unverifiable result (broadcast accepted, outcome unobservable because the
+// node's tx index is off) classifies as a TERMINAL InclusionUnverifiable
+// wrapping errTxIndexingDisabled — the honest "outcome unknown, stop retrying",
+// distinct from both committed_failed and the retryable pending case.
+func TestClassifyGovResult_Unverifiable_Terminal(t *testing.T) {
+	out, err := classifyGovResult("gov-param-change", &SignAndBroadcastResult{
+		TxHash: "ABC", Unverifiable: true,
+	})
+	if out.InclusionStatus != wire.InclusionUnverifiable || out.TxHash != "ABC" {
+		t.Fatalf("unexpected result: %+v", out)
+	}
+	if !IsTerminal(err) {
+		t.Fatalf("unverifiable must be terminal (retrying is futile), got %v", err)
+	}
+	if !errors.Is(err, errTxIndexingDisabled) {
+		t.Fatalf("terminal error should wrap errTxIndexingDisabled, got %v", err)
+	}
 }
 
 func TestClassifyGovResult_CommittedOK(t *testing.T) {
