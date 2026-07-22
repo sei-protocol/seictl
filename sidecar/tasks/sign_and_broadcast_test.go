@@ -662,18 +662,31 @@ func txIndexDisabledErr() *rpctypes.RPCError {
 	}
 }
 
-// TestIsTxIndexingDisabled pins the string match against the exact observed
-// payload — a sei-tendermint reword would otherwise silently revert the fix to
-// the original retry-until-timeout bug.
+// TestIsTxIndexingDisabled pins the match against sei-tendermint's real
+// disabled-index payloads — a reword would otherwise silently revert the fix to
+// the retry-until-timeout bug. Both event-sink spellings must classify as
+// disabled (terminal); crucially a message that says "not found" AND names the
+// sink must too, since QueryTx checks this before isTxNotFound. A genuine miss
+// on an indexed node and a transport error must not.
 func TestIsTxIndexingDisabled(t *testing.T) {
-	if !isTxIndexingDisabled(txIndexDisabledErr()) {
-		t.Fatal("must match the observed no-kvEventSink payload")
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"pre-lookup guard (kvEventSink)", txIndexDisabledErr(), true},
+		{"fallback guard (KV event sink)", &rpctypes.RPCError{Message: "Internal error", Data: "transaction querying is disabled on this node due to the KV event sink being disabled"}, true},
+		{"not-found that also names the sink", &rpctypes.RPCError{Message: "Internal error", Data: "tx (ABCD) not found, err: no kvEventSink"}, true},
+		{"genuine not-found on an indexed node", &rpctypes.RPCError{Message: "Internal error", Data: "tx (ABCD) not found, err: x"}, false},
+		{"transport error", errors.New("connection refused"), false},
+		{"nil", nil, false},
 	}
-	if isTxIndexingDisabled(&rpctypes.RPCError{Message: "Internal error", Data: "tx (ABCD) not found"}) {
-		t.Fatal("must not match a not-found error")
-	}
-	if isTxIndexingDisabled(errors.New("connection refused")) {
-		t.Fatal("must not match a (transient) transport error")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isTxIndexingDisabled(c.err); got != c.want {
+				t.Fatalf("isTxIndexingDisabled(%v) = %v, want %v", c.err, got, c.want)
+			}
+		})
 	}
 }
 
