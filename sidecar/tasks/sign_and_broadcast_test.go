@@ -17,6 +17,7 @@ import (
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 	txtypes "github.com/sei-protocol/sei-chain/sei-cosmos/types/tx"
 	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
+	rpctypes "github.com/sei-protocol/sei-chain/sei-tendermint/rpc/jsonrpc/types"
 
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	"github.com/sei-protocol/seictl/sidecar/rpc"
@@ -647,6 +648,94 @@ func TestAdopt_QueryTransportError_ReportsPending_NoRebroadcast(t *testing.T) {
 	}
 	if tc.broadcasts != 0 {
 		t.Fatalf("must NOT re-broadcast on unknown state; saw %d", tc.broadcasts)
+	}
+}
+
+// txIndexDisabledErr mirrors the node's real /tx response when tx_index is off
+// (tx_index.indexer = "null"): a JSON-RPC internal error whose Data names the
+// missing kvEventSink. Observed on a validator with transaction indexing off.
+func txIndexDisabledErr() *rpctypes.RPCError {
+	return &rpctypes.RPCError{
+		Code:    -32603,
+		Message: "Internal error",
+		Data:    "transaction querying is disabled due to no kvEventSink",
+	}
+}
+
+// TestIsTxIndexingDisabled pins the match against sei-tendermint's real
+// disabled-index payloads — a reword would otherwise silently revert the fix to
+// the retry-until-timeout bug. Both event-sink spellings must classify as
+// disabled (terminal); crucially a message that says "not found" AND names the
+// sink must too, since QueryTx checks this before isTxNotFound. A genuine miss
+// on an indexed node and a transport error must not.
+func TestIsTxIndexingDisabled(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"pre-lookup guard (kvEventSink)", txIndexDisabledErr(), true},
+		{"fallback guard (KV event sink)", &rpctypes.RPCError{Message: "Internal error", Data: "transaction querying is disabled on this node due to the KV event sink being disabled"}, true},
+		{"not-found that also names the sink", &rpctypes.RPCError{Message: "Internal error", Data: "tx (ABCD) not found, err: no kvEventSink"}, true},
+		{"genuine not-found on an indexed node", &rpctypes.RPCError{Message: "Internal error", Data: "tx (ABCD) not found, err: x"}, false},
+		{"transport error", errors.New("connection refused"), false},
+		{"nil", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isTxIndexingDisabled(c.err); got != c.want {
+				t.Fatalf("isTxIndexingDisabled(%v) = %v, want %v", c.err, got, c.want)
+			}
+		})
+	}
+}
+
+// Adopt path: a marker exists but the node's tx index is off, so QueryTx yields
+// errTxIndexingDisabled. signAndBroadcast must return an UNVERIFIABLE result —
+// not a retryable pending one — without re-broadcasting. The pre-fix behavior
+// reported inclusion-undetermined and retried to the task deadline, masking the
+// outcome as a bare Timeout. (classifyGovResult turns the unverifiable result
+// terminal — see gov_result_test.go.)
+func TestAdopt_TxIndexingDisabled_Unverifiable(t *testing.T) {
+	shortenPolls(t)
+	tc := &fakeTxClient{queryErr: errTxIndexingDisabled}
+	cfg, addr, cp := markerCfg(t, "pacific-1", tc)
+	cp.markers["task-1"] = &engine.TxMarker{
+		TaskID: "task-1", TxHash: "ABCD", TxBytes: []byte{9, 9, 9}, ChainID: "pacific-1",
+	}
+
+	res, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err != nil {
+		t.Fatalf("unverifiable is carried on the result, not returned as an error: %v", err)
+	}
+	if res == nil || !res.Unverifiable || res.IncludedAt != nil {
+		t.Fatalf("expected an unverifiable result with IncludedAt nil, got %+v", res)
+	}
+	if res.TxHash != "ABCD" {
+		t.Fatalf("unverifiable result must carry the marker txHash, got %q", res.TxHash)
+	}
+	if tc.broadcasts != 0 {
+		t.Fatalf("must not re-broadcast when inclusion is unobservable; saw %d", tc.broadcasts)
+	}
+}
+
+// Fresh path: no marker; broadcast accepted (CheckTx code 0) but the node's tx
+// index is off, so inclusion can never be polled. Same unverifiable result —
+// not pending-until-deadline.
+func TestFresh_TxIndexingDisabled_Unverifiable(t *testing.T) {
+	shortenPolls(t)
+	tc := &fakeTxClient{
+		broadcastResp: &sdk.TxResponse{Code: 0, TxHash: "h"},
+		queryErr:      errTxIndexingDisabled,
+	}
+	cfg, addr, _ := markerCfg(t, "pacific-1", tc)
+
+	res, err := signAndBroadcast(context.Background(), cfg, tc, markerInput(t, addr), addr)
+	if err != nil {
+		t.Fatalf("unverifiable is carried on the result, not an error: %v", err)
+	}
+	if res == nil || !res.Unverifiable || res.IncludedAt != nil {
+		t.Fatalf("expected an unverifiable result, got %+v", res)
 	}
 }
 

@@ -82,6 +82,12 @@ const (
 	InclusionCommittedOK     = "committed_ok"
 	InclusionCommittedFailed = "committed_failed"
 	InclusionPending         = "pending"
+	// InclusionUnverifiable: the tx was broadcast and accepted at CheckTx, but
+	// its on-chain outcome cannot be observed from the target node (its tx
+	// index is disabled), so the sidecar can confirm neither success nor
+	// failure. Terminal — retrying the same node is futile — but distinct from
+	// committed_failed: the operator must verify via an indexed RPC.
+	InclusionUnverifiable = "unverifiable"
 )
 
 // GovTxResult is the structured result a gov sign-tx handler returns; the engine

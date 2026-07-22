@@ -85,6 +85,11 @@ type SignAndBroadcastResult struct {
 	// land later. It does NOT mean "not included". Callers must
 	// re-query the chain to determine final state.
 	IncludedAt *time.Time `json:"includedAt,omitempty"`
+	// Unverifiable is set when the tx was broadcast but its outcome cannot be
+	// observed because the target node's tx index is off (errTxIndexingDisabled).
+	// classifyGovResult turns this into a terminal InclusionUnverifiable — it is
+	// distinct from IncludedAt==nil (pending/retryable): retrying is futile.
+	Unverifiable bool `json:"unverifiable,omitempty"`
 }
 
 // TerminalError marks a sign-tx error as non-retryable (malformed input,
@@ -124,7 +129,9 @@ type txClient interface {
 	BroadcastSync(ctx context.Context, txBytes []byte) (*sdk.TxResponse, error)
 
 	// QueryTx returns (resp, found, err). found=false / err=nil means
-	// the node has no record (distinct from a transport error).
+	// the node has no record (distinct from a transport error). A node with
+	// tx indexing disabled returns errTxIndexingDisabled (match via
+	// errors.Is), since /tx cannot answer there.
 	QueryTx(ctx context.Context, txHashHex string) (*sdk.TxResponse, bool, error)
 }
 
@@ -251,6 +258,12 @@ var adoptReQueryTimeout = 5 * time.Second
 func adoptMarker(ctx context.Context, tc txClient, m *engine.TxMarker) (*SignAndBroadcastResult, error) {
 	resp, found, err := tc.QueryTx(ctx, m.TxHash)
 	if err != nil {
+		if errors.Is(err, errTxIndexingDisabled) {
+			// Inclusion is unobservable on this node — retrying is futile.
+			// Return an unverifiable result (classifyGovResult makes it
+			// terminal), carrying the txHash for the operator's manual check.
+			return unverifiableResult(m.TxHash, m.AccountNumber, m.Sequence, m.ChainID), nil
+		}
 		// Unknown state — report undetermined so the caller re-checks; the
 		// durable marker makes a later re-broadcast safe.
 		signTxLog.Warn("adopt query transport error; reporting inclusion-undetermined",
@@ -300,6 +313,12 @@ func broadcastAndPoll(ctx context.Context, tc txClient, txBytes []byte, txHash s
 
 	included, perr := pollForInclusion(ctx, tc, resp.TxHash, inclusionPollTimeout, inclusionPollInterval)
 	if perr != nil {
+		if errors.Is(perr, errTxIndexingDisabled) {
+			// Inclusion is unobservable on this node — polling can never
+			// confirm it. Return an unverifiable result (terminal), not
+			// pending-until-deadline.
+			return unverifiableResult(resp.TxHash, accNum, seq, chainID), nil
+		}
 		// ctx cancellation (shutdown) — propagate; a poll timeout is (nil,nil).
 		return nil, perr
 	}
@@ -448,11 +467,33 @@ func pollForInclusion(ctx context.Context, tc txClient, txHash string, timeout, 
 		if err == nil && found {
 			return resp, nil
 		}
+		if errors.Is(err, errTxIndexingDisabled) {
+			// Unobservable on this node — polling can never confirm inclusion,
+			// so stop and surface it for the caller rather than spin until the
+			// deadline.
+			return nil, err
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(interval):
 		}
+	}
+}
+
+// unverifiableResult builds the result for a broadcast tx whose on-chain
+// outcome cannot be observed because the target node's tx index is off.
+// IncludedAt stays nil and Unverifiable is set, so classifyGovResult reports a
+// terminal InclusionUnverifiable — distinct from the retryable pending case.
+func unverifiableResult(txHash string, accNum, seq uint64, chainID string) *SignAndBroadcastResult {
+	return &SignAndBroadcastResult{
+		TxHash:        txHash,
+		AccountNumber: accNum,
+		Sequence:      seq,
+		ChainID:       chainID,
+		BroadcastedAt: time.Now().UTC(),
+		IncludedAt:    nil,
+		Unverifiable:  true,
 	}
 }
 

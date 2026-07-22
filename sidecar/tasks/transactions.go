@@ -112,6 +112,15 @@ func (c *sdkTxClient) QueryTx(ctx context.Context, txHashHex string) (*sdk.TxRes
 	// is a redundant upper bound, not the only guardrail.
 	res, err := c.clientCtx.Client.Tx(ctx, hashBytes, false)
 	if err != nil {
+		// Order matters: the indexing-disabled check runs first. sei-tendermint's
+		// disabled-index guard fires before any lookup, but a message that names
+		// the event sink AND says "not found" must classify as the terminal
+		// disabled case, not the retryable not-found one. Normalize to the
+		// sentinel here (the one layer that owns /tx semantics) so callers branch
+		// on errors.Is rather than re-matching the message text.
+		if isTxIndexingDisabled(err) {
+			return nil, false, fmt.Errorf("query /tx?hash=%s: %w", txHashHex, errTxIndexingDisabled)
+		}
 		if isTxNotFound(err) {
 			return nil, false, nil
 		}
@@ -144,6 +153,33 @@ func isTxNotFound(err error) bool {
 		return false
 	}
 	return strings.Contains(rpcErr.Data, "not found")
+}
+
+// errTxIndexingDisabled is the sentinel QueryTx returns when the target node
+// has transaction indexing turned off (tx_index.indexer = "null"), so /tx?hash=
+// cannot answer. The tx may still have committed — this reports that inclusion
+// is unobservable from this node, NOT that the tx failed. Retrying the same
+// node is futile (unlike a transient transport error), so callers fail
+// terminally; the message tells the operator how to unblock.
+var errTxIndexingDisabled = errors.New(
+	"node transaction indexing is disabled (no kvEventSink): the tx may already be on chain — " +
+		"verify via an indexed RPC before re-running, or enable tx_index on the target node")
+
+// isTxIndexingDisabled reports whether err is the node's indexing-disabled
+// response. Same *rpctypes.RPCError fence as isTxNotFound (a transport error is
+// not an RPCError, so it stays transient); like there, the detail lands in
+// Data. sei-tendermint's /tx handler names the missing sink in two spellings —
+// the pre-lookup guard ("...disabled due to no kvEventSink") and the fallback
+// ("...KV event sink being disabled") — so match both, case-insensitively. A
+// genuine miss on an index-ENABLED node is "tx (…) not found" carrying neither
+// token, and stays retryable via isTxNotFound.
+func isTxIndexingDisabled(err error) bool {
+	var rpcErr *rpctypes.RPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	d := strings.ToLower(rpcErr.Data)
+	return strings.Contains(d, "kveventsink") || strings.Contains(d, "kv event sink")
 }
 
 // newSignTxInterfaceRegistry registers only the proto interfaces sign-tx
