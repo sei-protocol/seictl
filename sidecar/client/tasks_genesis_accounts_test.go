@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/sei-protocol/seictl/sidecar/tasks"
 )
 
 const (
@@ -108,15 +110,17 @@ func TestAssembleAndUploadGenesisTask_ToTaskRequest_SerializesVesting(t *testing
 		t.Errorf("vesting map: got %+v", vesting)
 	}
 
-	// Round-trip the whole params map through JSON and back into the typed
-	// server-side struct the sidecar actually decodes — this is what proves
-	// the hand-built map and the struct's json tags agree on every key.
+	// Round-trip the whole params map through JSON and decode into the ACTUAL
+	// server-side type the sidecar unmarshals (tasks.GenesisAccountEntry, a
+	// different package with its own json tags), not this package's twin. That
+	// makes this a true producer→consumer boundary check: if the client map
+	// keys and the server struct tags ever drift apart, this fails.
 	raw, err := json.Marshal(*req.Params)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 	var decoded struct {
-		Accounts []GenesisAccountEntry `json:"accounts"`
+		Accounts []tasks.GenesisAccountEntry `json:"accounts"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)

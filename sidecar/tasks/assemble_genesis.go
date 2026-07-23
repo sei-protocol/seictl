@@ -466,8 +466,12 @@ func (a *GenesisAssembler) addExternalGenesisAccounts(accounts []GenesisAccountE
 			if err != nil {
 				return fmt.Errorf("assemble-genesis: external account %s vesting amount %q: %w", addr.String(), entry.Vesting.Amount, err)
 			}
-			if vestingCoins.Empty() {
-				return fmt.Errorf("assemble-genesis: external account %s vesting amount %q must be non-zero", addr.String(), entry.Vesting.Amount)
+			// IsAllPositive (not Empty): ParseCoinsNormalized truncates a
+			// fractional base-denom amount ("0.4usei") to {usei:0}, which is
+			// non-empty yet locks nothing — Empty() would miss it. IsAllPositive
+			// is false for both the empty and the zero-valued case.
+			if !vestingCoins.IsAllPositive() {
+				return fmt.Errorf("assemble-genesis: external account %s vesting amount %q must be a positive coin amount (fractional base-denom values truncate to zero)", addr.String(), entry.Vesting.Amount)
 			}
 			if !coins.IsAllGTE(vestingCoins) {
 				return fmt.Errorf("assemble-genesis: external account %s vesting amount %s exceeds balance %s", addr.String(), vestingCoins, coins)
@@ -490,20 +494,18 @@ func (a *GenesisAssembler) addExternalGenesisAccounts(accounts []GenesisAccountE
 			// ctx.BlockTime() (no live "now" at genesis-assembly time) and no
 			// admin (no live tx to have named one).
 			baseVestingAccount := vestingtypes.NewBaseVestingAccount(baseAccount, vestingCoins.Sort(), entry.Vesting.EndTime, nil)
-			var vestingAcc authtypes.GenesisAccount
 			if entry.Vesting.Delayed {
-				vestingAcc = vestingtypes.NewDelayedVestingAccountRaw(baseVestingAccount)
+				acc = vestingtypes.NewDelayedVestingAccountRaw(baseVestingAccount)
 			} else {
-				vestingAcc = vestingtypes.NewContinuousVestingAccountRaw(baseVestingAccount, genDoc.GenesisTime.Unix())
+				acc = vestingtypes.NewContinuousVestingAccountRaw(baseVestingAccount, genDoc.GenesisTime.Unix())
 			}
 			// Belt-and-suspenders: auth.InitGenesis never calls Validate()
 			// on genesis accounts (only the separate validate-genesis CLI
 			// path does), so an invalid vesting schedule would otherwise
 			// reach InitChain unguarded.
-			if err := vestingAcc.Validate(); err != nil {
+			if err := acc.Validate(); err != nil {
 				return fmt.Errorf("assemble-genesis: external account %s vesting schedule: %w", addr.String(), err)
 			}
-			acc = vestingAcc
 		}
 
 		accs = append(accs, acc)

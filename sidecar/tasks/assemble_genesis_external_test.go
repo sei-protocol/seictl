@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 	authtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/types"
@@ -327,6 +328,14 @@ func TestAddExternalGenesisAccounts_VestingContinuousByDefault(t *testing.T) {
 	if cva.StartTime != wantStartTime {
 		t.Errorf("StartTime: got %d, want genesis time %d", cva.StartTime, wantStartTime)
 	}
+	// The point of the fixture: assert the coins are actually LOCKED at the
+	// chain's first block (block time == genesis time), not merely that the
+	// account is the right type. At StartTime nothing has vested, so the full
+	// OriginalVesting is locked; well before EndTime spendable is zero.
+	genesisBlock := time.Unix(wantStartTime, 0)
+	if locked := cva.LockedCoins(genesisBlock); locked.String() != "1000000usei" {
+		t.Errorf("LockedCoins at genesis block: got %s, want 1000000usei", locked.String())
+	}
 }
 
 func TestAddExternalGenesisAccounts_VestingDelayed(t *testing.T) {
@@ -393,23 +402,30 @@ func TestAddExternalGenesisAccounts_VestingRejectsBadAmount(t *testing.T) {
 	}
 }
 
-func TestAddExternalGenesisAccounts_VestingRejectsZeroAmount(t *testing.T) {
-	// "0usei" passes the CRD MinLength=1 string check but ParseCoinsNormalized
-	// normalizes it to empty coins — a degenerate schedule that locks nothing.
-	homeDir := t.TempDir()
-	_ = minimalGenesis(t, homeDir)
+func TestAddExternalGenesisAccounts_VestingRejectsDegenerateAmount(t *testing.T) {
+	// Two ways a vesting amount can lock nothing yet pass the CRD MinLength=1
+	// string check: a literal zero ("0usei", which ParseCoinsNormalized
+	// normalizes to empty) and a fractional base-denom amount ("0.4usei",
+	// which is non-empty but TRUNCATES to {usei:0}). The IsAllPositive guard
+	// must reject both — Empty() alone would miss the truncation case.
+	for _, amount := range []string{"0usei", "0.4usei"} {
+		t.Run(amount, func(t *testing.T) {
+			homeDir := t.TempDir()
+			_ = minimalGenesis(t, homeDir)
 
-	a := NewGenesisAssembler(homeDir, "bucket", "region", "test-chain-1", nil, nil)
-	err := a.addExternalGenesisAccounts([]GenesisAccountEntry{{
-		Address: "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9",
-		Balance: "1000000usei",
-		Vesting: &GenesisAccountVesting{Amount: "0usei", EndTime: 1893456000},
-	}})
-	if err == nil {
-		t.Fatal("expected non-zero-amount error, got nil")
-	}
-	if !strings.Contains(err.Error(), "non-zero") {
-		t.Errorf("error: got %q, want substring 'non-zero'", err.Error())
+			a := NewGenesisAssembler(homeDir, "bucket", "region", "test-chain-1", nil, nil)
+			err := a.addExternalGenesisAccounts([]GenesisAccountEntry{{
+				Address: "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9",
+				Balance: "1000000usei",
+				Vesting: &GenesisAccountVesting{Amount: amount, EndTime: 1893456000},
+			}})
+			if err == nil {
+				t.Fatalf("amount %q: expected positive-amount error, got nil", amount)
+			}
+			if !strings.Contains(err.Error(), "must be a positive coin amount") {
+				t.Errorf("amount %q: error got %q, want substring 'must be a positive coin amount'", amount, err.Error())
+			}
+		})
 	}
 }
 
