@@ -542,11 +542,24 @@ type GenesisNodeParam struct {
 	Name string `json:"name"`
 }
 
-// GenesisAccountEntry mirrors SeiNodeDeployment.spec.genesis.accounts[]
-// on the controller-CRD side.
+// GenesisAccountEntry mirrors SeiNetwork.Spec.Genesis.Accounts[] on the
+// controller-CRD side.
 type GenesisAccountEntry struct {
 	Address string `json:"address"`
 	Balance string `json:"balance"`
+
+	// Vesting, when set, locks Balance under a vesting schedule instead of
+	// a standard account; nil produces today's plain account.
+	Vesting *GenesisAccountVesting `json:"vesting,omitempty"`
+}
+
+// GenesisAccountVesting locks part of a GenesisAccountEntry's Balance on an
+// unlock schedule completing at EndTime: linear from genesis time by default,
+// or all-at-once when Delayed. Amount must not exceed Balance.
+type GenesisAccountVesting struct {
+	Amount  string `json:"amount"`
+	EndTime int64  `json:"endTime"`
+	Delayed bool   `json:"delayed,omitempty"`
 }
 
 func genesisAccountsToWire(accounts []GenesisAccountEntry) []interface{} {
@@ -555,7 +568,15 @@ func genesisAccountsToWire(accounts []GenesisAccountEntry) []interface{} {
 	}
 	out := make([]interface{}, len(accounts))
 	for i, a := range accounts {
-		out[i] = map[string]interface{}{"address": a.Address, "balance": a.Balance}
+		entry := map[string]interface{}{"address": a.Address, "balance": a.Balance}
+		if a.Vesting != nil {
+			entry["vesting"] = map[string]interface{}{
+				"amount":  a.Vesting.Amount,
+				"endTime": a.Vesting.EndTime,
+				"delayed": a.Vesting.Delayed,
+			}
+		}
+		out[i] = entry
 	}
 	return out
 }
@@ -571,6 +592,14 @@ func validateGenesisAccounts(prefix string, accounts []GenesisAccountEntry) erro
 		}
 		if err := validateSeiAccountAddress(a.Address); err != nil {
 			return fmt.Errorf("%s: accounts[%d]: %w", prefix, i, err)
+		}
+		if a.Vesting != nil {
+			if a.Vesting.Amount == "" {
+				return fmt.Errorf("%s: accounts[%d].vesting missing required field Amount", prefix, i)
+			}
+			if a.Vesting.EndTime <= 0 {
+				return fmt.Errorf("%s: accounts[%d].vesting: EndTime must be a positive unix timestamp", prefix, i)
+			}
 		}
 	}
 	return nil

@@ -28,6 +28,7 @@ import (
 	authclient "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/client"
 	authtx "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/tx"
 	authtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/types"
+	vestingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/auth/vesting/types"
 	banktypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/bank/types"
 	stakingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/staking/types"
 
@@ -428,11 +429,16 @@ func getPrivateKeyOfAddr(kb keyring.Keyring, addr sdk.Address) (*ecdsa.PrivateKe
 }
 
 // makeCodec builds a proto codec with the minimum interface types
-// registered for genesis ceremony operations.
+// registered for genesis ceremony operations. vestingtypes is required to
+// marshal/unmarshal a ContinuousVestingAccount or DelayedVestingAccount —
+// addExternalGenesisAccounts can produce either when a GenesisAccountEntry
+// sets Vesting, so this codec must resolve their type URLs even though no
+// gentx itself is ever a vesting account.
 func makeCodec() (codec.Codec, client.TxConfig) {
 	registry := codectypes.NewInterfaceRegistry()
 	cryptocodec.RegisterInterfaces(registry)
 	authtypes.RegisterInterfaces(registry)
+	vestingtypes.RegisterInterfaces(registry)
 	banktypes.RegisterInterfaces(registry)
 	stakingtypes.RegisterInterfaces(registry)
 	cdc := codec.NewProtoCodec(registry)

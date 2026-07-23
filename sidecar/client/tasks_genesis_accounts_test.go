@@ -1,8 +1,11 @@
 package client
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/sei-protocol/seictl/sidecar/tasks"
 )
 
 const (
@@ -33,6 +36,9 @@ func TestAssembleAndUploadGenesisTask_ValidateAccounts(t *testing.T) {
 		{name: "wrong hrp", accounts: []GenesisAccountEntry{{Address: "cosmos1zg69v7y6hn00qy352euf40x77qfrg4ncjur58y", Balance: "1usei"}}, wantErr: `hrp "cosmos"`},
 		{name: "bad checksum", accounts: []GenesisAccountEntry{{Address: "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzpz", Balance: "1usei"}}, wantErr: "address"},
 		{name: "not bech32", accounts: []GenesisAccountEntry{{Address: "junk", Balance: "1usei"}}, wantErr: "address"},
+		{name: "valid vesting", accounts: []GenesisAccountEntry{{Address: validSeiAddr1, Balance: "2usei", Vesting: &GenesisAccountVesting{Amount: "1usei", EndTime: 1893456000}}}},
+		{name: "vesting missing amount", accounts: []GenesisAccountEntry{{Address: validSeiAddr1, Balance: "1usei", Vesting: &GenesisAccountVesting{EndTime: 1893456000}}}, wantErr: "vesting missing required field Amount"},
+		{name: "vesting non-positive end time", accounts: []GenesisAccountEntry{{Address: validSeiAddr1, Balance: "1usei", Vesting: &GenesisAccountVesting{Amount: "1usei"}}}, wantErr: "EndTime must be a positive unix timestamp"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,5 +82,54 @@ func TestAssembleAndUploadGenesisTask_ToTaskRequest_SerializesAccounts(t *testin
 	entry := got[0].(map[string]interface{})
 	if entry["address"] != validSeiAddr1 || entry["balance"] != "1000usei" {
 		t.Errorf("entry: got %+v", entry)
+	}
+	if _, present := entry["vesting"]; present {
+		t.Errorf("non-vesting account should omit vesting key; got %+v", entry)
+	}
+}
+
+// The CLI hand-builds the wire map in genesisAccountsToWire (a second
+// serializer of the same object, separate from the struct's json tags), so
+// this pins that the vesting sub-object it emits round-trips byte-identically
+// into the server-side GenesisAccountEntry the sidecar unmarshals.
+func TestAssembleAndUploadGenesisTask_ToTaskRequest_SerializesVesting(t *testing.T) {
+	accs := []GenesisAccountEntry{{
+		Address: validSeiAddr1,
+		Balance: "2000000usei",
+		Vesting: &GenesisAccountVesting{Amount: "1000000usei", EndTime: 1893456000, Delayed: true},
+	}}
+	req := validNonForkTask(accs).ToTaskRequest()
+
+	got := (*req.Params)["accounts"].([]interface{})
+	entry := got[0].(map[string]interface{})
+	vesting, ok := entry["vesting"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("vesting key: got %+v", entry["vesting"])
+	}
+	if vesting["amount"] != "1000000usei" || vesting["delayed"] != true {
+		t.Errorf("vesting map: got %+v", vesting)
+	}
+
+	// Round-trip the whole params map through JSON and decode into the ACTUAL
+	// server-side type the sidecar unmarshals (tasks.GenesisAccountEntry, a
+	// different package with its own json tags), not this package's twin. That
+	// makes this a true producer→consumer boundary check: if the client map
+	// keys and the server struct tags ever drift apart, this fails.
+	raw, err := json.Marshal(*req.Params)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded struct {
+		Accounts []tasks.GenesisAccountEntry `json:"accounts"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(decoded.Accounts) != 1 || decoded.Accounts[0].Vesting == nil {
+		t.Fatalf("decoded: %+v", decoded.Accounts)
+	}
+	v := decoded.Accounts[0].Vesting
+	if v.Amount != "1000000usei" || v.EndTime != 1893456000 || !v.Delayed {
+		t.Errorf("decoded vesting: got %+v", v)
 	}
 }
