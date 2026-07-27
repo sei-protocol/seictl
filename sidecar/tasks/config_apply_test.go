@@ -208,3 +208,50 @@ func TestConfigApplier_AllModes(t *testing.T) {
 		})
 	}
 }
+
+// The controller expresses a seed only as ConfigIntent{Mode: "seed"}; everything
+// else resolves here. This pins the two properties a seed cannot work without,
+// at the boundary where they are actually produced: a loopback P2P bind accepts
+// no peers, and seid will not construct a seed node without pex.
+func TestConfigApplier_SeedIsReachable(t *testing.T) {
+	homeDir := t.TempDir()
+	handler := NewConfigApplier(homeDir).Handler()
+
+	if _, err := handler(context.Background(), map[string]any{
+		"mode":        string(seiconfig.ModeSeed),
+		"incremental": false,
+	}); err != nil {
+		t.Fatalf("applying seed config: %v", err)
+	}
+
+	cfg, err := seiconfig.ReadConfigFromDir(homeDir)
+	if err != nil {
+		t.Fatalf("reading back seed config: %v", err)
+	}
+	if got, want := cfg.Network.P2P.ListenAddress, "tcp://0.0.0.0:26656"; got != want {
+		t.Errorf("seed p2p listen_address: got %q, want %q", got, want)
+	}
+	if !cfg.Network.P2P.PexReactor {
+		t.Error("seed must have pex enabled")
+	}
+}
+
+// The sidecar is the last gate before seid boots, so a seed config that reaches
+// it with pex stripped must fail the task rather than write a config seid
+// rejects at startup.
+func TestConfigApplier_SeedWithoutPexRejected(t *testing.T) {
+	homeDir := t.TempDir()
+	handler := NewConfigApplier(homeDir).Handler()
+
+	_, err := handler(context.Background(), map[string]any{
+		"mode":        string(seiconfig.ModeSeed),
+		"incremental": false,
+		"overrides":   map[string]any{"network.p2p.pex": "false"},
+	})
+	if err == nil {
+		t.Fatal("a seed with pex disabled must fail config-apply")
+	}
+	if !strings.Contains(err.Error(), "pex") {
+		t.Errorf("error should name the offending key, got: %v", err)
+	}
+}
