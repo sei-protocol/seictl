@@ -4,6 +4,12 @@
 
 There are two ways to run it. A standard resync clears the node's data and lets it re-catch-up on its existing config. A store migration does the same wipe-and-resync but also changes seid's storage configuration on the way. The standard resync is the common case and takes no extra flags; the migration is a deliberate, destructive operation behind its own flags.
 
+## Eligible Targets
+
+A SeiNode carries exactly one mode sub-spec — `fullNode`, `archive`, `replayer`, `validator`, or `seed` — and this workflow targets `fullNode` only. The other four are structurally ineligible: a seed node stores no chain state to re-bootstrap, and the rest are not re-bootstrapped this way. The workflow's own CEL cannot see the target's mode at admission, so the refusal lands at adoption instead, where it fails the workflow **terminally** with a message naming the mode. That terminality is deliberate: `kubectl wait --for=condition=Failed` resolves rather than parking Pending forever. A workflow refused this way never held the node and never wiped anything.
+
+A node adopts one workflow at a time. A second workflow aimed at a node that already has one adopted is not picked up until the first is gone — it sits Pending with a queued reason while the first is still executing, and carries no status at all when the first has parked Failed (see Re-Run Semantics). A workflow aimed at a node that is paused or mid-drift-plan — an image roll, say — waits for the node to return to steady state before it is adopted.
+
 ## Standard Resync
 
 No migration flags. This clears the data directory and re-bootstraps the node from peer snapshot data on its existing config:
@@ -93,11 +99,14 @@ The flags map onto the `SeiNodeTaskWorkflow` spec:
 
 ## Re-Run Semantics
 
-Spec params are immutable, so re-running over a same-named workflow already in a terminal phase is refused. A Failed workflow holds the node, leaving it not-ready until the workflow is removed, so recovering a failure is the operationally important case. The three recovery paths:
+Spec params are immutable, so re-running over a same-named workflow already in a terminal phase is refused. A Failed workflow holds the node, leaving it not-ready until the workflow is removed, so recovering a failure is the operationally important case.
 
-- A Complete run: delete it with `seictl workflow delete <name>`, then re-run.
-- A Failed run: force-delete it by setting the annotation `sei.io/force-delete-workflow=<reason>`, then re-run.
-- Either case: pass `--name` to run under a fresh workflow name instead.
+Removing the terminal workflow is what releases the node, so a fresh `--name` is an alternative to reusing a name — never a substitute for the removal:
+
+- **A Complete run** already released the node when it completed, and its finalizer is reaped on the next reconcile of the target. Delete it with `seictl workflow delete <name>` and re-run, or leave it in place and re-run under a fresh `--name`. Either works.
+- **A Failed run still holds the node.** Annotate it `sei.io/force-delete-workflow=<reason>`, then `seictl workflow delete <name>`. The annotation is not optional today: the controller's data-state verification is not yet implemented, so it fails closed and an un-annotated delete parks the workflow Terminating with the node still held, emitting a `WorkflowDeleteHeld` warning event that names the annotation. Order is not load-bearing — annotating a workflow already stuck Terminating releases it on the next poll, within 30s. Deletion releases the node; only then re-run, under the same name or a fresh `--name`.
+
+`--name` alone does not recover a Failed run. The node's adoption pointer still points at the Failed workflow, and a node adopts one workflow at a time, so the fresh workflow is never picked up: it sits with no plan and no progress while the node stays held, and the watch ends at `--timeout` with `reason=Timeout` having changed nothing. Remove the Failed workflow first, every time.
 
 ## Output And Exit Codes
 
