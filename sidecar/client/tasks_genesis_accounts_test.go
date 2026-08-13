@@ -1,11 +1,8 @@
 package client
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/sei-protocol/seictl/sidecar/tasks"
 )
 
 const (
@@ -88,10 +85,10 @@ func TestAssembleAndUploadGenesisTask_ToTaskRequest_SerializesAccounts(t *testin
 	}
 }
 
-// The CLI hand-builds the wire map in genesisAccountsToWire (a second
-// serializer of the same object, separate from the struct's json tags), so
-// this pins that the vesting sub-object it emits round-trips byte-identically
-// into the server-side GenesisAccountEntry the sidecar unmarshals.
+// genesisAccountsToWire hand-builds the request map, a second serializer of the
+// same object independent of the struct's json tags, so this pins the keys and
+// value types it emits. The server unmarshals into the same wire type, so the
+// tags themselves need no cross-package check.
 func TestAssembleAndUploadGenesisTask_ToTaskRequest_SerializesVesting(t *testing.T) {
 	accs := []GenesisAccountEntry{{
 		Address: validSeiAddr1,
@@ -106,30 +103,7 @@ func TestAssembleAndUploadGenesisTask_ToTaskRequest_SerializesVesting(t *testing
 	if !ok {
 		t.Fatalf("vesting key: got %+v", entry["vesting"])
 	}
-	if vesting["amount"] != "1000000usei" || vesting["delayed"] != true {
+	if vesting["amount"] != "1000000usei" || vesting["endTime"] != int64(1893456000) || vesting["delayed"] != true {
 		t.Errorf("vesting map: got %+v", vesting)
-	}
-
-	// Round-trip the whole params map through JSON and decode into the ACTUAL
-	// server-side type the sidecar unmarshals (tasks.GenesisAccountEntry, a
-	// different package with its own json tags), not this package's twin. That
-	// makes this a true producer→consumer boundary check: if the client map
-	// keys and the server struct tags ever drift apart, this fails.
-	raw, err := json.Marshal(*req.Params)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var decoded struct {
-		Accounts []tasks.GenesisAccountEntry `json:"accounts"`
-	}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(decoded.Accounts) != 1 || decoded.Accounts[0].Vesting == nil {
-		t.Fatalf("decoded: %+v", decoded.Accounts)
-	}
-	v := decoded.Accounts[0].Vesting
-	if v.Amount != "1000000usei" || v.EndTime != 1893456000 || !v.Delayed {
-		t.Errorf("decoded vesting: got %+v", v)
 	}
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/sei-protocol/seictl/sidecar/engine"
 	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
+	"github.com/sei-protocol/seictl/sidecar/wire"
 	"github.com/sei-protocol/seilog"
 )
 
@@ -61,25 +62,14 @@ type AssembleNodeEntry struct {
 	Name string `json:"name"`
 }
 
-// GenesisAccountEntry represents one externally-supplied genesis account.
-// Mirrors SeiNetwork.Spec.Genesis.Accounts[] on the controller side.
-type GenesisAccountEntry struct {
-	Address string `json:"address"`
-	Balance string `json:"balance"`
-
-	// Vesting, when set, locks Balance under a vesting schedule instead of
-	// a standard account; nil produces today's plain account.
-	Vesting *GenesisAccountVesting `json:"vesting,omitempty"`
-}
-
-// GenesisAccountVesting locks part of a GenesisAccountEntry's Balance on an
-// unlock schedule completing at EndTime: linear from genesis time by default,
-// or all-at-once when Delayed. Amount must not exceed Balance.
-type GenesisAccountVesting struct {
-	Amount  string `json:"amount"`
-	EndTime int64  `json:"endTime"`
-	Delayed bool   `json:"delayed,omitempty"`
-}
+// GenesisAccountEntry and GenesisAccountVesting are the wire contract, aliased
+// here so handler code keeps writing the bare names. sidecar/client aliases the
+// same definitions, so the payload this package unmarshals and the request the
+// client builds are one type — their json tags cannot drift apart.
+type (
+	GenesisAccountEntry   = wire.GenesisAccountEntry
+	GenesisAccountVesting = wire.GenesisAccountVesting
+)
 
 // AssembleGenesisResult is the task's structured result, emitted in-band over
 // the trusted controller↔sidecar task-result channel. GenesisHash is the bare
