@@ -542,25 +542,14 @@ type GenesisNodeParam struct {
 	Name string `json:"name"`
 }
 
-// GenesisAccountEntry mirrors SeiNetwork.Spec.Genesis.Accounts[] on the
-// controller-CRD side.
-type GenesisAccountEntry struct {
-	Address string `json:"address"`
-	Balance string `json:"balance"`
-
-	// Vesting, when set, locks Balance under a vesting schedule instead of
-	// a standard account; nil produces today's plain account.
-	Vesting *GenesisAccountVesting `json:"vesting,omitempty"`
-}
-
-// GenesisAccountVesting locks part of a GenesisAccountEntry's Balance on an
-// unlock schedule completing at EndTime: linear from genesis time by default,
-// or all-at-once when Delayed. Amount must not exceed Balance.
-type GenesisAccountVesting struct {
-	Amount  string `json:"amount"`
-	EndTime int64  `json:"endTime"`
-	Delayed bool   `json:"delayed,omitempty"`
-}
+// GenesisAccountEntry and GenesisAccountVesting are the wire contract, aliased
+// here so callers keep writing client.GenesisAccountEntry. The sidecar's
+// handler side (sidecar/tasks) aliases the same definitions, so the request
+// this package builds and the payload the server unmarshals cannot drift.
+type (
+	GenesisAccountEntry   = wire.GenesisAccountEntry
+	GenesisAccountVesting = wire.GenesisAccountVesting
+)
 
 func genesisAccountsToWire(accounts []GenesisAccountEntry) []interface{} {
 	if len(accounts) == 0 {
