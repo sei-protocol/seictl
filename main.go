@@ -52,7 +52,6 @@ var (
 			&genesisCmd,
 			&patchCmd,
 			&awaitCmd,
-			&serveCmd,
 			&reportCmd,
 			&seinetwork.Cmd,
 			&seinode.Cmd,

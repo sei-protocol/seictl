@@ -8,8 +8,8 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
-	"github.com/sei-protocol/seictl/sidecar/shadow"
+	seis3 "github.com/sei-protocol/seictl/internal/s3"
+	"github.com/sei-protocol/seictl/internal/shadow"
 )
 
 var reportCmd = cli.Command{

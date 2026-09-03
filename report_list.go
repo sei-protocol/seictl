@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/urfave/cli/v3"
 
-	seis3 "github.com/sei-protocol/seictl/sidecar/s3"
+	seis3 "github.com/sei-protocol/seictl/internal/s3"
 )
 
 var (

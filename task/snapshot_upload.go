@@ -14,8 +14,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 	"github.com/sei-protocol/seictl/internal/cliutil"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 )
 
 // snapshotUploadResult is the CLI's read-side view of the handler's structured
