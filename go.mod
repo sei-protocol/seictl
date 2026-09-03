@@ -27,19 +27,6 @@ require (
 // sei-chain's go.mod uses replace directives for forked dependencies.
 // Go ignores replace directives from transitive dependencies, so we
 // must carry them here. These must stay in sync with sei-chain's go.mod.
-replace (
-	github.com/99designs/keyring => github.com/cosmos/keyring v1.1.7-0.20210622111912-ef00f8ac3d76
-	github.com/btcsuite/btcd => github.com/btcsuite/btcd v0.23.2
-	github.com/confio/ics23/go => github.com/cosmos/cosmos-sdk/ics23/go v0.8.0
-	github.com/ethereum/go-ethereum => github.com/sei-protocol/go-ethereum v1.15.7-sei-16
-	github.com/gin-gonic/gin => github.com/gin-gonic/gin v1.7.0
-	github.com/gogo/protobuf => github.com/regen-network/protobuf v1.3.3-alpha.regen.1
-	github.com/keybase/go-keychain => github.com/keybase/go-keychain v0.0.0-20190712205309-48d3d31d256d
-	github.com/syndtr/goleveldb => github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
-	github.com/tendermint/tm-db => github.com/sei-protocol/tm-db v0.0.4
-	golang.org/x/crypto => golang.org/x/crypto v0.31.0
-	google.golang.org/grpc => google.golang.org/grpc v1.57.1
-)
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
