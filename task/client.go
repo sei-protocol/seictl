@@ -14,8 +14,8 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 	"github.com/sei-protocol/seictl/internal/cliutil"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 )
 
 // sidecarProxyPort is the in-pod kube-rbac-proxy port the task verbs address,

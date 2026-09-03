@@ -18,7 +18,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 func rawResult(t *testing.T, r snapshotUploadResult) *json.RawMessage {

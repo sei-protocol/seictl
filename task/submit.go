@@ -8,8 +8,8 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 	"github.com/sei-protocol/seictl/internal/cliutil"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 )
 
 func submitAction(ctx context.Context, c *cli.Command) error {

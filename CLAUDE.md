@@ -1,19 +1,18 @@
 # seictl
 
-Dual-purpose tool: CLI for Sei node operators and HTTP sidecar server for the sei-k8s-controller. Packaged as a single Go binary (`ghcr.io/sei-protocol/seictl`) distributed via GoReleaser (native binaries) and Docker (distroless).
+CLI for Sei node operators and platform engineers. Packaged as a single Go binary (`ghcr.io/sei-protocol/seictl`) distributed via GoReleaser (native binaries) and Docker (distroless).
+
+The sidecar server it used to host now lives in `sei-protocol/sei-k8s-controller` under `sidecar/`, published as `sei/sei-sidecar`. Its wire contract is the `sidecarapi` module there, which this CLI imports.
 
 ## Architecture
 
 `seictl` carries two distinct surfaces today:
 
 **Node-operator surface** (the original):
-- **CLI commands**: `config patch`, `genesis patch`, `patch`, `serve`, `await` (top-level files: `config.go`, `genesis.go`, `patch.go`, `serve.go`, `await.go`)
-- **Sidecar server**: `sidecar/server/` — HTTP API on `127.0.0.1:7777`
-- **Task engine**: `sidecar/engine/` — concurrent task executor + cron scheduler
-- **Task handlers**: `sidecar/tasks/` — snapshot, peers, genesis, config, state-sync, upload
-- **Generated client**: `sidecar/client/` — OpenAPI-generated HTTP client for the sidecar API, consumed by sei-k8s-controller
-- **OpenAPI spec**: `sidecar/api/openapi.yaml` — source of truth for the sidecar HTTP contract
-- **Internal**: `internal/patch/` — TOML/JSON merge-patch logic
+- **CLI commands**: `config patch`, `genesis patch`, `patch`, `await` (top-level files: `config.go`, `genesis.go`, `patch.go`, `await.go`)
+- **Task client**: `task/` — submits, gets, and deletes sidecar tasks over the `sidecarapi` HTTP contract
+- **Shadow reports**: `report.go`, `report_list.go` over `internal/shadow` and `internal/s3`
+- **Internal**: `internal/patch/` (TOML/JSON merge-patch), `internal/rpc` (Tendermint RPC client), `internal/s3`, `internal/shadow`
 
 **Engineer-harness surface**: two preset-driven command trees over the SeiNetwork + SeiNode CRDs — `seictl network {apply,get,list,delete,watch}` (genesis networks) and `seictl node {…}` (followers/RPC). Shared internals in `internal/cliutil` (output/errors/client/parse/watch) and `internal/seiapi` (GVK plumbing). The legacy `nodedeployment`/`nd` verb and `internal/snd` were removed in the SeiNodeDeployment clean-break (v0.1.0).
 
@@ -38,12 +37,11 @@ Dual-purpose tool: CLI for Sei node operators and HTTP sidecar server for the se
 - Test names should describe the scenario, not the function: `TestValidateCron/empty_string` over `TestValidateCronEmpty`.
 - Run `make test` before submitting changes.
 
-### API Client (`sidecar/client/`)
+### API Client
 
-- Generated from `sidecar/api/openapi.yaml` using oapi-codegen.
-- Run `make generate` to regenerate after spec changes. Never hand-edit `sidecar.gen.go`.
-- The high-level `SidecarClient` in `client.go` and typed task builders in `tasks.go` are hand-written wrappers over the generated code.
-- Package name is `client`; downstream consumers alias it as `sidecar` by convention.
+- The sidecar's HTTP contract lives in `sei-k8s-controller/sidecarapi`, not here. `task/` imports `sidecarapi/client`, aliased as `sidecar` by convention.
+- The OpenAPI spec and its generated client moved with it. Regenerate there, not here.
+- A change to that contract is a cross-repo change: bump the `sidecarapi` dependency in `go.mod` after it lands.
 
 ## Build & Run
 
