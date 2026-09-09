@@ -30,6 +30,9 @@ type renderArgs struct {
 	image           string
 	network         string
 	externalAddress string
+	cpu             string
+	memory          string
+	storage         string
 	sets            []string
 	overrides       []string
 }
@@ -80,6 +83,21 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	if args.externalAddress != "" {
 		if err := unstructured.SetNestedField(u.Object, args.externalAddress, "spec", "externalAddress"); err != nil {
 			return nil, fmt.Errorf("apply --external-address: %w", err)
+		}
+	}
+	if args.cpu != "" {
+		if err := unstructured.SetNestedField(u.Object, args.cpu, "spec", "resources", "requests", "cpu"); err != nil {
+			return nil, fmt.Errorf("apply --cpu: %w", err)
+		}
+	}
+	if args.memory != "" {
+		if err := unstructured.SetNestedField(u.Object, args.memory, "spec", "resources", "requests", "memory"); err != nil {
+			return nil, fmt.Errorf("apply --memory: %w", err)
+		}
+	}
+	if args.storage != "" {
+		if err := unstructured.SetNestedField(u.Object, args.storage, "spec", "dataVolume", "storage", "resources", "requests", "storage"); err != nil {
+			return nil, fmt.Errorf("apply --storage: %w", err)
 		}
 	}
 

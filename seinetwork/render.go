@@ -18,6 +18,9 @@ type renderArgs struct {
 	image            string
 	replicas         int
 	hasReps          bool
+	cpu              string
+	memory           string
+	storage          string
 	sets             []string
 	genesisAccounts  []string
 	genesisOverrides []string
@@ -64,6 +67,21 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	if args.hasReps {
 		if err := unstructured.SetNestedField(u.Object, int64(args.replicas), "spec", "replicas"); err != nil {
 			return nil, fmt.Errorf("apply --replicas: %w", err)
+		}
+	}
+	if args.cpu != "" {
+		if err := unstructured.SetNestedField(u.Object, args.cpu, "spec", "resources", "requests", "cpu"); err != nil {
+			return nil, fmt.Errorf("apply --cpu: %w", err)
+		}
+	}
+	if args.memory != "" {
+		if err := unstructured.SetNestedField(u.Object, args.memory, "spec", "resources", "requests", "memory"); err != nil {
+			return nil, fmt.Errorf("apply --memory: %w", err)
+		}
+	}
+	if args.storage != "" {
+		if err := unstructured.SetNestedField(u.Object, args.storage, "spec", "dataVolume", "storage", "resources", "requests", "storage"); err != nil {
+			return nil, fmt.Errorf("apply --storage: %w", err)
 		}
 	}
 	if args.chainID != "" {

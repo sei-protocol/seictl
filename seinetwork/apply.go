@@ -24,6 +24,9 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		namespace:        c.String("namespace"),
 		chainID:          c.String("chain-id"),
 		image:            c.String("image"),
+		cpu:              c.String("cpu"),
+		memory:           c.String("memory"),
+		storage:          c.String("storage"),
 		sets:             c.StringSlice("set"),
 		genesisAccounts:  c.StringSlice("genesis-account"),
 		genesisOverrides: c.StringSlice("genesis-override"),
@@ -134,6 +137,18 @@ var applyCmd = cli.Command{
 		&cli.IntFlag{
 			Name:  "replicas",
 			Usage: "Genesis validator count (overrides preset default 4). Admission-immutable after create — minted into genesis state.",
+		},
+		&cli.StringFlag{
+			Name:  "cpu",
+			Usage: "CPU request for seid container (overrides preset default; e.g. 4, 8, 16). Create-only on the CRD.",
+		},
+		&cli.StringFlag{
+			Name:  "memory",
+			Usage: "Memory request for seid container (overrides preset default; e.g. 32Gi, 128Gi). Create-only on the CRD.",
+		},
+		&cli.StringFlag{
+			Name:  "storage",
+			Usage: "Data volume storage size (overrides preset default; e.g. 500Gi, 2000Gi). Create-only on the CRD.",
 		},
 		&cli.StringSliceFlag{
 			Name:  "set",

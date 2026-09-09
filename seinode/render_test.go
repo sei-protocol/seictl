@@ -61,6 +61,88 @@ func selectorOf(t *testing.T, u *unstructured.Unstructured) (map[string]string, 
 	return unstructured.NestedStringMap(peer, "label", "selector")
 }
 
+func TestRender_PresetResourceDefaults(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "rpc",
+		name:    "rpc-0",
+		chainID: "c1",
+		image:   "i:1",
+		network: "netX",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	cpu, _, _ := unstructured.NestedString(got.Object, "spec", "resources", "requests", "cpu")
+	if cpu != "4" {
+		t.Errorf("spec.resources.requests.cpu = %q; want 4 (1/4 mainnet)", cpu)
+	}
+	mem, _, _ := unstructured.NestedString(got.Object, "spec", "resources", "requests", "memory")
+	if mem != "32Gi" {
+		t.Errorf("spec.resources.requests.memory = %q; want 32Gi (1/4 mainnet)", mem)
+	}
+	stor, _, _ := unstructured.NestedString(got.Object, "spec", "dataVolume", "storage", "resources", "requests", "storage")
+	if stor != "500Gi" {
+		t.Errorf("spec.dataVolume.storage.resources.requests.storage = %q; want 500Gi (1/4 mainnet)", stor)
+	}
+	if _, found, _ := unstructured.NestedMap(got.Object, "spec", "resources", "limits"); found {
+		t.Errorf("spec.resources.limits present; preset must not emit limits (no CPU limit per CEL)")
+	}
+}
+
+func TestRender_ResourceFlagOverride(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "rpc",
+		name:    "rpc-0",
+		chainID: "c1",
+		image:   "i:1",
+		network: "netX",
+		cpu:     "16",
+		memory:  "128Gi",
+		storage: "2000Gi",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	cpu, _, _ := unstructured.NestedString(got.Object, "spec", "resources", "requests", "cpu")
+	if cpu != "16" {
+		t.Errorf("spec.resources.requests.cpu = %q; want 16 (--cpu override)", cpu)
+	}
+	mem, _, _ := unstructured.NestedString(got.Object, "spec", "resources", "requests", "memory")
+	if mem != "128Gi" {
+		t.Errorf("spec.resources.requests.memory = %q; want 128Gi (--memory override)", mem)
+	}
+	stor, _, _ := unstructured.NestedString(got.Object, "spec", "dataVolume", "storage", "resources", "requests", "storage")
+	if stor != "2000Gi" {
+		t.Errorf("spec.dataVolume.storage.resources.requests.storage = %q; want 2000Gi (--storage override)", stor)
+	}
+}
+
+func TestRender_PartialResourceOverride(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "rpc",
+		name:    "rpc-0",
+		chainID: "c1",
+		image:   "i:1",
+		network: "netX",
+		cpu:     "8",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	cpu, _, _ := unstructured.NestedString(got.Object, "spec", "resources", "requests", "cpu")
+	if cpu != "8" {
+		t.Errorf("spec.resources.requests.cpu = %q; want 8 (--cpu override)", cpu)
+	}
+	mem, _, _ := unstructured.NestedString(got.Object, "spec", "resources", "requests", "memory")
+	if mem != "32Gi" {
+		t.Errorf("spec.resources.requests.memory = %q; want 32Gi (preset default preserved)", mem)
+	}
+	stor, _, _ := unstructured.NestedString(got.Object, "spec", "dataVolume", "storage", "resources", "requests", "storage")
+	if stor != "500Gi" {
+		t.Errorf("spec.dataVolume.storage.resources.requests.storage = %q; want 500Gi (preset default preserved)", stor)
+	}
+}
+
 // T3 — peer-wiring: --network sets exactly sei.io/seinetwork, NOT
 // sei.io/chain or sei.io/nodedeployment. Guards the §3 one-way decision.
 func TestRender_PeerWiringKey(t *testing.T) {

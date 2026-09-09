@@ -85,6 +85,60 @@ func TestRender_PresetReplicasDefault4(t *testing.T) {
 	}
 }
 
+func TestRender_PresetResourceDefaults(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "genesis-chain",
+		name:    "x",
+		chainID: "c",
+		image:   "i:1",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	cpu, _, _ := unstructured.NestedString(got.Object, "spec", "resources", "requests", "cpu")
+	if cpu != "4" {
+		t.Errorf("spec.resources.requests.cpu = %q; want 4 (1/4 mainnet)", cpu)
+	}
+	mem, _, _ := unstructured.NestedString(got.Object, "spec", "resources", "requests", "memory")
+	if mem != "32Gi" {
+		t.Errorf("spec.resources.requests.memory = %q; want 32Gi (1/4 mainnet)", mem)
+	}
+	stor, _, _ := unstructured.NestedString(got.Object, "spec", "dataVolume", "storage", "resources", "requests", "storage")
+	if stor != "500Gi" {
+		t.Errorf("spec.dataVolume.storage.resources.requests.storage = %q; want 500Gi (1/4 mainnet)", stor)
+	}
+	if _, found, _ := unstructured.NestedMap(got.Object, "spec", "resources", "limits"); found {
+		t.Errorf("spec.resources.limits present; preset must not emit limits (no CPU limit per CEL)")
+	}
+}
+
+func TestRender_ResourceFlagOverride(t *testing.T) {
+	got, err := render(renderArgs{
+		preset:  "genesis-chain",
+		name:    "x",
+		chainID: "c",
+		image:   "i:1",
+		cpu:     "16",
+		memory:  "128Gi",
+		storage: "2000Gi",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	cpu, _, _ := unstructured.NestedString(got.Object, "spec", "resources", "requests", "cpu")
+	if cpu != "16" {
+		t.Errorf("spec.resources.requests.cpu = %q; want 16 (--cpu override)", cpu)
+	}
+	mem, _, _ := unstructured.NestedString(got.Object, "spec", "resources", "requests", "memory")
+	if mem != "128Gi" {
+		t.Errorf("spec.resources.requests.memory = %q; want 128Gi (--memory override)", mem)
+	}
+	stor, _, _ := unstructured.NestedString(got.Object, "spec", "dataVolume", "storage", "resources", "requests", "storage")
+	if stor != "2000Gi" {
+		t.Errorf("spec.dataVolume.storage.resources.requests.storage = %q; want 2000Gi (--storage override)", stor)
+	}
+}
+
 func TestRender_RequiredFlags(t *testing.T) {
 	cases := []struct {
 		name string

@@ -5,3 +5,12 @@ spec:
   genesis: {}
   configOverrides:
     network.rpc.pprof_listen_address: "0.0.0.0:6060"
+  resources:
+    requests:
+      cpu: "4"
+      memory: 32Gi
+  dataVolume:
+    storage:
+      resources:
+        requests:
+          storage: 500Gi
