@@ -41,9 +41,11 @@ on:
     types: [opened, ready_for_review, synchronize, reopened, closed]
 
 # Empty, where this repository's other workflows grant scopes at the top level. A
-# caller of a reusable workflow has to hand the callee its scopes explicitly, so each
-# job below states the four the callee's own jobs declare; nothing is inherited into a
-# job that does not need it.
+# reusable workflow may only downgrade what its caller granted, so a caller has to hand
+# the callee its scopes explicitly -- and the default token grants contents, packages
+# and metadata only, which the callee's guard cannot work with. Empty here means no job
+# starts from a default; each states the four scopes the callee's own two jobs declare
+# between them.
 permissions: {}
 
 # No `concurrency:` block, where all four uci callers in this repository set one with
