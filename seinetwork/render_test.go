@@ -206,6 +206,40 @@ func TestRender_RejectsInvalidQuantity(t *testing.T) {
 	}
 }
 
+// Zero and negative parse cleanly but the CRD's CEL requires positive
+// values (seinode_types.go:153 requests, :196 storage), so they must
+// fail here rather than at a post-merge reconcile.
+func TestRender_RejectsNonPositiveQuantity(t *testing.T) {
+	cases := []struct {
+		name                 string
+		cpu, memory, storage string
+		want                 string
+	}{
+		{"cpu negative", "-1", "", "", `--cpu "-1"`},
+		{"cpu zero", "0", "", "", `--cpu "0"`},
+		{"memory negative", "", "-5Gi", "", `--memory "-5Gi"`},
+		{"memory zero", "", "0Gi", "", `--memory "0Gi"`},
+		{"storage negative", "", "", "-5Gi", `--storage "-5Gi"`},
+		{"storage zero", "", "", "0Gi", `--storage "0Gi"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := resourceArgs()
+			args.cpu, args.memory, args.storage = tc.cpu, tc.memory, tc.storage
+			_, err := render(args)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %q; want containing %q", err.Error(), tc.want)
+			}
+			if !strings.Contains(err.Error(), "must be positive") {
+				t.Errorf("err = %q; want it rejected for not being positive, not as unparseable", err.Error())
+			}
+		})
+	}
+}
+
 // --set can reach spec.resources.limits.cpu, which the CRD's CEL rejects
 // at admission. Catch it locally instead.
 func TestRender_RejectsCPULimitFromSet(t *testing.T) {

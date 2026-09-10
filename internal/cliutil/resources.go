@@ -11,12 +11,22 @@ import (
 // Flux — the operator learns about the typo minutes later, from someone
 // else's reconcile loop. Empty means "flag unset"; the preset default
 // stands.
+//
+// Parsing alone is not enough: ParseQuantity happily accepts "0" and
+// "-5Gi", which the CRD's CEL then rejects for requiring positive
+// values (seinode_types.go:153 requests, :196 storage). Those land on
+// the same post-merge reconcile as an unparseable value, so they fail
+// here too.
 func ValidateQuantity(flag, value string) error {
 	if value == "" {
 		return nil
 	}
-	if _, err := resource.ParseQuantity(value); err != nil {
+	q, err := resource.ParseQuantity(value)
+	if err != nil {
 		return UsageError("--%s %q is not a valid Kubernetes quantity: %s", flag, value, err.Error())
+	}
+	if q.Sign() <= 0 {
+		return UsageError("--%s %q must be positive: the CRD requires a resource value greater than zero", flag, value)
 	}
 	return nil
 }
