@@ -26,6 +26,9 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		image:           c.String("image"),
 		network:         c.String("network"),
 		externalAddress: c.String("external-address"),
+		cpu:             c.String("cpu"),
+		memory:          c.String("memory"),
+		storage:         c.String("storage"),
 		sets:            c.StringSlice("set"),
 		overrides:       c.StringSlice("override"),
 	}
@@ -96,8 +99,19 @@ var applyCmd = cli.Command{
 		"that `node list -l` selects on. " +
 		"\n\n" +
 		"Layering, lowest precedence first: preset YAML, discrete flags " +
-		"(--chain-id, --image, --network, --external-address), --override, " +
-		"--set. " +
+		"(--chain-id, --image, --network, --external-address, --cpu, " +
+		"--memory, --storage), --override, --set. " +
+		"\n\n" +
+		"--cpu/--memory/--storage each override one dimension of the " +
+		"preset's resource footprint; unspecified dimensions keep the " +
+		"preset default (4 CPU / 32Gi / 500Gi). Values must be valid " +
+		"Kubernetes quantities (32Gi, not 32GB) — seictl rejects a bad " +
+		"one locally rather than letting Flux discover it. Neither the " +
+		"presets nor these flags emit limits — the controller derives " +
+		"the memory limit from the request. A CPU limit is rejected " +
+		"outright (the CRD forbids one); a memory limit is reachable " +
+		"only via --set, and the CRD requires it to equal the memory " +
+		"request. " +
 		"\n\n" +
 		"Cluster + namespace come from --kubeconfig (or $KUBECONFIG, " +
 		"or $HOME/.kube/config, or in-cluster) and -n (or the kubeconfig " +
@@ -137,6 +151,18 @@ var applyCmd = cli.Command{
 		&cli.StringFlag{
 			Name:  "external-address",
 			Usage: "Routable P2P host:port written to spec.externalAddress. Leave unset for in-cluster nodes (headless DNS is self-configuring); set for cross-cluster/sentry peers.",
+		},
+		&cli.StringFlag{
+			Name:  "cpu",
+			Usage: "CPU request for seid container (overrides preset default; e.g. 4, 8, 16). Create-only on the CRD.",
+		},
+		&cli.StringFlag{
+			Name:  "memory",
+			Usage: "Memory request for seid container (overrides preset default; e.g. 32Gi, 128Gi). Create-only on the CRD.",
+		},
+		&cli.StringFlag{
+			Name:  "storage",
+			Usage: "Data volume storage size (overrides preset default; e.g. 500Gi, 2000Gi). Create-only on the CRD.",
 		},
 		&cli.StringSliceFlag{
 			Name:  "set",

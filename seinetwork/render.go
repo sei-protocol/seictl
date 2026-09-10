@@ -18,6 +18,9 @@ type renderArgs struct {
 	image            string
 	replicas         int
 	hasReps          bool
+	cpu              string
+	memory           string
+	storage          string
 	sets             []string
 	genesisAccounts  []string
 	genesisOverrides []string
@@ -39,6 +42,15 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	}
 	if args.name == "" {
 		return nil, cliutil.UsageError("name is required: seictl network apply <name> --preset ...")
+	}
+	for _, q := range []struct{ flag, value string }{
+		{"cpu", args.cpu},
+		{"memory", args.memory},
+		{"storage", args.storage},
+	} {
+		if err := cliutil.ValidateQuantity(q.flag, q.value); err != nil {
+			return nil, err
+		}
 	}
 
 	data, err := loadPreset(args.preset)
@@ -64,6 +76,21 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	if args.hasReps {
 		if err := unstructured.SetNestedField(u.Object, int64(args.replicas), "spec", "replicas"); err != nil {
 			return nil, fmt.Errorf("apply --replicas: %w", err)
+		}
+	}
+	if args.cpu != "" {
+		if err := unstructured.SetNestedField(u.Object, args.cpu, "spec", "resources", "requests", "cpu"); err != nil {
+			return nil, fmt.Errorf("apply --cpu: %w", err)
+		}
+	}
+	if args.memory != "" {
+		if err := unstructured.SetNestedField(u.Object, args.memory, "spec", "resources", "requests", "memory"); err != nil {
+			return nil, fmt.Errorf("apply --memory: %w", err)
+		}
+	}
+	if args.storage != "" {
+		if err := unstructured.SetNestedField(u.Object, args.storage, "spec", "dataVolume", "storage", "resources", "requests", "storage"); err != nil {
+			return nil, fmt.Errorf("apply --storage: %w", err)
 		}
 	}
 	if args.chainID != "" {
@@ -102,6 +129,12 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		if err := cliutil.ApplyGenesisOverride(u.Object, expr, "spec", "genesis", "overrides"); err != nil {
 			return nil, cliutil.UsageError("apply --genesis-override %q: %s", expr, err.Error())
 		}
+	}
+
+	// Final resource guard — nothing below writes spec.resources, so this
+	// sees whatever --set left behind.
+	if err := cliutil.RejectCPULimit(u.Object); err != nil {
+		return nil, err
 	}
 
 	// Reassert identity after --set so --set metadata.namespace=kube-system

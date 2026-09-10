@@ -2,6 +2,7 @@ package seinode
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -59,6 +60,194 @@ func selectorOf(t *testing.T, u *unstructured.Unstructured) (map[string]string, 
 	}
 	peer := peers[0].(map[string]interface{})
 	return unstructured.NestedStringMap(peer, "label", "selector")
+}
+
+// resourceArgs is the minimal valid rpc render, so a resource case only
+// has to state the dimension it is exercising.
+func resourceArgs() renderArgs {
+	return renderArgs{
+		preset:  "rpc",
+		name:    "rpc-0",
+		chainID: "c1",
+		image:   "i:1",
+		network: "netX",
+	}
+}
+
+// assertRequests checks all three request dimensions plus the invariant
+// that no render emits limits: the controller derives the memory limit
+// from the request, and the CRD's CEL rejects a CPU limit outright.
+func assertRequests(t *testing.T, u *unstructured.Unstructured, wantCPU, wantMemory, wantStorage string) {
+	t.Helper()
+	cpu, _, _ := unstructured.NestedString(u.Object, "spec", "resources", "requests", "cpu")
+	if cpu != wantCPU {
+		t.Errorf("spec.resources.requests.cpu = %q; want %q", cpu, wantCPU)
+	}
+	mem, _, _ := unstructured.NestedString(u.Object, "spec", "resources", "requests", "memory")
+	if mem != wantMemory {
+		t.Errorf("spec.resources.requests.memory = %q; want %q", mem, wantMemory)
+	}
+	stor, _, _ := unstructured.NestedString(u.Object, "spec", "dataVolume", "storage", "resources", "requests", "storage")
+	if stor != wantStorage {
+		t.Errorf("spec.dataVolume.storage.resources.requests.storage = %q; want %q", stor, wantStorage)
+	}
+	assertNoLimits(t, u.Object, "")
+}
+
+// assertNoLimits walks the whole rendered object rather than probing the
+// two known paths, so a limits block that appears somewhere new still trips.
+func assertNoLimits(t *testing.T, node interface{}, path string) {
+	t.Helper()
+	switch v := node.(type) {
+	case map[string]interface{}:
+		for k, child := range v {
+			if k == "limits" {
+				t.Errorf("limits present at %s.%s = %v; seictl must not emit limits", path, k, child)
+			}
+			assertNoLimits(t, child, path+"."+k)
+		}
+	case []interface{}:
+		for i, child := range v {
+			assertNoLimits(t, child, fmt.Sprintf("%s[%d]", path, i))
+		}
+	}
+}
+
+func TestRender_PresetResourceDefaults(t *testing.T) {
+	got, err := render(resourceArgs())
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	assertRequests(t, got, "4", "32Gi", "500Gi")
+}
+
+func TestRender_ResourceFlagOverride(t *testing.T) {
+	args := resourceArgs()
+	args.cpu, args.memory, args.storage = "16", "128Gi", "2000Gi"
+	got, err := render(args)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	assertRequests(t, got, "16", "128Gi", "2000Gi")
+}
+
+// Each flag moves its own dimension and leaves the other two on the
+// preset default — the layering claim in `node apply --help`.
+func TestRender_PartialResourceOverride(t *testing.T) {
+	cases := []struct {
+		name                             string
+		cpu, memory, storage             string
+		wantCPU, wantMemory, wantStorage string
+	}{
+		{"cpu only", "8", "", "", "8", "32Gi", "500Gi"},
+		{"memory only", "", "64Gi", "", "4", "64Gi", "500Gi"},
+		{"storage only", "", "", "1000Gi", "4", "32Gi", "1000Gi"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := resourceArgs()
+			args.cpu, args.memory, args.storage = tc.cpu, tc.memory, tc.storage
+			got, err := render(args)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			assertRequests(t, got, tc.wantCPU, tc.wantMemory, tc.wantStorage)
+		})
+	}
+}
+
+// A quantity the apiserver would reject must fail here, not after the CR
+// is committed, merged, and picked up by Flux.
+func TestRender_RejectsInvalidQuantity(t *testing.T) {
+	cases := []struct {
+		name                 string
+		cpu, memory, storage string
+		want                 string
+	}{
+		{"cpu not a number", "abc", "", "", `--cpu "abc"`},
+		{"memory wrong suffix", "", "32GB", "", `--memory "32GB"`},
+		{"storage embedded space", "", "", "500 Gi", `--storage "500 Gi"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := resourceArgs()
+			args.cpu, args.memory, args.storage = tc.cpu, tc.memory, tc.storage
+			_, err := render(args)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %q; want containing %q", err.Error(), tc.want)
+			}
+			if !strings.Contains(err.Error(), "not a valid Kubernetes quantity") {
+				t.Errorf("err = %q; want it rejected as unparseable, not for being non-positive", err.Error())
+			}
+		})
+	}
+}
+
+// Zero and negative parse cleanly but the CRD's CEL requires positive
+// values (seinode_types.go:153 requests, :196 storage), so they must
+// fail here rather than at a post-merge reconcile.
+func TestRender_RejectsNonPositiveQuantity(t *testing.T) {
+	cases := []struct {
+		name                 string
+		cpu, memory, storage string
+		want                 string
+	}{
+		{"cpu negative", "-1", "", "", `--cpu "-1"`},
+		{"cpu zero", "0", "", "", `--cpu "0"`},
+		{"memory negative", "", "-5Gi", "", `--memory "-5Gi"`},
+		{"memory zero", "", "0Gi", "", `--memory "0Gi"`},
+		{"storage negative", "", "", "-5Gi", `--storage "-5Gi"`},
+		{"storage zero", "", "", "0Gi", `--storage "0Gi"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := resourceArgs()
+			args.cpu, args.memory, args.storage = tc.cpu, tc.memory, tc.storage
+			_, err := render(args)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %q; want containing %q", err.Error(), tc.want)
+			}
+			if !strings.Contains(err.Error(), "must be positive") {
+				t.Errorf("err = %q; want it rejected for not being positive, not as unparseable", err.Error())
+			}
+		})
+	}
+}
+
+// --set can reach spec.resources.limits.cpu, which the CRD's CEL rejects
+// at admission. Catch it locally instead.
+func TestRender_RejectsCPULimitFromSet(t *testing.T) {
+	args := resourceArgs()
+	args.sets = []string{"spec.resources.limits.cpu=100m"}
+	_, err := render(args)
+	if err == nil {
+		t.Fatal("expected error for --set spec.resources.limits.cpu")
+	}
+	if !strings.Contains(err.Error(), "spec.resources.limits.cpu") || !strings.Contains(err.Error(), "no CPU limit") {
+		t.Errorf("err = %q; want it to name the path and say seid carries no CPU limit", err.Error())
+	}
+}
+
+// The guard is deliberately narrow: seinode_types.go:154 PERMITS
+// limits.memory when it equals requests.memory, so rejecting the whole
+// limits block would forbid a spelling the CRD allows.
+func TestRender_AllowsMemoryLimitFromSet(t *testing.T) {
+	args := resourceArgs()
+	args.sets = []string{"spec.resources.limits.memory=32Gi"}
+	got, err := render(args)
+	if err != nil {
+		t.Fatalf("render with --set spec.resources.limits.memory: %v", err)
+	}
+	limit, _, _ := unstructured.NestedString(got.Object, "spec", "resources", "limits", "memory")
+	if limit != "32Gi" {
+		t.Errorf("spec.resources.limits.memory = %q; want 32Gi (allowed by the CRD)", limit)
+	}
 }
 
 // T3 — peer-wiring: --network sets exactly sei.io/seinetwork, NOT

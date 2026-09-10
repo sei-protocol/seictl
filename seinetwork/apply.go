@@ -24,6 +24,9 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		namespace:        c.String("namespace"),
 		chainID:          c.String("chain-id"),
 		image:            c.String("image"),
+		cpu:              c.String("cpu"),
+		memory:           c.String("memory"),
+		storage:          c.String("storage"),
 		sets:             c.StringSlice("set"),
 		genesisAccounts:  c.StringSlice("genesis-account"),
 		genesisOverrides: c.StringSlice("genesis-override"),
@@ -98,7 +101,19 @@ var applyCmd = cli.Command{
 		"and re-create. " +
 		"\n\n" +
 		"Layering, lowest precedence first: preset YAML, discrete flags " +
-		"(--chain-id, --image, --replicas), --set. " +
+		"(--chain-id, --image, --replicas, --cpu, --memory, --storage), " +
+		"--set. " +
+		"\n\n" +
+		"--cpu/--memory/--storage each override one dimension of the " +
+		"preset's resource footprint; unspecified dimensions keep the " +
+		"preset default (4 CPU / 32Gi / 500Gi). Values must be valid " +
+		"Kubernetes quantities (32Gi, not 32GB) — seictl rejects a bad " +
+		"one locally rather than letting Flux discover it. Neither the " +
+		"presets nor these flags emit limits — the controller derives " +
+		"the memory limit from the request. A CPU limit is rejected " +
+		"outright (the CRD forbids one); a memory limit is reachable " +
+		"only via --set, and the CRD requires it to equal the memory " +
+		"request. " +
 		"\n\n" +
 		"Cluster + namespace come from --kubeconfig (or $KUBECONFIG, " +
 		"or $HOME/.kube/config, or in-cluster) and -n (or the kubeconfig " +
@@ -134,6 +149,18 @@ var applyCmd = cli.Command{
 		&cli.IntFlag{
 			Name:  "replicas",
 			Usage: "Genesis validator count (overrides preset default 4). Admission-immutable after create — minted into genesis state.",
+		},
+		&cli.StringFlag{
+			Name:  "cpu",
+			Usage: "CPU request for seid container (overrides preset default; e.g. 4, 8, 16). Create-only on the CRD.",
+		},
+		&cli.StringFlag{
+			Name:  "memory",
+			Usage: "Memory request for seid container (overrides preset default; e.g. 32Gi, 128Gi). Create-only on the CRD.",
+		},
+		&cli.StringFlag{
+			Name:  "storage",
+			Usage: "Data volume storage size (overrides preset default; e.g. 500Gi, 2000Gi). Create-only on the CRD.",
 		},
 		&cli.StringSliceFlag{
 			Name:  "set",
