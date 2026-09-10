@@ -108,9 +108,12 @@ var applyCmd = cli.Command{
 		"preset's resource footprint; unspecified dimensions keep the " +
 		"preset default (4 CPU / 32Gi / 500Gi). Values must be valid " +
 		"Kubernetes quantities (32Gi, not 32GB) — seictl rejects a bad " +
-		"one locally rather than letting Flux discover it. No limits are " +
-		"emitted: the controller derives the memory limit from the " +
-		"request, and a CPU limit is rejected by the CRD outright. " +
+		"one locally rather than letting Flux discover it. Neither the " +
+		"presets nor these flags emit limits — the controller derives " +
+		"the memory limit from the request. A CPU limit is rejected " +
+		"outright (the CRD forbids one); a memory limit is reachable " +
+		"only via --set, and the CRD requires it to equal the memory " +
+		"request. " +
 		"\n\n" +
 		"Cluster + namespace come from --kubeconfig (or $KUBECONFIG, " +
 		"or $HOME/.kube/config, or in-cluster) and -n (or the kubeconfig " +

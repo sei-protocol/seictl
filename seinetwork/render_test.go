@@ -202,6 +202,9 @@ func TestRender_RejectsInvalidQuantity(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("err = %q; want containing %q", err.Error(), tc.want)
 			}
+			if !strings.Contains(err.Error(), "not a valid Kubernetes quantity") {
+				t.Errorf("err = %q; want it rejected as unparseable, not for being non-positive", err.Error())
+			}
 		})
 	}
 }
