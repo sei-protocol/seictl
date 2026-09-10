@@ -80,13 +80,17 @@ permissions: {}
 jobs:
   seidroid-review:
     # Substring tests, with the teardown phrase excluded here so `@seidroid review
-    # close` asks for exactly one thing. The callee does not match substrings: it
-    # requires a whole LINE reading `@seidroid review [close]`, and it never checks the
-    # line it parsed against `mode`. A body mixing both commands can therefore route to
-    # the wrong one -- the PR description carries the case that matters. Not fixable
-    # here: GitHub expressions have no regex, so a caller-side grammar would trade one
-    # set of wrong answers for another, and the only reader that can compare a parsed
-    # line to `mode` is the callee.
+    # close` asks for exactly one thing. They grade a body by different rules than the
+    # callee does, on THREE axes, and the callee never checks the line it parsed against
+    # `mode` -- so a body can select one job here and read as the other command there:
+    # substring against whole line (it wants `@seidroid review [close]` alone on a
+    # line); case-insensitive against case-sensitive (`contains` and `startsWith` are
+    # documented as ignoring case, its `grep -E` carries no -i); and string prefix
+    # against token (`startsWith` reads `@seidroid review closely ...` as a teardown).
+    # The PR description carries the cases that bite and the guidance that follows.
+    # Not fixable here: GitHub expressions have no regex, so a caller-side grammar would
+    # trade one set of wrong answers for another, and the only reader that can compare a
+    # parsed line to `mode` is the callee.
     if: >-
       (github.event_name == 'pull_request' &&
         github.event.action != 'closed') ||
