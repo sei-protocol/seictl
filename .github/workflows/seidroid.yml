@@ -29,10 +29,10 @@ on:
     types: [created]
   # The two review events as well, so `@seidroid review` reaches the pipeline when it
   # is typed where the discussion already is -- inside an inline diff thread or in a
-  # review body. Without them a re-review needs a pushed commit, which means
-  # manufacturing an empty one when the change is to the description or to
-  # out-of-band evidence. The callee admits both events by name and applies the same
-  # author checks to them.
+  # review body, rather than only on the conversation. Convenience, not capability: a
+  # top-level `issue_comment` already asks for a re-review of the current tree. The
+  # callee admits both events by name and applies the same author checks to them.
+  # Wired here after platform, which added them first.
   pull_request_review_comment:
     types: [created]
   pull_request_review:
@@ -42,32 +42,43 @@ on:
 
 # Empty, where this repository's other workflows grant scopes at the top level. A
 # reusable workflow may only downgrade what its caller granted, so a caller has to hand
-# the callee its scopes explicitly -- and the default token grants contents, packages
-# and metadata only, which the callee's guard cannot work with. Empty here means no job
-# starts from a default; each states the four scopes the callee's own two jobs declare
-# between them.
+# the callee its scopes explicitly. Empty here means no job inherits a default, and each
+# job then states exactly the scopes the callee's two jobs declare between them. That
+# makes what this caller grants independent of whichever GITHUB_TOKEN default the
+# organisation or the repository has configured.
 permissions: {}
 
 # No `concurrency:` block, where all four uci callers in this repository set one with
 # `cancel-in-progress: true`. Three reasons, in order:
 #
-#   - The callee already serialises, at a granularity a caller cannot express. Its
-#     review job carries its own job-level `concurrency`, grouped on
-#     mode + repository + pull request number with `cancel-in-progress: true`, so a
-#     newer `@seidroid review` cancels an in-flight review while a teardown for the
-#     same pull request sits in a different group and survives.
-#   - A caller-level group covers the whole run, so it cannot make that distinction.
-#     Any group keyed on the pull request would put the review job and the reclaim job
-#     in one group, and a review arriving on a just-closed pull request would then
-#     cancel the in-flight reclaim -- and `mode: close` is the only thing that reclaims
-#     a session's sandbox.
+#   - The callee already groups the way we would. Its review job carries its own
+#     job-level `concurrency`, keyed on mode + repository + pull request number with
+#     `cancel-in-progress: true`, so a newer `@seidroid review` cancels an in-flight
+#     review while a teardown for the same pull request sits in a separate group and
+#     survives. A caller group on top of that could only narrow it.
+#   - The grouping a caller would reach for first is the wrong one. Keyed on the pull
+#     request alone -- as this repository's other callers key on workflow + ref -- it
+#     would couple the review job to the reclaim job, and a review arriving on a
+#     just-closed pull request could then cancel an in-flight reclaim. `mode: close`
+#     is the only thing that reclaims a session's sandbox. Mode has to stay in the
+#     key, and the callee already keeps it there.
 #   - Cancelling a review frees nothing anyway. The driver traps cancellation and
 #     stops its session, keeping the conversation; only a close deletes it.
+#
+# What the callee's grouping is NOT: exactly-once, or a session lifecycle. A push and a
+# comment can each admit a review of the same tree; overlapping runs cancel, sequential
+# requests are not deduplicated. Review and close sit in separate groups by design, and
+# the comment path does not test whether the pull request is already closed.
 jobs:
   seidroid-review:
-    # `contains`, not `startsWith`, so a request still reads mid-sentence. The teardown
-    # phrase is excluded here rather than anchored, so `@seidroid review close` asks
-    # for exactly one thing.
+    # Substring tests, with the teardown phrase excluded here so `@seidroid review
+    # close` asks for exactly one thing. The callee does not match substrings: it
+    # requires a whole LINE reading `@seidroid review [close]`, and it never checks the
+    # line it parsed against `mode`. A body mixing both commands can therefore route to
+    # the wrong one -- the PR description carries the case that matters. Not fixable
+    # here: GitHub expressions have no regex, so a caller-side grammar would trade one
+    # set of wrong answers for another, and the only reader that can compare a parsed
+    # line to `mode` is the callee.
     if: >-
       (github.event_name == 'pull_request' &&
         github.event.action != 'closed') ||
@@ -91,21 +102,24 @@ jobs:
       SEIDROID_APP_PRIVATE_KEY: ${{ secrets.PLATFORM_CODE_AGENT_APP_PK }}
     with:
       mode: review
-      # A choice for this repository, not something inherited with the file: a clean
-      # review publishes a real approving review, not a comment. Whether that approval
-      # also clears a merge requirement is `main`'s policy and not this file's --
-      # today it clears nothing, since `main` requires no approving review and pull
-      # requests merge here with none. Requiring one would turn this line into a merge
-      # gate, and that is the moment to revisit it.
+      # A choice for this repository, not something inherited with the file: on a clean
+      # conclusion the callee ATTEMPTS an approving review. It falls back to a plain
+      # comment where the API refuses that position, and warns where it can record no
+      # position at all, so this input buys an attempt rather than a guaranteed
+      # approval. Whether an approval that does land counts toward a required one is a
+      # matter of branch policy and reviewer eligibility, neither of which this file
+      # decides. Revisit this line when that policy changes.
       approve-on-success: true
       allowed-team: 'sei-protocol/sei-core'
       # Unset reads REVIEW.md, which this repository does not keep.
       guidelines-file: CLAUDE.md
 
-  # Anchored, unlike the review job's `contains`. A comment that merely quotes the
-  # teardown command -- which the reclaim job below asks a fork author to do -- must
-  # not destroy a live session. Anchoring the review job too would trade that misroute
-  # for a silent no-op, so only the destructive half is anchored.
+  # Anchored, unlike the review job's `contains`, and what that buys is narrow: a body
+  # whose first characters are not the teardown phrase does not select this job, so the
+  # phrase occurring LATER in a body does not start a teardown from here. It buys
+  # nothing else -- a body that begins with the phrase routes here whatever follows it,
+  # which is the case the PR description records. Only the destructive half is anchored,
+  # because anchoring the review job too would turn a misroute into a silent no-op.
   seidroid-review-close:
     if: >-
       github.event_name == 'issue_comment' &&
@@ -128,8 +142,11 @@ jobs:
       allowed-team: 'sei-protocol/sei-core'
 
   # Does not cover a fork: GitHub withholds secrets from a `pull_request` run whose
-  # head is a fork, so the close cannot mint a credential and the sandbox is left
-  # running. On a fork pull request, comment `@seidroid review close` before merging.
+  # head is a fork, so this close cannot mint a credential, and any session that does
+  # exist for that pull request keeps its sandbox. Ask a maintainer to post
+  # `@seidroid review close` on it before merging -- the callee's guard takes a
+  # teardown only from an OWNER, MEMBER or COLLABORATOR, so an external fork author
+  # cannot carry out this remedy themselves.
   seidroid-review-reclaim:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     uses: sei-protocol/uci/.github/workflows/seidroid-review.yml@d895e04ea5aacc796c6655d4c82a3ac7271fb04d
