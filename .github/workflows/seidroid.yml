@@ -62,13 +62,16 @@ permissions: {}
 #     together, so a review arriving on a just-closed pull request could cancel an
 #     in-flight reclaim -- and `mode: close` is the path that reclaims a session's
 #     sandbox. Mode has to stay in the key, and the callee already keeps it there.
-#   - Cancelling a review frees nothing anyway. The driver traps cancellation and stops
-#     its session with the conversation intact, so the sandbox stays held, and
-#     `mode: close` is the explicit end-of-work path that reclaims it. Close is not the
-#     only code path that can delete a session -- opening a review deletes and replaces
-#     one it finds that can no longer run a turn -- but that repairs a session already
-#     dead rather than ending a live unit of work, so it is not a teardown a caller
-#     can schedule.
+#   - Cancelling a review frees nothing, and stops less than the word suggests.
+#     Cancellation unwinds the driver without deleting the session: the conversation
+#     stays, the sandbox stays allocated until something reclaims it, and the remote
+#     turn may keep running -- the next request queues behind that turn rather than
+#     racing it. So a caller-level `cancel-in-progress` would buy latency, not
+#     reclamation. `mode: close` is the explicit end-of-work path that reclaims the
+#     sandbox. Close is not the only code path that can delete a session -- opening a
+#     review deletes and replaces one it finds unable to run a turn at all -- but that
+#     repairs an already-dead session rather than ending a live unit of work, so it is
+#     not a teardown a caller can schedule.
 #
 # What the callee's grouping is NOT: exactly-once, or a session lifecycle. A push and a
 # comment can each admit a review of the same tree; overlapping runs cancel, sequential
@@ -151,9 +154,9 @@ jobs:
   # Does not cover a fork: GitHub withholds secrets from a `pull_request` run whose head
   # is a fork, so this close cannot mint a credential. What that leaves is narrower than
   # it looks -- the callee refuses a review on a fork-originated pull request from every
-  # trigger, so no routine path creates a session for one, and this covers a session that
-  # predates the head becoming a fork or came from out-of-band use rather than a leak
-  # this wiring causes. Where one does exist, `@seidroid review close` reclaims it; the
+  # trigger, so no routine path creates a session for one, and this covers a pre-existing
+  # session created outside these guarded review paths rather than a leak this wiring
+  # causes. Where one does exist, `@seidroid review close` reclaims it; the
   # guard takes a teardown only from an author it admits as OWNER, MEMBER or COLLABORATOR,
   # so ask an admitted collaborator or a maintainer if your own association is not one.
   seidroid-review-reclaim:
