@@ -33,6 +33,8 @@ type renderArgs struct {
 	cpu             string
 	memory          string
 	storage         string
+	iops            string
+	throughput      string
 	sets            []string
 	overrides       []string
 }
@@ -62,6 +64,14 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		if err := cliutil.ValidateQuantity(q.flag, q.value); err != nil {
 			return nil, err
 		}
+	}
+
+	// The operator supplies the (IOPS, throughput) pair; the harness
+	// resolves it to the class name that encodes it (Spec 001 Req 3.2).
+	// Empty means the standard tier, which is the absence of the field.
+	vacName, err := cliutil.ResolveStoragePerformance(args.iops, args.throughput)
+	if err != nil {
+		return nil, err
 	}
 
 	data, err := loadPreset(args.preset)
@@ -109,6 +119,11 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 			return nil, fmt.Errorf("apply --storage: %w", err)
 		}
 	}
+	if vacName != "" {
+		if err := unstructured.SetNestedField(u.Object, vacName, "spec", "dataVolume", "storage", "volumeAttributesClassName"); err != nil {
+			return nil, fmt.Errorf("apply --iops/--throughput: %w", err)
+		}
+	}
 
 	// Peer auto-wiring (LLD §3): --network binds spec.peers[].label.selector
 	// to the canonical network-scoped key. Network identity, NOT chain — two
@@ -143,6 +158,13 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	// Final resource guard — nothing below writes spec.resources, so this
 	// sees whatever --set left behind.
 	if err := cliutil.RejectCPULimit(u.Object); err != nil {
+		return nil, err
+	}
+
+	// Same shape, for storage: re-read what landed so --set can neither
+	// name a class no supported pair resolves to, nor shrink the volume
+	// below the one the selected IOPS is legal on.
+	if err := cliutil.ValidateStoragePerformanceSelection(u.Object); err != nil {
 		return nil, err
 	}
 
