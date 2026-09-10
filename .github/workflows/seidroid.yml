@@ -41,11 +41,12 @@ on:
     types: [opened, ready_for_review, synchronize, reopened, closed]
 
 # Empty, where this repository's other workflows grant scopes at the top level. A
-# reusable workflow may only downgrade what its caller granted, so a caller has to hand
-# the callee its scopes explicitly. Empty here means no job inherits a default, and each
-# job then states exactly the scopes the callee's two jobs declare between them. That
-# makes what this caller grants independent of whichever GITHUB_TOKEN default the
-# organisation or the repository has configured.
+# reusable workflow may only downgrade what its caller granted, so the caller sets the
+# ceiling. Sufficient inherited permissions would serve too; the choice here is to grant
+# the required scopes explicitly rather than depend on a configured default. Empty at the
+# top means no job inherits one, and each job then states exactly the scopes the callee's
+# two jobs declare between them, so what this caller grants does not move with whichever
+# GITHUB_TOKEN default the organisation or the repository has set.
 permissions: {}
 
 # No `concurrency:` block, where all four uci callers in this repository set one with
@@ -56,14 +57,18 @@ permissions: {}
 #     `cancel-in-progress: true`, so a newer `@seidroid review` cancels an in-flight
 #     review while a teardown for the same pull request sits in a separate group and
 #     survives. A caller group on top of that could only narrow it.
-#   - The grouping a caller would reach for first is the wrong one. Keyed on the pull
-#     request alone -- as this repository's other callers key on workflow + ref -- it
-#     would couple the review job to the reclaim job, and a review arriving on a
-#     just-closed pull request could then cancel an in-flight reclaim. `mode: close`
-#     is the only thing that reclaims a session's sandbox. Mode has to stay in the
-#     key, and the callee already keeps it there.
-#   - Cancelling a review frees nothing anyway. The driver traps cancellation and
-#     stops its session, keeping the conversation; only a close deletes it.
+#   - The grouping a caller would reach for first is the wrong one. A workflow-and-pull
+#     request group with no mode in the key would put the review job and the reclaim job
+#     together, so a review arriving on a just-closed pull request could cancel an
+#     in-flight reclaim -- and `mode: close` is the path that reclaims a session's
+#     sandbox. Mode has to stay in the key, and the callee already keeps it there.
+#   - Cancelling a review frees nothing anyway. The driver traps cancellation and stops
+#     its session with the conversation intact, so the sandbox stays held, and
+#     `mode: close` is the explicit end-of-work path that reclaims it. Close is not the
+#     only code path that can delete a session -- opening a review deletes and replaces
+#     one it finds that can no longer run a turn -- but that repairs a session already
+#     dead rather than ending a live unit of work, so it is not a teardown a caller
+#     can schedule.
 #
 # What the callee's grouping is NOT: exactly-once, or a session lifecycle. A push and a
 # comment can each admit a review of the same tree; overlapping runs cancel, sequential
@@ -103,9 +108,10 @@ jobs:
     with:
       mode: review
       # A choice for this repository, not something inherited with the file: on a clean
-      # conclusion the callee ATTEMPTS an approving review. It falls back to a plain
-      # comment where the API refuses that position, and warns where it can record no
-      # position at all, so this input buys an attempt rather than a guaranteed
+      # conclusion the callee ATTEMPTS an approving review. Where the API reports a 422
+      # it attempts a COMMENT review instead; a refusal that arrives any other way -- a
+      # 403 from an approval policy, say -- gets no second attempt, and a post that does
+      # not succeed leaves a warning. So this input buys an attempt, not a guaranteed
       # approval. Whether an approval that does land counts toward a required one is a
       # matter of branch policy and reviewer eligibility, neither of which this file
       # decides. Revisit this line when that policy changes.
@@ -118,8 +124,9 @@ jobs:
   # whose first characters are not the teardown phrase does not select this job, so the
   # phrase occurring LATER in a body does not start a teardown from here. It buys
   # nothing else -- a body that begins with the phrase routes here whatever follows it,
-  # which is the case the PR description records. Only the destructive half is anchored,
-  # because anchoring the review job too would turn a misroute into a silent no-op.
+  # which is the case the PR description records. The review job stays on `contains` for
+  # fleet parity; re-anchoring it would not have prevented that case in any event, since
+  # it already excludes itself there.
   seidroid-review-close:
     if: >-
       github.event_name == 'issue_comment' &&
@@ -141,12 +148,14 @@ jobs:
       mode: close
       allowed-team: 'sei-protocol/sei-core'
 
-  # Does not cover a fork: GitHub withholds secrets from a `pull_request` run whose
-  # head is a fork, so this close cannot mint a credential, and any session that does
-  # exist for that pull request keeps its sandbox. Ask a maintainer to post
-  # `@seidroid review close` on it before merging -- the callee's guard takes a
-  # teardown only from an OWNER, MEMBER or COLLABORATOR, so an external fork author
-  # cannot carry out this remedy themselves.
+  # Does not cover a fork: GitHub withholds secrets from a `pull_request` run whose head
+  # is a fork, so this close cannot mint a credential. What that leaves is narrower than
+  # it looks -- the callee refuses a review on a fork-originated pull request from every
+  # trigger, so no routine path creates a session for one, and this covers a session that
+  # predates the head becoming a fork or came from out-of-band use rather than a leak
+  # this wiring causes. Where one does exist, `@seidroid review close` reclaims it; the
+  # guard takes a teardown only from an author it admits as OWNER, MEMBER or COLLABORATOR,
+  # so ask an admitted collaborator or a maintainer if your own association is not one.
   seidroid-review-reclaim:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     uses: sei-protocol/uci/.github/workflows/seidroid-review.yml@d895e04ea5aacc796c6655d4c82a3ac7271fb04d
