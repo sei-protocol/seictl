@@ -3,11 +3,14 @@ package seinode
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/urfave/cli/v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/sei-protocol/seictl/internal/cliutil"
 )
 
 // T2 — node apply golden render: rpc preset + --chain-id/--image/--network.
@@ -552,5 +555,134 @@ func TestPresetNames(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("preset rpc not found in %v", names)
+	}
+}
+
+// --- storage performance (Spec 001 Req 3) ---
+
+const vacPath = "spec.dataVolume.storage.volumeAttributesClassName"
+
+func vacNameOf(t *testing.T, u *unstructured.Unstructured) (string, bool) {
+	t.Helper()
+	name, found, err := unstructured.NestedString(u.Object, "spec", "dataVolume", "storage", "volumeAttributesClassName")
+	if err != nil {
+		t.Fatalf("read %s: %v", vacPath, err)
+	}
+	return name, found
+}
+
+// The standard tier is the absence of the field, not an empty string or a
+// name meaning "default" — the PVC must carry no volumeAttributesClassName
+// at all so the gp3 StorageClass supplies the baseline (DR-001:81-88).
+func TestRender_StandardTierOmitsTheField(t *testing.T) {
+	got, err := render(resourceArgs())
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if name, found := vacNameOf(t, got); found {
+		t.Errorf("%s = %q; want the field absent for the standard tier", vacPath, name)
+	}
+}
+
+// Req 3.2, in the one direction that is correct: the operator supplies
+// the pair, the render carries the class name that encodes it.
+func TestRender_SupportedPairResolvesToClassName(t *testing.T) {
+	args := resourceArgs()
+	args.iops, args.throughput = "10000", "750"
+	got, err := render(args)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	name, found := vacNameOf(t, got)
+	if !found {
+		t.Fatalf("%s absent; want it set from the supplied pair", vacPath)
+	}
+	if name != "sei-gp3-performance-v1" {
+		t.Errorf("%s = %q; want sei-gp3-performance-v1", vacPath, name)
+	}
+}
+
+func TestRender_RejectsUnsupportedPair(t *testing.T) {
+	args := resourceArgs()
+	args.iops, args.throughput = "16000", "1000"
+	_, err := render(args)
+	if err == nil {
+		t.Fatal("render = nil; want an unsupported pair refused locally")
+	}
+	for _, want := range []string{"10000", "750", "sei-gp3-performance-v1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q; want it to name %q from the supported set", err.Error(), want)
+		}
+	}
+}
+
+// The gp3 ratio ceiling, at the render rather than at provision time. The
+// apiserver accepts this CR; the PVC then fails to provision and the pod
+// sits Pending, with a create-only field so the remedy is a new chain.
+func TestRender_RejectsPerformanceTierOnUndersizedVolume(t *testing.T) {
+	args := resourceArgs()
+	args.iops, args.throughput = "10000", "750"
+	args.storage = "10Gi"
+	_, err := render(args)
+	if err == nil {
+		t.Fatal("render = nil; want 10Gi refused for the 10000-IOPS offering")
+	}
+	if !strings.Contains(err.Error(), "20Gi") {
+		t.Errorf("err = %q; want it to name the 20Gi floor", err.Error())
+	}
+}
+
+// The floor is checked against the size that actually landed, so --set
+// reaching the size path is caught the same way --storage is.
+func TestRender_RejectsPerformanceTierUndersizedViaSet(t *testing.T) {
+	args := resourceArgs()
+	args.iops, args.throughput = "10000", "750"
+	args.sets = []string{"spec.dataVolume.storage.resources.requests.storage=10Gi"}
+	_, err := render(args)
+	if err == nil {
+		t.Fatal("render = nil; want --set of an undersized volume refused")
+	}
+	if !strings.Contains(err.Error(), "20Gi") {
+		t.Errorf("err = %q; want it to name the 20Gi floor", err.Error())
+	}
+}
+
+// --set must not smuggle in a class name no supported pair resolves to,
+// mirroring the spec.resources.limits.cpu guard.
+func TestRender_RejectsUnsupportedClassNameViaSet(t *testing.T) {
+	args := resourceArgs()
+	args.sets = []string{"spec.dataVolume.storage.volumeAttributesClassName=sei-gp3-performance-v2"}
+	_, err := render(args)
+	if err == nil {
+		t.Fatal("render = nil; want --set of an unsupported class name refused")
+	}
+	if !strings.Contains(err.Error(), "sei-gp3-performance-v2") {
+		t.Errorf("err = %q; want it to name the rejected class", err.Error())
+	}
+}
+
+// The other half of the tier-minimum pinning (see
+// TestStoragePerformanceOffering_MinSizeGiBPerTier in internal/cliutil):
+// every supported tier must fit the preset's documented default footprint
+// with no --storage at all. A retune that raised a tier's floor past the
+// preset default would leave the documented default silently unusable
+// with that tier, and this is where that shows up.
+func TestRender_PerformanceTierFitsPresetDefault(t *testing.T) {
+	for _, o := range cliutil.StoragePerformanceOfferings() {
+		t.Run(o.ClassName, func(t *testing.T) {
+			args := resourceArgs()
+			args.iops = strconv.FormatInt(o.IOPS, 10)
+			args.throughput = strconv.FormatInt(o.Throughput, 10)
+			got, err := render(args)
+			if err != nil {
+				t.Fatalf("render with the preset default size and %s: %v\n"+
+					"the tier now needs at least %dGi; either the preset default or the tier moved",
+					o.ClassName, err, o.MinSizeGiB())
+			}
+			name, found := vacNameOf(t, got)
+			if !found || name != o.ClassName {
+				t.Errorf("%s = %q (found=%v); want %q", vacPath, name, found, o.ClassName)
+			}
+		})
 	}
 }

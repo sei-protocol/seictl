@@ -29,6 +29,8 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		cpu:             c.String("cpu"),
 		memory:          c.String("memory"),
 		storage:         c.String("storage"),
+		iops:            c.String("iops"),
+		throughput:      c.String("throughput"),
 		sets:            c.StringSlice("set"),
 		overrides:       c.StringSlice("override"),
 	}
@@ -100,7 +102,7 @@ var applyCmd = cli.Command{
 		"\n\n" +
 		"Layering, lowest precedence first: preset YAML, discrete flags " +
 		"(--chain-id, --image, --network, --external-address, --cpu, " +
-		"--memory, --storage), --override, --set. " +
+		"--memory, --storage, --iops, --throughput), --override, --set. " +
 		"\n\n" +
 		"--cpu/--memory/--storage each override one dimension of the " +
 		"preset's resource footprint; unspecified dimensions keep the " +
@@ -112,6 +114,19 @@ var applyCmd = cli.Command{
 		"outright (the CRD forbids one); a memory limit is reachable " +
 		"only via --set, and the CRD requires it to equal the memory " +
 		"request. " +
+		"\n\n" +
+		"--iops/--throughput select storage PERFORMANCE as a pair: you " +
+		"supply the parameters, seictl resolves them to the " +
+		"VolumeAttributesClass that encodes them, and that name is what " +
+		"lands on the CR. Omit both for the standard tier — the PVC then " +
+		"carries no volumeAttributesClassName and the gp3 StorageClass " +
+		"defaults apply. An unsupported pair is refused locally, naming " +
+		"the supported set. The 10000-IOPS offering also needs a data " +
+		"volume that provisions at least 20 GiB: EBS gp3 caps IOPS at " +
+		"500 x GiB. EBS rounds a request up to whole GiB, so 19.5Gi " +
+		"qualifies and 19Gi does not. The apiserver cannot see that " +
+		"rule, and a violation fails at provision time with the pod " +
+		"Pending. " +
 		"\n\n" +
 		"Cluster + namespace come from --kubeconfig (or $KUBECONFIG, " +
 		"or $HOME/.kube/config, or in-cluster) and -n (or the kubeconfig " +
@@ -163,6 +178,14 @@ var applyCmd = cli.Command{
 		&cli.StringFlag{
 			Name:  "storage",
 			Usage: "Data volume storage size (overrides preset default; e.g. 500Gi, 2000Gi). Create-only on the CRD.",
+		},
+		&cli.StringFlag{
+			Name:  "iops",
+			Usage: "Provisioned IOPS of the data volume, as a count. Pass together with --throughput: the pair selects a supported storage performance offering, which seictl resolves to the VolumeAttributesClass that encodes it. Omit both for the standard tier (the gp3 StorageClass defaults). An unsupported pair is refused locally, naming the supported set. Create-only on the CRD.",
+		},
+		&cli.StringFlag{
+			Name:  "throughput",
+			Usage: "Throughput of the data volume in MiB/s. Pass together with --iops (see --iops). Create-only on the CRD.",
 		},
 		&cli.StringSliceFlag{
 			Name:  "set",
