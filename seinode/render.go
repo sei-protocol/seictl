@@ -54,6 +54,15 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	if args.name == "" {
 		return nil, cliutil.UsageError("name is required: seictl node apply <name> --preset ...")
 	}
+	for _, q := range []struct{ flag, value string }{
+		{"cpu", args.cpu},
+		{"memory", args.memory},
+		{"storage", args.storage},
+	} {
+		if err := cliutil.ValidateQuantity(q.flag, q.value); err != nil {
+			return nil, err
+		}
+	}
 
 	data, err := loadPreset(args.preset)
 	if err != nil {
@@ -129,6 +138,12 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		if err := cliutil.ApplyOverride(u.Object, expr, "spec", "overrides"); err != nil {
 			return nil, cliutil.UsageError("apply --override %q: %s", expr, err.Error())
 		}
+	}
+
+	// Final resource guard — nothing below writes spec.resources, so this
+	// sees whatever --set left behind.
+	if err := cliutil.RejectCPULimit(u.Object); err != nil {
+		return nil, err
 	}
 
 	// A peering full node needs SOMEWHERE to find its peers. If neither

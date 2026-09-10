@@ -101,7 +101,16 @@ var applyCmd = cli.Command{
 		"and re-create. " +
 		"\n\n" +
 		"Layering, lowest precedence first: preset YAML, discrete flags " +
-		"(--chain-id, --image, --replicas), --set. " +
+		"(--chain-id, --image, --replicas, --cpu, --memory, --storage), " +
+		"--set. " +
+		"\n\n" +
+		"--cpu/--memory/--storage each override one dimension of the " +
+		"preset's resource footprint; unspecified dimensions keep the " +
+		"preset default (4 CPU / 32Gi / 500Gi). Values must be valid " +
+		"Kubernetes quantities (32Gi, not 32GB) — seictl rejects a bad " +
+		"one locally rather than letting Flux discover it. No limits are " +
+		"emitted: the controller derives the memory limit from the " +
+		"request, and a CPU limit is rejected by the CRD outright. " +
 		"\n\n" +
 		"Cluster + namespace come from --kubeconfig (or $KUBECONFIG, " +
 		"or $HOME/.kube/config, or in-cluster) and -n (or the kubeconfig " +
