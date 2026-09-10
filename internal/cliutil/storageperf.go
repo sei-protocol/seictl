@@ -58,9 +58,28 @@ func (o StoragePerformanceOffering) MinSizeGiB() int64 {
 	return (o.IOPS + gp3MaxIOPSPerGiB - 1) / gp3MaxIOPSPerGiB
 }
 
-// minSizeQuantity renders MinSizeGiB as a comparable resource.Quantity.
-func (o StoragePerformanceOffering) minSizeQuantity() resource.Quantity {
-	return *resource.NewQuantity(o.MinSizeGiB()<<30, resource.BinarySI)
+// gibiByte is the unit EBS provisions in. Volumes have whole-GiB capacity;
+// there is no such thing as a 19.5 GiB volume.
+const gibiByte = 1 << 30
+
+// effectiveSizeGiB is the volume the EBS CSI driver actually creates for a
+// requested capacity. The driver rounds the request UP to a whole GiB
+// (RoundUpGiB in the driver's pkg/util, called from CreateVolume), so a
+// request is never provisioned smaller than it asked for.
+//
+// The ratio ceiling applies to that PROVISIONED size, not to the raw
+// request. Comparing the request directly would refuse a selection AWS
+// accepts: a request of 19.5Gi provisions a 20 GiB volume, which carries
+// 10000 IOPS at exactly 500 IOPS per GiB. A local validator that predicts
+// a provisioning failure which would not happen is worse than no validator
+// — it sends the operator to resize a chain that was already legal.
+func effectiveSizeGiB(q resource.Quantity) int64 {
+	// Value() already rounds a fractional quantity up to whole bytes.
+	bytes := q.Value()
+	if bytes <= 0 {
+		return 0
+	}
+	return (bytes + gibiByte - 1) / gibiByte
 }
 
 // StoragePerformanceMenu renders the supported set for an error message:
@@ -205,13 +224,13 @@ func validateSizeCarriesIOPS(root map[string]interface{}, offering StoragePerfor
 	if err != nil {
 		return UsageError("spec.dataVolume.storage.resources.requests.storage: %s", err.Error())
 	}
-	minSize := offering.minSizeQuantity()
-	if size.Cmp(minSize) < 0 {
+	provisioned := effectiveSizeGiB(size)
+	if provisioned < offering.MinSizeGiB() {
 		return UsageError(
-			"data volume %s is too small for %s (%d IOPS / %d MiB/s): EBS gp3 caps IOPS at %d x volume size in GiB, so this offering needs at least %dGi. "+
+			"data volume %s provisions %d GiB, too small for %s (%d IOPS / %d MiB/s): EBS gp3 caps IOPS at %d x volume size in GiB, so this offering needs at least %dGi. "+
 				"The apiserver accepts this pair — the ratio is an AWS provisioning rule, not a schema rule — and the PVC then fails to provision, leaving the pod Pending on ProvisioningFailed. "+
 				"Both fields are create-only on the CRD, so the remedy at that point is a new chain: raise --storage to %dGi or more, or omit --iops/--throughput for the standard tier",
-			size.String(), offering.ClassName, offering.IOPS, offering.Throughput, gp3MaxIOPSPerGiB, offering.MinSizeGiB(), offering.MinSizeGiB())
+			size.String(), provisioned, offering.ClassName, offering.IOPS, offering.Throughput, gp3MaxIOPSPerGiB, offering.MinSizeGiB(), offering.MinSizeGiB())
 	}
 	return nil
 }

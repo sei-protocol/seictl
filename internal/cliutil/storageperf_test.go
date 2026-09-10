@@ -3,6 +3,8 @@ package cliutil
 import (
 	"strings"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // The supported set is deliberately one named offering plus the standard
@@ -286,6 +288,119 @@ func TestValidateStoragePerformanceSelection_RejectsVolumeTooSmallForIOPS(t *tes
 				if !strings.Contains(msg, want) {
 					t.Errorf("err = %q; want it to name %q", msg, want)
 				}
+			}
+		})
+	}
+}
+
+// EBS provisions whole GiB, and the CSI driver rounds a request UP to get
+// there. The ratio ceiling therefore applies to the PROVISIONED size, so a
+// request that is not itself a legal size can still provision one that is.
+//
+// Every accept case below is refused by a validator that compares the raw
+// request against 20Gi, which is what this package did before: 19.5Gi and
+// 19Gi+1B are both strictly less than 20Gi as quantities, yet both
+// provision exactly 20 GiB.
+func TestValidateStoragePerformanceSelection_RatioAppliesToProvisionedSize(t *testing.T) {
+	const (
+		giB      = int64(1) << 30
+		gi19     = 19 * giB // 20401094656
+		gi20     = 20 * giB // 21474836480
+		gi19Half = gi19 + giB/2
+	)
+	cases := []struct {
+		name       string
+		size       interface{}
+		wantReject bool
+	}{
+		// The case the review found: rounds up to exactly the floor.
+		{"19.5Gi rounds up to the floor", "19.5Gi", false},
+		{"19.5Gi as a bare byte count", gi19Half, false},
+		// Just over a GiB boundary: one byte past 19Gi still provisions 20.
+		{"19Gi plus one byte rounds up to the floor", gi19 + 1, false},
+		// Exactly on a GiB boundary, one GiB short: no rounding to save it.
+		{"19Gi exactly is one GiB short", "19Gi", true},
+		{"19Gi exactly as a bare byte count", gi19, true},
+		// Exactly at the floor, and one byte under it.
+		{"20Gi exactly is the floor", "20Gi", false},
+		{"one byte under 20Gi still provisions 20 GiB", gi20 - 1, false},
+		// A decimal spelling: 20G is 18.63 GiB, which rounds up to 19.
+		{"20G is a decimal 20 GB and provisions 19 GiB", "20G", true},
+		{"10Gi is far short", "10Gi", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateStoragePerformanceSelection(storageObject("sei-gp3-performance-v1", tc.size))
+			if tc.wantReject {
+				if err == nil {
+					t.Fatalf("ValidateStoragePerformanceSelection(size=%v) = nil; want a refusal", tc.size)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("ValidateStoragePerformanceSelection(size=%v) = %v; want nil: "+
+					"the CSI driver rounds the request up to whole GiB, so this provisions at least the %dGi floor",
+					tc.size, err, storagePerformanceCatalog[0].MinSizeGiB())
+			}
+		})
+	}
+}
+
+// effectiveSizeGiB is the round-up itself, pinned apart from the guard that
+// consumes it.
+func TestEffectiveSizeGiB(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+	}{
+		{"1", 1},       // a single byte still occupies a GiB
+		{"1Gi", 1},     // exact
+		{"1025Mi", 2},  // one MiB over
+		{"19Gi", 19},   // exact
+		{"19.5Gi", 20}, // the review's case
+		{"20Gi", 20},   // exact
+		{"20G", 19},    // decimal 20 GB is 18.63 GiB
+		{"500Gi", 500}, // the preset default
+		{"0", 0},       // guarded: no negative or zero division surprises
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			q := resource.MustParse(tc.in)
+			if got := effectiveSizeGiB(q); got != tc.want {
+				t.Errorf("effectiveSizeGiB(%s) = %d; want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// Every catalogued pair must be one EBS gp3 can actually provision. The
+// resolver only checks membership in this catalog, so a bad entry would
+// pass every guard here and be rejected by AWS at provision time — after
+// commit, merge and Flux apply, against a create-only field.
+//
+// The single shipping entry clears all three limits with room to spare
+// (750 <= 2500), so this test guards a future -v2 rather than today.
+func TestStoragePerformanceCatalog_PairsAreProvisionableGp3(t *testing.T) {
+	const (
+		maxIOPS       = 80000 // gp3 ceiling
+		maxThroughput = 2000  // MiB/s, gp3 ceiling
+	)
+	for _, o := range StoragePerformanceOfferings() {
+		t.Run(o.ClassName, func(t *testing.T) {
+			if o.IOPS <= 0 || o.Throughput <= 0 {
+				t.Fatalf("offering %+v has a non-positive parameter", o)
+			}
+			if o.IOPS > maxIOPS {
+				t.Errorf("IOPS = %d; gp3 allows at most %d", o.IOPS, maxIOPS)
+			}
+			if o.Throughput > maxThroughput {
+				t.Errorf("throughput = %d MiB/s; gp3 allows at most %d", o.Throughput, maxThroughput)
+			}
+			// gp3 caps throughput at 0.25 MiB/s per provisioned IOPS.
+			// Stated as a multiplication to keep it in integer arithmetic.
+			if o.Throughput*4 > o.IOPS {
+				t.Errorf("throughput %d MiB/s needs %d IOPS at the gp3 ratio of 0.25 MiB/s per IOPS, but the offering provisions %d",
+					o.Throughput, o.Throughput*4, o.IOPS)
 			}
 		})
 	}

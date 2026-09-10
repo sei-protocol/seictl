@@ -124,9 +124,11 @@ var applyCmd = cli.Command{
 		"carries no volumeAttributesClassName and the gp3 StorageClass " +
 		"defaults apply. An unsupported pair is refused locally, naming " +
 		"the supported set. The 10000-IOPS offering also needs a data " +
-		"volume of at least 20Gi: EBS gp3 caps IOPS at 500 x GiB, the " +
-		"apiserver cannot see that rule, and a violation fails at " +
-		"provision time with the pod Pending. " +
+		"volume that provisions at least 20 GiB: EBS gp3 caps IOPS at " +
+		"500 x GiB. EBS rounds a request up to whole GiB, so 19.5Gi " +
+		"qualifies and 19Gi does not. The apiserver cannot see that " +
+		"rule, and a violation fails at provision time with the pod " +
+		"Pending. " +
 		"\n\n" +
 		"Cluster + namespace come from --kubeconfig (or $KUBECONFIG, " +
 		"or $HOME/.kube/config, or in-cluster) and -n (or the kubeconfig " +
