@@ -281,6 +281,22 @@ DNS-1123 labels (lowercase alphanumerics and `-`), and `<fault>-<run-id>` /
 `seiload-<run-id>` must stay within 63 characters, since both become resource names
 and label values.
 
+### MCP Server
+
+`seictl mcp` serves the offline render verbs as [Model Context Protocol](https://modelcontextprotocol.io)
+tools over stdio, so an agent host calls them with JSON-schema'd inputs instead of
+shelling out and parsing `--help` and stderr. Tools: `chaos_list`, `chaos_render`,
+`bench_render`, `network_render` (the SeiNetwork `network apply` would submit),
+`node_render` (the SeiNode `node apply` would submit). Every tool runs the same
+validation and templates as the CLI, reads no kubeconfig and applies nothing —
+the returned `manifest` is for the agent to commit to its GitOps workspace.
+A failed call returns `isError: true` with the same `metav1.Status` JSON the CLI
+prints to stderr (`reason: BadRequest`, `message` naming the flag).
+
+```json
+{ "mcpServers": { "seictl": { "command": "seictl", "args": ["mcp"] } } }
+```
+
 ## Configuration Targets
 
 The `config` command can work with three different configuration files:
