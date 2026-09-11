@@ -3,12 +3,17 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/sei-protocol/seictl/chaos"
+	"github.com/sei-protocol/seictl/internal/cliutil"
+	"github.com/sei-protocol/seictl/seinetwork"
+	"github.com/sei-protocol/seictl/seinode"
 )
 
 func connect(t *testing.T) *mcp.ClientSession {
@@ -105,12 +110,35 @@ func TestListTools(t *testing.T) {
 	if len(got) != 5 {
 		t.Errorf("registered %d tools, want 5", len(got))
 	}
-	schema, _ := json.Marshal(got["chaos_render"].InputSchema)
-	for _, req := range []string{`"fault"`, `"chainId"`, `"runId"`, `"namespace"`} {
-		if !strings.Contains(string(schema), req) {
-			t.Errorf("chaos_render schema missing %s:\n%s", req, schema)
+	wantRequired := map[string][]string{
+		"chaos_render":   {"fault", "chainId", "runId", "namespace"},
+		"bench_render":   {"runId", "chainId", "image", "profileConfigMap", "durationMinutes"},
+		"network_render": {"preset", "name", "namespace"},
+		"node_render":    {"preset", "name", "namespace"},
+	}
+	for name, want := range wantRequired {
+		if got[name] == nil {
+			continue
+		}
+		if req := requiredFields(t, got[name].InputSchema); !reflect.DeepEqual(req, want) {
+			t.Errorf("%s required = %v, want %v", name, req, want)
 		}
 	}
+}
+
+func requiredFields(t *testing.T, schema any) []string {
+	t.Helper()
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	return s.Required
 }
 
 func TestChaosList(t *testing.T) {
@@ -231,10 +259,33 @@ func TestNetworkAndNodeRender(t *testing.T) {
 	}
 
 	reason, _ := statusReason(t, call(t, cs, "network_render", map[string]any{
-		"preset": "genesis-chain", "name": "bench-a", "chainId": "bench-a", "image": "img", "evmOnly": true,
+		"preset": "genesis-chain", "name": "bench-a", "namespace": "eng-bob", "chainId": "bench-a", "image": "img", "evmOnly": true,
 	}))
 	if reason != "BadRequest" {
 		t.Errorf("evmOnly without Autobahn: reason=%q", reason)
+	}
+
+	// The schema marks namespace required, so the SDK refuses before the
+	// handler runs; Manifest() refuses too for direct callers.
+	res := call(t, cs, "network_render", map[string]any{
+		"preset": "genesis-chain", "name": "bench-a", "chainId": "bench-a", "image": "img",
+	})
+	if !res.IsError || !strings.Contains(text(res), "namespace") {
+		t.Errorf("omitted namespace accepted: isError=%v %s", res.IsError, text(res))
+	}
+	if _, err := seinetwork.Manifest(seinetwork.ManifestArgs{Preset: "genesis-chain", Name: "bench-a", ChainID: "bench-a", Image: "img"}); err == nil || !strings.Contains(err.Error(), "namespace") {
+		t.Errorf("seinetwork.Manifest without namespace: err=%v", err)
+	}
+	if _, err := seinode.Manifest(seinode.ManifestArgs{Preset: "rpc", Name: "n", ChainID: "c", Image: "img", Network: "c"}); err == nil || !strings.Contains(err.Error(), "namespace") {
+		t.Errorf("seinode.Manifest without namespace: err=%v", err)
+	}
+
+	out = manifest(t, call(t, cs, "network_render", map[string]any{
+		"preset": "genesis-chain", "name": "bench-a", "namespace": "eng-bob", "chainId": "bench-a", "image": "img",
+		"set": []string{"metadata.namespace=kube-system"},
+	}))
+	if !strings.Contains(out, "namespace: eng-bob") || strings.Contains(out, "kube-system") {
+		t.Errorf("--set metadata.namespace retargeted the manifest:\n%s", out)
 	}
 
 	out = manifest(t, call(t, cs, "node_render", map[string]any{
@@ -247,8 +298,32 @@ func TestNetworkAndNodeRender(t *testing.T) {
 		}
 	}
 
-	reason, _ = statusReason(t, call(t, cs, "node_render", map[string]any{"preset": "nope", "name": "n"}))
+	reason, _ = statusReason(t, call(t, cs, "node_render", map[string]any{"preset": "nope", "name": "n", "namespace": "eng-bob"}))
 	if reason != "BadRequest" {
 		t.Errorf("unknown preset: reason=%q", reason)
+	}
+}
+
+func TestManifestResultReason(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"usage error", cliutil.UsageError("--preset is required"), "BadRequest"},
+		{"untyped error is internal, as network apply emits", errors.New("decode preset: boom"), "InternalError"},
+		{"chaos/bench wrap untyped as usage", asUsageError(errors.New("--duration must be positive")), "BadRequest"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := manifestResult(nil, tc.err)
+			var se statusError
+			if !errors.As(err, &se) {
+				t.Fatalf("got %T, want statusError", err)
+			}
+			if string(se.status.Reason) != tc.want {
+				t.Errorf("reason = %q, want %q", se.status.Reason, tc.want)
+			}
+		})
 	}
 }

@@ -2,11 +2,14 @@ package seinode
 
 import (
 	"sigs.k8s.io/yaml"
+
+	"github.com/sei-protocol/seictl/internal/cliutil"
 )
 
 // ManifestArgs is the offline-render input for a SeiNode: the same fields
 // `node apply` takes as flags. Namespace is written verbatim; nothing here
-// touches a kubeconfig.
+// touches a kubeconfig, so it is required: `apply` fills it from the
+// kubeconfig, and render()'s anti-retarget reassertion depends on it.
 type ManifestArgs struct {
 	Preset          string
 	Name            string
@@ -31,6 +34,9 @@ type ManifestArgs struct {
 // Manifest renders the SeiNode `node apply` would send, as YAML, with every
 // client-side validation applied and no cluster access.
 func Manifest(a ManifestArgs) ([]byte, error) {
+	if a.Namespace == "" {
+		return nil, cliutil.UsageError("namespace is required: apply takes it from the kubeconfig; the offline render has none")
+	}
 	obj, err := render(renderArgs{
 		preset:          a.Preset,
 		name:            a.Name,

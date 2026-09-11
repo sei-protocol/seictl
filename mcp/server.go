@@ -42,7 +42,8 @@ var Cmd = cli.Command{
 	},
 }
 
-// ChaosListOutput is the fault catalog, same shape as `chaos list -o json`.
+// ChaosListOutput wraps the fault catalog; each entry has the shape of a
+// `chaos list -o json` element.
 type ChaosListOutput struct {
 	Faults []chaos.CatalogEntry `json:"faults"`
 }
@@ -73,7 +74,7 @@ type BenchRenderInput struct {
 type NetworkRenderInput struct {
 	Preset           string   `json:"preset" jsonschema:"preset name, e.g. genesis-chain"`
 	Name             string   `json:"name" jsonschema:"SeiNetwork name"`
-	Namespace        string   `json:"namespace,omitempty"`
+	Namespace        string   `json:"namespace" jsonschema:"target namespace; apply reads it from the kubeconfig, this tool has none"`
 	ChainID          string   `json:"chainId,omitempty" jsonschema:"spec.genesis.chainId"`
 	Image            string   `json:"image,omitempty" jsonschema:"seid image reference"`
 	Replicas         *int     `json:"replicas,omitempty" jsonschema:"validator count"`
@@ -95,7 +96,7 @@ type NetworkRenderInput struct {
 type NodeRenderInput struct {
 	Preset          string   `json:"preset" jsonschema:"preset name, e.g. rpc"`
 	Name            string   `json:"name" jsonschema:"SeiNode name"`
-	Namespace       string   `json:"namespace,omitempty"`
+	Namespace       string   `json:"namespace" jsonschema:"target namespace; apply reads it from the kubeconfig, this tool has none"`
 	ChainID         string   `json:"chainId,omitempty" jsonschema:"spec.chainId"`
 	Image           string   `json:"image,omitempty" jsonschema:"seid image reference"`
 	Network         string   `json:"network,omitempty" jsonschema:"SeiNetwork the node follows"`
@@ -115,7 +116,7 @@ type NodeRenderInput struct {
 
 // ManifestOutput carries one rendered Kubernetes manifest.
 type ManifestOutput struct {
-	Manifest string `json:"manifest" jsonschema:"YAML manifest ready to commit"`
+	Manifest string `json:"manifest" jsonschema:"YAML manifest; client-side validation only, the apiserver has not seen it"`
 }
 
 // NewServer builds the MCP server with every tool registered.
@@ -133,12 +134,12 @@ func NewServer() *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "chaos_render",
 		Description: "Render one fault from the catalog as a Chaos-Mesh manifest targeting the " +
-			"SeiNetwork's pods. Resources are named <fault>-<runId> and labelled sei.io/harness-run=<runId>.",
+			"SeiNetwork's pods. Resources are named <fault>-<runId> and labelled sei.io/harness-run=<runId>. Error messages name the CLI flag (--duration); the tool field is its camelCase name (duration).",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in ChaosRenderInput) (*mcp.CallToolResult, ManifestOutput, error) {
 		out, err := chaos.Render(in.Fault, faults.Params{
 			ChainID: in.ChainID, RunID: in.RunID, Namespace: in.Namespace, Duration: in.Duration,
 		})
-		return manifestResult(out, err)
+		return manifestResult(out, asUsageError(err))
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -161,13 +162,13 @@ func NewServer() *mcp.Server {
 			Namespace:       in.Namespace,
 			Workload:        workload,
 		})
-		return manifestResult(out, err)
+		return manifestResult(out, asUsageError(err))
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "network_render",
 		Description: "Render the SeiNetwork manifest `seictl network apply` would send, with every " +
-			"client-side validation applied (quantities, storage tiers, consensus, configValues). Nothing is applied.",
+			"client-side validation applied (quantities, storage tiers, consensus, configValues). Nothing is applied and no CRD schema or immutability check runs. Error messages name the CLI flag (--chain-id); the tool field is its camelCase name (chainId).",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in NetworkRenderInput) (*mcp.CallToolResult, ManifestOutput, error) {
 		out, err := seinetwork.Manifest(seinetwork.ManifestArgs{
 			Preset:           in.Preset,
@@ -195,7 +196,7 @@ func NewServer() *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "node_render",
 		Description: "Render the SeiNode manifest `seictl node apply` would send, with every " +
-			"client-side validation applied. Nothing is applied.",
+			"client-side validation applied. Nothing is applied and no CRD schema or immutability check runs. Error messages name the CLI flag (--network); the tool field is its camelCase name (network).",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in NodeRenderInput) (*mcp.CallToolResult, ManifestOutput, error) {
 		out, err := seinode.Manifest(seinode.ManifestArgs{
 			Preset:          in.Preset,
@@ -225,17 +226,22 @@ func NewServer() *mcp.Server {
 
 // manifestResult turns a render error into an isError tool result whose
 // text is the same metav1.Status JSON the CLI writes to stderr, so an agent
-// discriminates on .reason exactly as it would with `jq -r .reason`.
+// discriminates on .reason exactly as it would with `jq -r .reason`:
+// UsageError → BadRequest, anything untyped → InternalError, as EmitStatus
+// does for `network apply` / `node apply`.
 func manifestResult(out []byte, err error) (*mcp.CallToolResult, ManifestOutput, error) {
 	if err != nil {
-		return nil, ManifestOutput{}, statusError{status: cliutil.ToStatus(asUsageError(err))}
+		return nil, ManifestOutput{}, statusError{status: cliutil.ToStatus(err)}
 	}
 	return nil, ManifestOutput{Manifest: string(out)}, nil
 }
 
-// asUsageError keeps an apiserver-shaped error as is and classifies every
-// other render failure as BadRequest, matching the CLI's stderr envelope.
+// asUsageError classifies every non-apiserver render failure as BadRequest,
+// matching what the `chaos render` and `bench render` actions do.
 func asUsageError(err error) error {
+	if err == nil {
+		return nil
+	}
 	var api apierrors.APIStatus
 	if errors.As(err, &api) {
 		return err

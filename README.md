@@ -291,7 +291,7 @@ shelling out and parsing `--help` and stderr. Tools: `chaos_list`, `chaos_render
 validation and templates as the CLI, reads no kubeconfig and applies nothing —
 the returned `manifest` is for the agent to commit to its GitOps workspace.
 A failed call returns `isError: true` with the same `metav1.Status` JSON the CLI
-prints to stderr (`reason: BadRequest`, `message` naming the flag).
+prints to stderr (`reason: BadRequest` for bad input, `InternalError` otherwise; `message` names the CLI flag, whose tool field is the camelCase name). `network_render`/`node_render` run client-side validation only — no CRD schema or immutability check — so `kubectl apply --dry-run=server` remains the apiserver gate.
 
 ```json
 { "mcpServers": { "seictl": { "command": "seictl", "args": ["mcp"] } } }
