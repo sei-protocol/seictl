@@ -249,6 +249,38 @@ seictl config --target app patch patch.toml -i
 seictl config patch patch.toml -o /path/to/output.toml
 ```
 
+### Benchmark Harness Commands
+
+`chaos` and `bench` render the manifests the sei-k8s-controller nightly
+harness uses, from the same embedded templates (`harness/faults`,
+`harness/bench` in that repo), so a GitOps experiment injects exactly what
+the suite injects. They print YAML to stdout and touch no cluster.
+
+```bash
+# Catalog: name, kind, one-shot vs duration, scope, summary
+# (--output json emits [{name, kind, oneShot, meshWide, summary}])
+seictl chaos list
+
+# Partition validator-0 from the rest of <chain-id> for 5 minutes
+seictl chaos render network-partition --chain-id bench-a --run-id exp-42 -n eng-alice --duration 5m
+
+# One-shot faults take no --duration
+seictl chaos render pod-failure --chain-id bench-a --run-id exp-42 -n eng-alice
+
+# seiload Job reading profile.json from a ConfigMap; deadline = duration + 15m
+seictl bench render --run-id exp-42 --chain-id bench-a -n eng-alice \
+  --image <seiload image@sha256:...> --profile-configmap seiload-profile-exp-42 --duration 10
+```
+
+Faults select pods by `sei.io/nodedeployment=<chain-id>`. One-validator faults are
+`mode: one` — Chaos-Mesh picks the victim; read it back from
+`status.experiment.containerRecords` — except `network-partition`, which pins
+`sei.io/node=<chain-id>-0` as the isolated side. `network-latency` is mesh-wide. Every
+resource is labelled `sei.io/harness-run=<run-id>`. `--chain-id` and `--run-id` must be
+DNS-1123 labels (lowercase alphanumerics and `-`), and `<fault>-<run-id>` /
+`seiload-<run-id>` must stay within 63 characters, since both become resource names
+and label values.
+
 ## Configuration Targets
 
 The `config` command can work with three different configuration files:

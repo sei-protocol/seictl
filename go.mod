@@ -12,8 +12,8 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sei-protocol/sei-config v0.0.28
-	github.com/sei-protocol/sei-k8s-controller v0.0.0-20260622210026-978577b63c78
-	github.com/sei-protocol/sei-k8s-controller/sidecarapi v0.0.0-20260831155954-d0397cb605c4
+	github.com/sei-protocol/sei-k8s-controller v0.0.0-20260911182239-badf30d8d757
+	github.com/sei-protocol/sei-k8s-controller/sidecarapi v0.0.0
 	github.com/sei-protocol/seilog v0.0.3
 	github.com/urfave/cli/v3 v3.6.1
 	k8s.io/api v0.36.0
@@ -50,6 +50,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.9 // indirect
 	github.com/aws/smithy-go v1.25.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/bits-and-blooms/bitset v1.24.3 // indirect; held at main's version, MVS would otherwise drop to go-ethereum's v1.20.0 floor
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cosmos/btcutil v1.0.5 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -74,7 +75,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/oapi-codegen/runtime v1.2.0 // indirect
+	github.com/oapi-codegen/runtime v1.6.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
@@ -106,3 +107,8 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
 )
+
+// The controller root replaces sidecarapi with its in-tree copy (./sidecarapi), which
+// Go drops from a dependency, leaving the require at v0.0.0. This pin is the real
+// sidecarapi version: bump it here, not the require.
+replace github.com/sei-protocol/sei-k8s-controller/sidecarapi => github.com/sei-protocol/sei-k8s-controller/sidecarapi v0.0.0-20260831155954-d0397cb605c4
