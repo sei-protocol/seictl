@@ -31,6 +31,7 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		storage:         c.String("storage"),
 		iops:            c.String("iops"),
 		throughput:      c.String("throughput"),
+		nodeIsolation:   c.String("node-isolation"),
 		sets:            c.StringSlice("set"),
 		overrides:       c.StringSlice("override"),
 	}
@@ -102,7 +103,7 @@ var applyCmd = cli.Command{
 		"\n\n" +
 		"Layering, lowest precedence first: preset YAML, discrete flags " +
 		"(--chain-id, --image, --network, --external-address, --cpu, " +
-		"--memory, --storage, --iops, --throughput), --override, --set. " +
+		"--memory, --storage, --iops, --throughput, --node-isolation), --override, --set. " +
 		"\n\n" +
 		"--cpu/--memory/--storage each override one dimension of the " +
 		"preset's resource footprint; unspecified dimensions keep the " +
@@ -186,6 +187,10 @@ var applyCmd = cli.Command{
 		&cli.StringFlag{
 			Name:  "throughput",
 			Usage: "Throughput of the data volume in MiB/s. Pass together with --iops (see --iops). Create-only on the CRD.",
+		},
+		&cli.StringFlag{
+			Name:  "node-isolation",
+			Usage: "Worker-node placement: Shared (default when omitted; may co-locate with other pods) or Dedicated (single-tenant worker node, for a benchmark follower that must not share CPU/disk with a neighbour). Sets spec.scheduling.nodeIsolation. Dedicated needs free single-tenant capacity: with none the pod sits Pending until a node is provisioned. Confirm with `seictl node get <name> -o json | jq .status.currentNodeIsolation`.",
 		},
 		&cli.StringSliceFlag{
 			Name:  "set",
