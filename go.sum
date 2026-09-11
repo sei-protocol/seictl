@@ -170,8 +170,8 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/sei-protocol/sei-config v0.0.28 h1:Su0fnGbna5BwX/jMjaNnIJ/aEV6zKPpJBvkcYC6CLWg=
 github.com/sei-protocol/sei-config v0.0.28/go.mod h1:zcEdLzyIH2AyP0/QRBE3s4Y9eGn0C/qAUx1c4o4EROU=
-github.com/sei-protocol/sei-k8s-controller v0.0.0-20260911174908-6a8693008d6a h1:hc2hj/8lc9dZqGcjDqGS8KP+eIOc6k5+CX1/NlV7kPk=
-github.com/sei-protocol/sei-k8s-controller v0.0.0-20260911174908-6a8693008d6a/go.mod h1:MPcEmCdaFA4xGLh5eT6vUSZBETVAmQ8nIURU0F82fEI=
+github.com/sei-protocol/sei-k8s-controller v0.0.0-20260911182239-badf30d8d757 h1:cCkqXwhB2sL2lfUuPVCr//sWffq4/EVa9pGKOwu/DJY=
+github.com/sei-protocol/sei-k8s-controller v0.0.0-20260911182239-badf30d8d757/go.mod h1:MPcEmCdaFA4xGLh5eT6vUSZBETVAmQ8nIURU0F82fEI=
 github.com/sei-protocol/sei-k8s-controller/sidecarapi v0.0.0-20260831155954-d0397cb605c4 h1:0z80dA5xrojVs0b4CFFDF9zrUhiIUlN3CJ4ANKOwOlI=
 github.com/sei-protocol/sei-k8s-controller/sidecarapi v0.0.0-20260831155954-d0397cb605c4/go.mod h1:kCYGHK0imgtFrSw8qXkmjSRkx5c+RTIdj0YYkGwYktI=
 github.com/sei-protocol/seilog v0.0.3 h1:Zi7oWXdX5jv92dY8n482xH032LtNebC89Y+qYZlBn0Y=
