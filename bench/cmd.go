@@ -5,6 +5,7 @@ package bench
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/sei-protocol/sei-k8s-controller/harness/bench"
@@ -42,7 +43,7 @@ var renderCmd = cli.Command{
 		&cli.IntFlag{Name: "deadline-seconds", Usage: "activeDeadlineSeconds override (default: duration + 15m)"},
 	},
 	Action: func(_ context.Context, c *cli.Command) error {
-		out, err := bench.Render(bench.Params{
+		out, err := render(bench.Params{
 			RunID:           c.String("run-id"),
 			ChainID:         c.String("chain-id"),
 			Commit:          c.String("commit"),
@@ -60,4 +61,14 @@ var renderCmd = cli.Command{
 		_, err = os.Stdout.Write(out)
 		return err
 	},
+}
+
+func render(p bench.Params) ([]byte, error) {
+	if err := cliutil.RequireHarnessNames(p.ChainID, p.RunID, "seiload"); err != nil {
+		return nil, err
+	}
+	if p.DurationMinutes <= 0 {
+		return nil, fmt.Errorf("--duration must be a positive number of minutes, got %d", p.DurationMinutes)
+	}
+	return bench.Render(p)
 }

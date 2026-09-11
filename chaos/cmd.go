@@ -39,7 +39,11 @@ var listCmd = cli.Command{
 		&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Value: "text", Usage: "text|json"},
 	},
 	Action: func(_ context.Context, c *cli.Command) error {
-		return list(os.Stdout, c.String("output"))
+		if err := list(os.Stdout, c.String("output")); err != nil {
+			cliutil.EmitStatus(os.Stderr, err)
+			return cli.Exit("", 1)
+		}
+		return nil
 	},
 }
 
@@ -84,6 +88,9 @@ func render(name string, p faults.Params) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := cliutil.RequireHarnessNames(p.ChainID, p.RunID, name); err != nil {
+		return nil, err
+	}
 	if f.OneShot && p.Duration != "" {
 		return nil, fmt.Errorf("fault %q is one-shot; --duration does not apply", name)
 	}
@@ -102,19 +109,38 @@ func render(name string, p faults.Params) ([]byte, error) {
 	return f.Render(p)
 }
 
+// catalogEntry is the stable machine-readable shape of one fault. It is
+// decoupled from faults.Fault so an upstream field rename cannot change the
+// JSON this command emits.
+type catalogEntry struct {
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	OneShot  bool   `json:"oneShot"`
+	MeshWide bool   `json:"meshWide"`
+	Summary  string `json:"summary"`
+}
+
+func catalog() []catalogEntry {
+	entries := make([]catalogEntry, 0, len(faults.Catalog))
+	for _, f := range faults.Catalog {
+		entries = append(entries, catalogEntry{Name: f.Name, Kind: f.Kind, OneShot: f.OneShot, MeshWide: f.MeshWide, Summary: f.Summary})
+	}
+	return entries
+}
+
 func list(w io.Writer, format string) error {
 	switch format {
 	case "text":
-		for _, f := range faults.Catalog {
+		for _, e := range catalog() {
 			mode := "duration"
-			if f.OneShot {
+			if e.OneShot {
 				mode = "one-shot"
 			}
 			scope := "one-validator"
-			if f.MeshWide {
+			if e.MeshWide {
 				scope = "mesh-wide"
 			}
-			if _, err := fmt.Fprintf(w, "%-20s %-13s %-9s %-14s %s\n", f.Name, f.Kind, mode, scope, f.Summary); err != nil {
+			if _, err := fmt.Fprintf(w, "%-20s %-13s %-9s %-14s %s\n", e.Name, e.Kind, mode, scope, e.Summary); err != nil {
 				return err
 			}
 		}
@@ -122,9 +148,8 @@ func list(w io.Writer, format string) error {
 	case "json":
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		return enc.Encode(faults.Catalog)
+		return enc.Encode(catalog())
 	default:
-		cliutil.EmitStatus(os.Stderr, cliutil.UsageError("--output must be text or json, got %q", format))
-		return cli.Exit("", 1)
+		return cliutil.UsageError("--output must be text or json, got %q", format)
 	}
 }

@@ -257,7 +257,8 @@ harness uses, from the same embedded templates (`harness/faults`,
 the suite injects. They print YAML to stdout and touch no cluster.
 
 ```bash
-# Catalog: name, kind, one-shot vs duration, summary (--output json for machines)
+# Catalog: name, kind, one-shot vs duration, scope, summary
+# (--output json emits [{name, kind, oneShot, meshWide, summary}])
 seictl chaos list
 
 # Partition validator-0 from the rest of <chain-id> for 5 minutes
@@ -275,7 +276,10 @@ Faults select pods by `sei.io/nodedeployment=<chain-id>`. One-validator faults a
 `mode: one` — Chaos-Mesh picks the victim; read it back from
 `status.experiment.containerRecords` — except `network-partition`, which pins
 `sei.io/node=<chain-id>-0` as the isolated side. `network-latency` is mesh-wide. Every
-resource is labelled `sei.io/harness-run=<run-id>`.
+resource is labelled `sei.io/harness-run=<run-id>`. `--chain-id` and `--run-id` must be
+DNS-1123 labels (lowercase alphanumerics and `-`), and `<fault>-<run-id>` /
+`seiload-<run-id>` must stay within 63 characters, since both become resource names
+and label values.
 
 ## Configuration Targets
 

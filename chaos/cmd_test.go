@@ -15,6 +15,8 @@ func TestRender(t *testing.T) {
 		name     string
 		fault    string
 		duration string
+		runID    string
+		chainID  string
 		wantErr  string
 		wantSubs []string
 	}{
@@ -27,12 +29,20 @@ func TestRender(t *testing.T) {
 		{name: "unitless duration is refused", fault: "cpu-stress", duration: "10", wantErr: "missing unit"},
 		{name: "non-positive duration is refused", fault: "cpu-stress", duration: "-5m", wantErr: "must be positive"},
 		{name: "unknown fault", fault: "nope", duration: "5m", wantErr: "nope"},
-		{name: "missing fault lists catalog", wantErr: "network-partition, packet-loss"},
+		{name: "missing fault lists catalog", wantErr: strings.Join(faults.Names(), ", ")},
+		{name: "run-id must be a DNS-1123 label", fault: "cpu-stress", duration: "5m", runID: "Run_1", wantErr: "--run-id"},
+		{name: "chain-id must be a DNS-1123 label", fault: "cpu-stress", duration: "5m", chainID: "bench.a", wantErr: "--chain-id"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := base
 			p.Duration = tc.duration
+			if tc.runID != "" {
+				p.RunID = tc.runID
+			}
+			if tc.chainID != "" {
+				p.ChainID = tc.chainID
+			}
 			out, err := render(tc.fault, p)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
@@ -73,7 +83,23 @@ func TestList(t *testing.T) {
 	if err := json.Unmarshal(js.Bytes(), &got); err != nil {
 		t.Fatalf("json: %v", err)
 	}
-	if len(got) != len(faults.Catalog) || got[0]["Name"] != faults.Catalog[0].Name {
-		t.Errorf("json catalog mismatch: %v", got)
+	if len(got) != len(faults.Catalog) {
+		t.Fatalf("json: %d entries, want %d", len(got), len(faults.Catalog))
+	}
+	for i, f := range faults.Catalog {
+		for key, want := range map[string]any{"name": f.Name, "kind": f.Kind, "oneShot": f.OneShot, "meshWide": f.MeshWide, "summary": f.Summary} {
+			if got[i][key] != want {
+				t.Errorf("json[%d].%s = %v, want %v", i, key, got[i][key], want)
+			}
+		}
+	}
+
+	var none bytes.Buffer
+	err := list(&none, "xml")
+	if err == nil || !strings.Contains(err.Error(), "--output") {
+		t.Fatalf("bad format: want usage error, got %v", err)
+	}
+	if none.Len() != 0 {
+		t.Errorf("bad format wrote to the output writer: %q", none.String())
 	}
 }
