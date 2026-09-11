@@ -9,6 +9,8 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/sei-protocol/seictl/bench"
+	"github.com/sei-protocol/seictl/chaos"
 	"github.com/sei-protocol/seictl/seinetwork"
 	"github.com/sei-protocol/seictl/seinode"
 	"github.com/sei-protocol/seictl/task"
@@ -57,6 +59,8 @@ var (
 			&seinode.Cmd,
 			&workflow.Cmd,
 			&task.Cmd,
+			&chaos.Cmd,
+			&bench.Cmd,
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
