@@ -43,7 +43,7 @@ var renderCmd = cli.Command{
 		&cli.IntFlag{Name: "deadline-seconds", Usage: "activeDeadlineSeconds override (default: duration + 15m)"},
 	},
 	Action: func(_ context.Context, c *cli.Command) error {
-		out, err := render(bench.Params{
+		out, err := Render(bench.Params{
 			RunID:           c.String("run-id"),
 			ChainID:         c.String("chain-id"),
 			Commit:          c.String("commit"),
@@ -63,7 +63,7 @@ var renderCmd = cli.Command{
 	},
 }
 
-func render(p bench.Params) ([]byte, error) {
+func Render(p bench.Params) ([]byte, error) {
 	if err := cliutil.RequireHarnessNames(p.ChainID, p.RunID, "seiload"); err != nil {
 		return nil, err
 	}

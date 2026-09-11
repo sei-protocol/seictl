@@ -11,6 +11,7 @@ import (
 
 	"github.com/sei-protocol/seictl/bench"
 	"github.com/sei-protocol/seictl/chaos"
+	"github.com/sei-protocol/seictl/mcp"
 	"github.com/sei-protocol/seictl/seinetwork"
 	"github.com/sei-protocol/seictl/seinode"
 	"github.com/sei-protocol/seictl/task"
@@ -61,6 +62,7 @@ var (
 			&task.Cmd,
 			&chaos.Cmd,
 			&bench.Cmd,
+			&mcp.Cmd,
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{

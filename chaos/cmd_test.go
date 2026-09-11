@@ -43,7 +43,7 @@ func TestRender(t *testing.T) {
 			if tc.chainID != "" {
 				p.ChainID = tc.chainID
 			}
-			out, err := render(tc.fault, p)
+			out, err := Render(tc.fault, p)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
