@@ -594,3 +594,28 @@ func TestRender_ConfigValueRejectsNonTOMLFile(t *testing.T) {
 		t.Fatalf("want TOML-only refusal, got %v", err)
 	}
 }
+
+func TestRender_NodeIsolation(t *testing.T) {
+	args := resourceArgs()
+	args.nodeIsolation = "dedicated"
+	got, err := render(args)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if v, _, _ := unstructured.NestedString(got.Object, "spec", "scheduling", "nodeIsolation"); v != "Dedicated" {
+		t.Fatalf("want canonical enum spelling Dedicated, got %q", v)
+	}
+
+	plain, err := render(resourceArgs())
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if _, found, _ := unstructured.NestedFieldNoCopy(plain.Object, "spec", "scheduling"); found {
+		t.Fatal("omitting --node-isolation must leave spec.scheduling unset so the controller's legacy fallback applies")
+	}
+
+	args.nodeIsolation = "Isolated"
+	if _, err := render(args); err == nil || !strings.Contains(err.Error(), "Shared, Dedicated") {
+		t.Fatalf("want enum refusal, got %v", err)
+	}
+}

@@ -35,6 +35,7 @@ type renderArgs struct {
 	storage         string
 	iops            string
 	throughput      string
+	nodeIsolation   string
 	sets            []string
 	configValues    []string
 	overrides       []string
@@ -124,6 +125,10 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		if err := unstructured.SetNestedField(u.Object, vacName, "spec", "dataVolume", "storage", "volumeAttributesClassName"); err != nil {
 			return nil, fmt.Errorf("apply --iops/--throughput: %w", err)
 		}
+	}
+
+	if err := cliutil.ApplyNodeIsolation(u.Object, args.nodeIsolation); err != nil {
+		return nil, err
 	}
 
 	// Peer auto-wiring (LLD §3): --network binds spec.peers[].label.selector
