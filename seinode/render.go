@@ -36,6 +36,7 @@ type renderArgs struct {
 	iops            string
 	throughput      string
 	sets            []string
+	configValues    []string
 	overrides       []string
 }
 
@@ -153,6 +154,12 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		if err := cliutil.ApplyOverride(u.Object, expr, "spec", "overrides"); err != nil {
 			return nil, cliutil.UsageError("apply --override %q: %s", expr, err.Error())
 		}
+	}
+
+	// After --set so an entry --set placed in the list is merged by
+	// (fileName, key) rather than duplicated.
+	if err := cliutil.ApplyConfigValues(u.Object, args.configValues, "spec", "configValues"); err != nil {
+		return nil, err
 	}
 
 	// Final resource guard — nothing below writes spec.resources, so this

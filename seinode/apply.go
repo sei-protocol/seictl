@@ -32,6 +32,7 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		iops:            c.String("iops"),
 		throughput:      c.String("throughput"),
 		sets:            c.StringSlice("set"),
+		configValues:    c.StringSlice("config-value"),
 		overrides:       c.StringSlice("override"),
 	}
 	dryRun := c.Bool("dry-run")
@@ -102,7 +103,15 @@ var applyCmd = cli.Command{
 		"\n\n" +
 		"Layering, lowest precedence first: preset YAML, discrete flags " +
 		"(--chain-id, --image, --network, --external-address, --cpu, " +
-		"--memory, --storage, --iops, --throughput), --override, --set. " +
+		"--memory, --storage, --iops, --throughput), --override, --set, " +
+		"then --config-value (merged into spec.configValues by (fileName, key)). " +
+		"\n\n" +
+		"--override writes the allow-listed spec.overrides map (validated " +
+		"keys, string values). --config-value writes spec.configValues " +
+		"(spec 002): any TOML file, typed JSON values, no allow-list — the " +
+		"controller validates shape only and reports a bad key as " +
+		"ConfigValuesValid=False. Changing configValues on a Running node " +
+		"restarts seid. " +
 		"\n\n" +
 		"--cpu/--memory/--storage each override one dimension of the " +
 		"preset's resource footprint; unspecified dimensions keep the " +
@@ -190,6 +199,10 @@ var applyCmd = cli.Command{
 		&cli.StringSliceFlag{
 			Name:  "set",
 			Usage: "Strategic-merge override, dotted path with optional list-index suffix (e.g. --set spec.image=foo, --set spec.peers[0].label.namespace=other-ns). Wins on collision with discrete flags. Repeatable.",
+		},
+		&cli.StringSliceFlag{
+			Name:  "config-value",
+			Usage: `Append a typed entry to spec.configValues: --config-value <file>.toml:<dotted.key>=<value> (e.g. --config-value config.toml:evm-only=true, --config-value app.toml:giga_executor.enabled=true). The file must be a TOML file name (^[A-Za-z0-9_-]+\.toml$); the key a dotted TOML path. Values parse as JSON when possible (bool, number, array, table); otherwise as strings — wrap in JSON quotes to force a string ("400ms"). null is refused. Same (file, key) as an existing entry replaces it. At most 100 entries. Repeatable. Prefer this over --set spec.configValues=[...], which replaces the whole list.`,
 		},
 		&cli.StringSliceFlag{
 			Name:  "override",
