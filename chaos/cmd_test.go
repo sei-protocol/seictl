@@ -25,6 +25,7 @@ func TestRender(t *testing.T) {
 		{name: "one-shot rejects duration", fault: "pod-failure", duration: "5m", wantErr: "one-shot"},
 		{name: "duration fault needs duration", fault: "cpu-stress", wantErr: "needs --duration"},
 		{name: "unitless duration is refused", fault: "cpu-stress", duration: "10", wantErr: "missing unit"},
+		{name: "non-positive duration is refused", fault: "cpu-stress", duration: "-5m", wantErr: "must be positive"},
 		{name: "unknown fault", fault: "nope", duration: "5m", wantErr: "nope"},
 		{name: "missing fault lists catalog", wantErr: "network-partition, packet-loss"},
 	}

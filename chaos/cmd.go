@@ -91,8 +91,12 @@ func render(name string, p faults.Params) ([]byte, error) {
 		if p.Duration == "" {
 			return nil, fmt.Errorf("fault %q needs --duration", name)
 		}
-		if _, err := time.ParseDuration(p.Duration); err != nil {
+		d, err := time.ParseDuration(p.Duration)
+		if err != nil {
 			return nil, fmt.Errorf("--duration: %w", err)
+		}
+		if d <= 0 {
+			return nil, fmt.Errorf("--duration must be positive, got %s", p.Duration)
 		}
 	}
 	return f.Render(p)

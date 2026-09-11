@@ -271,8 +271,11 @@ seictl bench render --run-id exp-42 --chain-id bench-a -n eng-alice \
   --image <seiload image@sha256:...> --profile-configmap seiload-profile-exp-42 --duration 10
 ```
 
-Faults select pods by `sei.io/nodedeployment=<chain-id>` (and `sei.io/node=<chain-id>-0`
-for the single victim); every resource is labelled `sei.io/harness-run=<run-id>`.
+Faults select pods by `sei.io/nodedeployment=<chain-id>`. One-validator faults are
+`mode: one` — Chaos-Mesh picks the victim; read it back from
+`status.experiment.containerRecords` — except `network-partition`, which pins
+`sei.io/node=<chain-id>-0` as the isolated side. `network-latency` is mesh-wide. Every
+resource is labelled `sei.io/harness-run=<run-id>`.
 
 ## Configuration Targets
 
