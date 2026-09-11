@@ -32,7 +32,7 @@ var listCmd = cli.Command{
 	Name:  "list",
 	Usage: "List the fault scenarios in the catalog",
 	Description: "Prints one line per scenario: name, Chaos-Mesh kind, whether " +
-		"the fault is one-shot (no --duration) and a summary. Use --output json " +
+		"the fault is one-shot (no --duration), whether it hits one validator or the whole mesh, and a summary. Use --output json " +
 		"for a machine-readable catalog.",
 	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Value: "text", Usage: "text|json"},
@@ -100,7 +100,11 @@ func list(w io.Writer, format string) error {
 			if f.OneShot {
 				mode = "one-shot"
 			}
-			fmt.Fprintf(w, "%-20s %-13s %-9s %s\n", f.Name, f.Kind, mode, f.Summary)
+			scope := "one-validator"
+			if f.MeshWide {
+				scope = "mesh-wide"
+			}
+			fmt.Fprintf(w, "%-20s %-13s %-9s %-14s %s\n", f.Name, f.Kind, mode, scope, f.Summary)
 		}
 		return nil
 	case "json":
