@@ -24,6 +24,7 @@ func TestRender(t *testing.T) {
 			wantSubs: []string{"kind: PodChaos", "sei.io/harness-run: \"r1\""}},
 		{name: "one-shot rejects duration", fault: "pod-failure", duration: "5m", wantErr: "one-shot"},
 		{name: "duration fault needs duration", fault: "cpu-stress", wantErr: "needs --duration"},
+		{name: "unitless duration is refused", fault: "cpu-stress", duration: "10", wantErr: "missing unit"},
 		{name: "unknown fault", fault: "nope", duration: "5m", wantErr: "nope"},
 		{name: "missing fault lists catalog", wantErr: "network-partition, packet-loss"},
 	}

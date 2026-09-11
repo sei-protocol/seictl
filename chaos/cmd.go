@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/sei-protocol/sei-k8s-controller/harness/faults"
 	"github.com/urfave/cli/v3"
@@ -48,7 +49,7 @@ var renderCmd = cli.Command{
 	ArgsUsage: "<fault>",
 	Description: "Renders the named scenario against a SeiNetwork. The selector " +
 		"targets pods labelled sei.io/nodedeployment=<chain-id> in --namespace; " +
-		"scenarios that need a single victim pick validator-0 (<chain-id>-0). " +
+		"one-validator scenarios use mode: one (Chaos-Mesh picks the victim) except network-partition, which isolates <chain-id>-0. " +
 		"Resources are named <fault>-<run-id> and labelled sei.io/harness-run=<run-id> " +
 		"so metrics and teardown key on the run. Duration-bearing faults require " +
 		"--duration; one-shot faults (see `seictl chaos list`) reject it.",
@@ -86,8 +87,13 @@ func render(name string, p faults.Params) ([]byte, error) {
 	if f.OneShot && p.Duration != "" {
 		return nil, fmt.Errorf("fault %q is one-shot; --duration does not apply", name)
 	}
-	if !f.OneShot && p.Duration == "" {
-		return nil, fmt.Errorf("fault %q needs --duration", name)
+	if !f.OneShot {
+		if p.Duration == "" {
+			return nil, fmt.Errorf("fault %q needs --duration", name)
+		}
+		if _, err := time.ParseDuration(p.Duration); err != nil {
+			return nil, fmt.Errorf("--duration: %w", err)
+		}
 	}
 	return f.Render(p)
 }
@@ -104,7 +110,9 @@ func list(w io.Writer, format string) error {
 			if f.MeshWide {
 				scope = "mesh-wide"
 			}
-			fmt.Fprintf(w, "%-20s %-13s %-9s %-14s %s\n", f.Name, f.Kind, mode, scope, f.Summary)
+			if _, err := fmt.Fprintf(w, "%-20s %-13s %-9s %-14s %s\n", f.Name, f.Kind, mode, scope, f.Summary); err != nil {
+				return err
+			}
 		}
 		return nil
 	case "json":
