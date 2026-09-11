@@ -619,3 +619,38 @@ func TestRender_NodeIsolation(t *testing.T) {
 		t.Fatalf("want enum refusal, got %v", err)
 	}
 }
+
+func TestRender_Consensus(t *testing.T) {
+	args := resourceArgs()
+	args.consensusEngine = "autobahn"
+	args.evmOnly = true
+	got, err := render(args)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if v, _, _ := unstructured.NestedString(got.Object, "spec", "consensus", "engine"); v != "Autobahn" {
+		t.Fatalf("want canonical enum spelling Autobahn, got %q", v)
+	}
+	if v, _, _ := unstructured.NestedBool(got.Object, "spec", "consensus", "evmOnly"); !v {
+		t.Fatal("want spec.consensus.evmOnly=true")
+	}
+
+	plain, err := render(resourceArgs())
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if _, found, _ := unstructured.NestedFieldNoCopy(plain.Object, "spec", "consensus"); found {
+		t.Fatal("omitting the consensus flags must leave spec.consensus unset so the controller resolves Tendermint")
+	}
+
+	args.consensusEngine = "Tendermint"
+	if _, err := render(args); err == nil || !strings.Contains(err.Error(), "requires --consensus-engine Autobahn") {
+		t.Fatalf("want evm-only refusal under Tendermint, got %v", err)
+	}
+
+	args.consensusEngine = "Autobahn"
+	args.sets = append(args.sets, "spec.consensus.engine=Tendermint")
+	if _, err := render(args); err == nil || !strings.Contains(err.Error(), `spec.consensus.engine is "Tendermint"`) {
+		t.Fatalf("want evm-only refusal when --set overrides the engine, got %v", err)
+	}
+}

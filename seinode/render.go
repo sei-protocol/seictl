@@ -36,6 +36,8 @@ type renderArgs struct {
 	iops            string
 	throughput      string
 	nodeIsolation   string
+	consensusEngine string
+	evmOnly         bool
 	sets            []string
 	configValues    []string
 	overrides       []string
@@ -130,6 +132,9 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	if err := cliutil.ApplyNodeIsolation(u.Object, args.nodeIsolation); err != nil {
 		return nil, err
 	}
+	if err := cliutil.ApplyConsensus(u.Object, args.consensusEngine, args.evmOnly); err != nil {
+		return nil, err
+	}
 
 	// Peer auto-wiring (LLD §3): --network binds spec.peers[].label.selector
 	// to the canonical network-scoped key. Network identity, NOT chain — two
@@ -177,6 +182,13 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	// name a class no supported pair resolves to, nor shrink the volume
 	// below the one the selected IOPS is legal on.
 	if err := cliutil.ValidateStoragePerformanceSelection(u.Object); err != nil {
+		return nil, err
+	}
+
+	// Re-read spec.consensus after --set so --evm-only cannot be paired with
+	// --set spec.consensus.engine=Tendermint, and a preset-supplied engine
+	// satisfies --evm-only.
+	if err := cliutil.ValidateConsensus(u.Object); err != nil {
 		return nil, err
 	}
 

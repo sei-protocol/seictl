@@ -30,6 +30,8 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		iops:             c.String("iops"),
 		throughput:       c.String("throughput"),
 		nodeIsolation:    c.String("node-isolation"),
+		consensusEngine:  c.String("consensus-engine"),
+		evmOnly:          c.Bool("evm-only"),
 		sets:             c.StringSlice("set"),
 		configValues:     c.StringSlice("config-value"),
 		genesisAccounts:  c.StringSlice("genesis-account"),
@@ -106,7 +108,7 @@ var applyCmd = cli.Command{
 		"\n\n" +
 		"Layering, lowest precedence first: preset YAML, discrete flags " +
 		"(--chain-id, --image, --replicas, --cpu, --memory, --storage, " +
-		"--iops, --throughput, --node-isolation), --set, then --config-value (merged into " +
+		"--iops, --throughput, --node-isolation, --consensus-engine, --evm-only), --set, then --config-value (merged into " +
 		"spec.configValues by (fileName, key), so it never duplicates an " +
 		"entry --set or the preset placed there). " +
 		"\n\n" +
@@ -203,6 +205,14 @@ var applyCmd = cli.Command{
 		&cli.StringFlag{
 			Name:  "node-isolation",
 			Usage: "Worker-node placement for every validator: Shared (validators may co-locate with other pods) or Dedicated (one validator per single-tenant worker node, for benchmarks that must not share CPU/disk with a neighbour). Sets spec.scheduling.nodeIsolation; when omitted the field is left unset and the controller resolves it (legacy isolation annotation first, else its default). Repeat the flag on EVERY re-apply: seictl server-side-applies with force ownership, so an apply that omits it (e.g. one that only bumps --image) removes the field and a Dedicated network falls back to the controller default. Dedicated needs free single-tenant capacity: a child that finds none sits at status.nodes[].placement=Pending until a node is provisioned, and `network get` shows the pod Pending. Confirm placement with `seictl network get <name> -o json | jq '.status.nodes[] | {name, placement, workerNode}'`.",
+		},
+		&cli.StringFlag{
+			Name:  "consensus-engine",
+			Usage: "Consensus engine every validator runs: Tendermint (default when omitted) or Autobahn. Sets spec.consensus.engine. Create-only on its effective value: the engine is baked into the ceremony's autobahn.json and every validator's home directory, so changing it means recreating the network. Repeat the flag on EVERY re-apply: seictl server-side-applies with force ownership, so an apply that omits it (e.g. one that only bumps --image) drops spec.consensus from the applied configuration — on an Autobahn network the apiserver then rejects the apply as a create-only change (re-run with the flag), never silently reverting the engine. Under Autobahn the genesis ceremony also generates and publishes autobahn.json; validators fetch it beside genesis.json and the controller sets config.toml autobahn-config-file itself — do not set that key via --config-value (refused at plan build). Pair with --config-value for the rest of the Autobahn/Giga tuning (giga_executor, state-store, 400ms block interval).",
+		},
+		&cli.BoolFlag{
+			Name:  "evm-only",
+			Usage: "Run the EVM-only executor (requires --consensus-engine Autobahn). Sets spec.consensus.evmOnly=true. Create-only. Repeat it on EVERY re-apply alongside --consensus-engine, for the same force-ownership reason. The controller closes the CometBFT RPC (26657), REST and gRPC listeners, probes readiness on GET / :8545 instead of /lag_status, and attaches no cosmos-exporter — do not set evm-only, rpc.laddr, api.enable, grpc.enable or grpc-web.enable via --config-value (nor via --set spec.configOverrides). Empty blocks are off by default under Autobahn, so height stays 0 until load arrives.",
 		},
 		&cli.StringSliceFlag{
 			Name:  "set",
