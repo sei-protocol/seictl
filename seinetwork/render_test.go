@@ -647,4 +647,10 @@ func TestRender_Consensus(t *testing.T) {
 	if _, err := render(args); err == nil || !strings.Contains(err.Error(), "requires --consensus-engine Autobahn") {
 		t.Fatalf("want evm-only refusal under Tendermint, got %v", err)
 	}
+
+	args.consensusEngine = "Autobahn"
+	args.sets = append(args.sets, "spec.consensus.engine=Tendermint")
+	if _, err := render(args); err == nil || !strings.Contains(err.Error(), `spec.consensus.engine is "Tendermint"`) {
+		t.Fatalf("want evm-only refusal when --set overrides the engine, got %v", err)
+	}
 }

@@ -175,6 +175,13 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		return nil, err
 	}
 
+	// Re-read spec.consensus after --set so --evm-only cannot be paired with
+	// --set spec.consensus.engine=Tendermint, and a preset-supplied engine
+	// satisfies --evm-only.
+	if err := cliutil.ValidateConsensus(u.Object); err != nil {
+		return nil, err
+	}
+
 	// Reassert identity after --set so --set metadata.namespace=kube-system
 	// can't silently retarget.
 	u.SetName(args.name)

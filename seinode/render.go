@@ -185,6 +185,13 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 		return nil, err
 	}
 
+	// Re-read spec.consensus after --set so --evm-only cannot be paired with
+	// --set spec.consensus.engine=Tendermint, and a preset-supplied engine
+	// satisfies --evm-only.
+	if err := cliutil.ValidateConsensus(u.Object); err != nil {
+		return nil, err
+	}
+
 	// A peering full node needs SOMEWHERE to find its peers. If neither
 	// --network nor an explicit --set spec.peers... was given, fail with
 	// guidance rather than minting a node that can never gossip (LLD §3.1).
