@@ -46,10 +46,7 @@ func ParseConfigValue(expr string) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("empty value for %s:%s — the CRD requires a value; to set an empty string pass '\"\"'", fileName, key)
 	}
 
-	var parsed interface{}
-	if jsonErr := json.Unmarshal([]byte(val), &parsed); jsonErr != nil {
-		parsed = val
-	}
+	parsed := parseTypedValue(val)
 	if parsed == nil {
 		return nil, fmt.Errorf("value null for %s:%s is rejected by the CRD; remove the entry instead of nulling it", fileName, key)
 	}
@@ -61,6 +58,44 @@ func ParseConfigValue(expr string) (map[string]interface{}, error) {
 		"key":      key,
 		"value":    parsed,
 	}, nil
+}
+
+// parseTypedValue decodes val as JSON, keeping integers exact (int64) rather
+// than widening them to float64, so a TOML int like max_num_peers=9007199254740993
+// survives the round trip. Anything that is not JSON is a plain string.
+func parseTypedValue(val string) interface{} {
+	dec := json.NewDecoder(strings.NewReader(val))
+	dec.UseNumber()
+	var parsed interface{}
+	if err := dec.Decode(&parsed); err != nil {
+		return val
+	}
+	if dec.More() {
+		return val
+	}
+	return narrowNumbers(parsed)
+}
+
+func narrowNumbers(v interface{}) interface{} {
+	switch t := v.(type) {
+	case json.Number:
+		if i, err := t.Int64(); err == nil {
+			return i
+		}
+		if f, err := t.Float64(); err == nil {
+			return f
+		}
+		return t.String()
+	case []interface{}:
+		for i := range t {
+			t[i] = narrowNumbers(t[i])
+		}
+	case map[string]interface{}:
+		for k := range t {
+			t[k] = narrowNumbers(t[k])
+		}
+	}
+	return v
 }
 
 func containsNull(v interface{}) bool {
@@ -117,5 +152,24 @@ func ApplyConfigValues(root map[string]interface{}, exprs []string, fieldPath ..
 	if len(existing) > MaxConfigValues {
 		return UsageError("%s has %d entries; the CRD accepts at most %d", strings.Join(fieldPath, "."), len(existing), MaxConfigValues)
 	}
+	if dup := duplicateConfigKey(existing); dup != "" {
+		return UsageError("%s lists %s more than once (from the preset or --set); the controller rejects duplicate (fileName, key) pairs", strings.Join(fieldPath, "."), dup)
+	}
 	return unstructured.SetNestedSlice(root, existing, fieldPath...)
+}
+
+func duplicateConfigKey(entries []interface{}) string {
+	seen := map[string]bool{}
+	for _, raw := range entries {
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id := fmt.Sprintf("%v:%v", m["fileName"], m["key"])
+		if seen[id] {
+			return id
+		}
+		seen[id] = true
+	}
+	return ""
 }

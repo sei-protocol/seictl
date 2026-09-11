@@ -115,6 +115,10 @@ var applyCmd = cli.Command{
 		"are back. Prefer editing a follower SeiNode for a running chain. " +
 		"Values are unvalidated by the controller beyond shape: a bad key " +
 		"surfaces as ConfigValuesValid=False on the CR, not at apply. " +
+		"The genesis-chain preset also carries spec.configOverrides (raw " +
+		"TOML merge-patch, the legacy surface); setting the same key in both " +
+		"is not detected here and the controller decides precedence, so " +
+		"keep a key in one place. " +
 		"\n\n" +
 		"--cpu/--memory/--storage each override one dimension of the " +
 		"preset's resource footprint; unspecified dimensions keep the " +

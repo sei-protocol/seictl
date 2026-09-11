@@ -15,7 +15,10 @@ func TestParseConfigValue(t *testing.T) {
 		wantErr string
 	}{
 		{"bool", "config.toml:evm-only=true", map[string]interface{}{"fileName": "config.toml", "key": "evm-only", "value": true}, ""},
-		{"nested key number", "app.toml:giga_executor.occ_enabled=false", map[string]interface{}{"fileName": "app.toml", "key": "giga_executor.occ_enabled", "value": false}, ""},
+		{"integer stays int64", "config.toml:p2p.max_num_inbound_peers=9007199254740993", map[string]interface{}{"fileName": "config.toml", "key": "p2p.max_num_inbound_peers", "value": int64(9007199254740993)}, ""},
+		{"float", "app.toml:x.ratio=0.25", map[string]interface{}{"fileName": "app.toml", "key": "x.ratio", "value": 0.25}, ""},
+		{"numbers inside array", "app.toml:x.list=[1,2.5]", map[string]interface{}{"fileName": "app.toml", "key": "x.list", "value": []interface{}{int64(1), 2.5}}, ""},
+		{"nested key bool", "app.toml:giga_executor.occ_enabled=false", map[string]interface{}{"fileName": "app.toml", "key": "giga_executor.occ_enabled", "value": false}, ""},
 		{"bare string", "app.toml:state-store.sc-write-mode=async", map[string]interface{}{"fileName": "app.toml", "key": "state-store.sc-write-mode", "value": "async"}, ""},
 		{"quoted numeric string", `config.toml:consensus.timeout_commit="400ms"`, map[string]interface{}{"fileName": "config.toml", "key": "consensus.timeout_commit", "value": "400ms"}, ""},
 		{"array", `app.toml:evm.enabled_legacy_sei_apis=["a","b"]`, map[string]interface{}{"fileName": "app.toml", "key": "evm.enabled_legacy_sei_apis", "value": []interface{}{"a", "b"}}, ""},
@@ -83,6 +86,17 @@ func TestApplyConfigValues_RejectsOverMaxItems(t *testing.T) {
 	err := ApplyConfigValues(root, exprs, "spec", "configValues")
 	if err == nil || !strings.Contains(err.Error(), "at most 100") {
 		t.Fatalf("want max-items error, got %v", err)
+	}
+}
+
+func TestApplyConfigValues_RejectsPreexistingDuplicate(t *testing.T) {
+	root := map[string]interface{}{"spec": map[string]interface{}{"configValues": []interface{}{
+		map[string]interface{}{"fileName": "app.toml", "key": "a.b", "value": int64(1)},
+		map[string]interface{}{"fileName": "app.toml", "key": "a.b", "value": int64(2)},
+	}}}
+	err := ApplyConfigValues(root, []string{"app.toml:c.d=true"}, "spec", "configValues")
+	if err == nil || !strings.Contains(err.Error(), "app.toml:a.b more than once") {
+		t.Fatalf("expected duplicate error, got %v", err)
 	}
 }
 
