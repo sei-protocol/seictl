@@ -562,6 +562,39 @@ func TestRender_PerformanceTierFitsPresetDefault(t *testing.T) {
 	}
 }
 
+// --config-value lands typed entries on spec.configValues and merges by
+// (fileName, key) with whatever --set already placed there, so the flag
+// can refine a list without the whole-list replacement --set implies.
+func TestRender_ConfigValuesMergeWithSet(t *testing.T) {
+	args := resourceArgs()
+	args.sets = []string{"spec.configValues[0].fileName=config.toml", "spec.configValues[0].key=evm-only", "spec.configValues[0].value=false"}
+	args.configValues = []string{"config.toml:evm-only=true", "app.toml:giga_executor.enabled=true", `config.toml:consensus.timeout_commit="400ms"`}
+	got, err := render(args)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	list, found, _ := unstructured.NestedSlice(got.Object, "spec", "configValues")
+	if !found || len(list) != 3 {
+		t.Fatalf("want 3 configValues, got %v", list)
+	}
+	first := list[0].(map[string]interface{})
+	if first["key"] != "evm-only" || first["value"] != true {
+		t.Fatalf("--config-value must replace the --set entry in place, got %v", first)
+	}
+	third := list[2].(map[string]interface{})
+	if third["value"] != "400ms" {
+		t.Fatalf("JSON-quoted value must stay a string, got %T %v", third["value"], third["value"])
+	}
+}
+
+func TestRender_ConfigValueRejectsNonTOMLFile(t *testing.T) {
+	args := resourceArgs()
+	args.configValues = []string{"autobahn.json:x=1"}
+	if _, err := render(args); err == nil || !strings.Contains(err.Error(), "TOML") {
+		t.Fatalf("want TOML-only refusal, got %v", err)
+	}
+}
+
 func TestRender_NodeIsolation(t *testing.T) {
 	args := resourceArgs()
 	args.nodeIsolation = "dedicated"

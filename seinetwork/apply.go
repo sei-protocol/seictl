@@ -31,6 +31,7 @@ func applyAction(ctx context.Context, c *cli.Command) error {
 		throughput:       c.String("throughput"),
 		nodeIsolation:    c.String("node-isolation"),
 		sets:             c.StringSlice("set"),
+		configValues:     c.StringSlice("config-value"),
 		genesisAccounts:  c.StringSlice("genesis-account"),
 		genesisOverrides: c.StringSlice("genesis-override"),
 	}
@@ -105,7 +106,20 @@ var applyCmd = cli.Command{
 		"\n\n" +
 		"Layering, lowest precedence first: preset YAML, discrete flags " +
 		"(--chain-id, --image, --replicas, --cpu, --memory, --storage, " +
-		"--iops, --throughput, --node-isolation), --set. " +
+		"--iops, --throughput, --node-isolation), --set, then --config-value (merged into " +
+		"spec.configValues by (fileName, key), so it never duplicates an " +
+		"entry --set or the preset placed there). " +
+		"\n\n" +
+		"--config-value sets a typed TOML key on EVERY validator (spec 002/003). " +
+		"Editing configValues on a live SeiNetwork restarts the whole " +
+		"validator pool at once; block production stops until more than 2/3 " +
+		"are back. Prefer editing a follower SeiNode for a running chain. " +
+		"Values are unvalidated by the controller beyond shape: a bad key " +
+		"surfaces as ConfigValuesValid=False on the CR, not at apply. " +
+		"The genesis-chain preset also carries spec.configOverrides (raw " +
+		"TOML merge-patch, the legacy surface); setting the same key in both " +
+		"is not detected here and the controller decides precedence, so " +
+		"keep a key in one place. " +
 		"\n\n" +
 		"--cpu/--memory/--storage each override one dimension of the " +
 		"preset's resource footprint; unspecified dimensions keep the " +
@@ -193,6 +207,10 @@ var applyCmd = cli.Command{
 		&cli.StringSliceFlag{
 			Name:  "set",
 			Usage: "Strategic-merge override, dotted path with optional list-index suffix (e.g. --set spec.image=foo, --set spec.configOverrides.evm.http_port=8545). Wins on collision with discrete flags. Repeatable.",
+		},
+		&cli.StringSliceFlag{
+			Name:  "config-value",
+			Usage: `Append a typed entry to spec.configValues: --config-value <file>.toml:<dotted.key>=<value> (e.g. --config-value config.toml:evm-only=true, --config-value app.toml:giga_executor.enabled=true). The file must be a TOML file name (^[A-Za-z0-9_-]+\.toml$); the key a dotted TOML path. Values parse as JSON when possible (bool, number, array, table); otherwise as strings — wrap in JSON quotes to force a string ("400ms"). null is refused. Same (file, key) as an existing entry replaces it. At most 100 entries. Repeatable. Prefer this over --set spec.configValues=[...], which replaces the whole list.`,
 		},
 		&cli.StringSliceFlag{
 			Name:  "genesis-account",
