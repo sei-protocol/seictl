@@ -36,6 +36,8 @@ type renderArgs struct {
 	iops            string
 	throughput      string
 	nodeIsolation   string
+	consensusEngine string
+	evmOnly         bool
 	sets            []string
 	configValues    []string
 	overrides       []string
@@ -128,6 +130,9 @@ func render(args renderArgs) (*unstructured.Unstructured, error) {
 	}
 
 	if err := cliutil.ApplyNodeIsolation(u.Object, args.nodeIsolation); err != nil {
+		return nil, err
+	}
+	if err := cliutil.ApplyConsensus(u.Object, args.consensusEngine, args.evmOnly); err != nil {
 		return nil, err
 	}
 
