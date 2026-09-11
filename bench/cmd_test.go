@@ -50,7 +50,7 @@ func TestRender(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := base
 			tc.mutate(&p)
-			out, err := render(p)
+			out, err := Render(p)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)

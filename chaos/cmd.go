@@ -65,7 +65,7 @@ var renderCmd = cli.Command{
 		&cli.StringFlag{Name: "duration", Usage: "Fault duration (Go duration, e.g. 5m); required unless the fault is one-shot"},
 	},
 	Action: func(_ context.Context, c *cli.Command) error {
-		out, err := render(c.StringArg("fault"), faults.Params{
+		out, err := Render(c.StringArg("fault"), faults.Params{
 			ChainID:   c.String("chain-id"),
 			RunID:     c.String("run-id"),
 			Namespace: c.String("namespace"),
@@ -80,7 +80,10 @@ var renderCmd = cli.Command{
 	},
 }
 
-func render(name string, p faults.Params) ([]byte, error) {
+// Render validates the CLI-level contract (one-shot faults take no
+// duration, the rest need a positive one, identifiers are DNS-1123) and
+// emits the fault manifest. The `seictl mcp` chaos_render tool shares it.
+func Render(name string, p faults.Params) ([]byte, error) {
 	if name == "" {
 		return nil, fmt.Errorf("fault argument required: seictl chaos render <fault>; one of %s", strings.Join(faults.Names(), ", "))
 	}
@@ -109,10 +112,10 @@ func render(name string, p faults.Params) ([]byte, error) {
 	return f.Render(p)
 }
 
-// catalogEntry is the stable machine-readable shape of one fault. It is
+// CatalogEntry is the stable machine-readable shape of one fault. It is
 // decoupled from faults.Fault so an upstream field rename cannot change the
 // JSON this command emits.
-type catalogEntry struct {
+type CatalogEntry struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`
 	OneShot  bool   `json:"oneShot"`
@@ -120,10 +123,11 @@ type catalogEntry struct {
 	Summary  string `json:"summary"`
 }
 
-func catalog() []catalogEntry {
-	entries := make([]catalogEntry, 0, len(faults.Catalog))
+// Catalog is the fault catalog in the shape `chaos list --output json` emits.
+func Catalog() []CatalogEntry {
+	entries := make([]CatalogEntry, 0, len(faults.Catalog))
 	for _, f := range faults.Catalog {
-		entries = append(entries, catalogEntry{Name: f.Name, Kind: f.Kind, OneShot: f.OneShot, MeshWide: f.MeshWide, Summary: f.Summary})
+		entries = append(entries, CatalogEntry{Name: f.Name, Kind: f.Kind, OneShot: f.OneShot, MeshWide: f.MeshWide, Summary: f.Summary})
 	}
 	return entries
 }
@@ -131,7 +135,7 @@ func catalog() []catalogEntry {
 func list(w io.Writer, format string) error {
 	switch format {
 	case "text":
-		for _, e := range catalog() {
+		for _, e := range Catalog() {
 			mode := "duration"
 			if e.OneShot {
 				mode = "one-shot"
@@ -148,7 +152,7 @@ func list(w io.Writer, format string) error {
 	case "json":
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		return enc.Encode(catalog())
+		return enc.Encode(Catalog())
 	default:
 		return cliutil.UsageError("--output must be text or json, got %q", format)
 	}
