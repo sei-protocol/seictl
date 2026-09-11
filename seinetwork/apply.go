@@ -188,7 +188,7 @@ var applyCmd = cli.Command{
 		},
 		&cli.StringFlag{
 			Name:  "node-isolation",
-			Usage: "Worker-node placement for every validator: Shared (default when omitted; validators may co-locate with other pods) or Dedicated (one validator per single-tenant worker node, for benchmarks that must not share CPU/disk with a neighbour). Sets spec.scheduling.nodeIsolation. Dedicated needs free single-tenant capacity: a child that finds none sits at status.nodes[].placement=Pending until a node is provisioned, and `network get` shows the pod Pending. Confirm placement with `seictl network get <name> -o json | jq '.status.nodes[] | {name, placement, workerNode}'`.",
+			Usage: "Worker-node placement for every validator: Shared (validators may co-locate with other pods) or Dedicated (one validator per single-tenant worker node, for benchmarks that must not share CPU/disk with a neighbour). Sets spec.scheduling.nodeIsolation; when omitted the field is left unset and the controller resolves it (legacy isolation annotation first, else its default). Repeat the flag on EVERY re-apply: seictl server-side-applies with force ownership, so an apply that omits it (e.g. one that only bumps --image) removes the field and a Dedicated network falls back to the controller default. Dedicated needs free single-tenant capacity: a child that finds none sits at status.nodes[].placement=Pending until a node is provisioned, and `network get` shows the pod Pending. Confirm placement with `seictl network get <name> -o json | jq '.status.nodes[] | {name, placement, workerNode}'`.",
 		},
 		&cli.StringSliceFlag{
 			Name:  "set",

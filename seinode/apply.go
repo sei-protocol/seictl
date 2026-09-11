@@ -190,7 +190,7 @@ var applyCmd = cli.Command{
 		},
 		&cli.StringFlag{
 			Name:  "node-isolation",
-			Usage: "Worker-node placement: Shared (default when omitted; may co-locate with other pods) or Dedicated (single-tenant worker node, for a benchmark follower that must not share CPU/disk with a neighbour). Sets spec.scheduling.nodeIsolation. Dedicated needs free single-tenant capacity: with none the pod sits Pending until a node is provisioned. Confirm with `seictl node get <name> -o json | jq .status.currentNodeIsolation`.",
+			Usage: "Worker-node placement: Shared (may co-locate with other pods) or Dedicated (single-tenant worker node, for a benchmark follower that must not share CPU/disk with a neighbour). Sets spec.scheduling.nodeIsolation; when omitted the field is left unset and the controller resolves it (legacy isolation annotation first, else its default). Repeat the flag on EVERY re-apply: seictl server-side-applies with force ownership, so an apply that omits it (e.g. one that only bumps --image) removes the field and a Dedicated node falls back to the controller default. Dedicated needs free single-tenant capacity: with none the pod sits Pending until a node is provisioned. Confirm with `seictl node get <name> -o json | jq .status.currentNodeIsolation`.",
 		},
 		&cli.StringSliceFlag{
 			Name:  "set",
