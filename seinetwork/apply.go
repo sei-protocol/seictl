@@ -212,7 +212,7 @@ var applyCmd = cli.Command{
 		},
 		&cli.BoolFlag{
 			Name:  "evm-only",
-			Usage: "Run the EVM-only executor (requires --consensus-engine Autobahn). Sets spec.consensus.evmOnly=true. Create-only. Repeat it on EVERY re-apply alongside --consensus-engine, for the same force-ownership reason. The controller closes the CometBFT RPC (26657), REST and gRPC listeners, probes readiness on GET / :8545 instead of /lag_status, and attaches no cosmos-exporter — do not set evm-only, rpc.laddr, api.enable, grpc.enable or grpc-web.enable via --config-value. Empty blocks are off by default under Autobahn, so height stays 0 until load arrives.",
+			Usage: "Run the EVM-only executor (requires --consensus-engine Autobahn). Sets spec.consensus.evmOnly=true. Create-only. Repeat it on EVERY re-apply alongside --consensus-engine, for the same force-ownership reason. The controller closes the CometBFT RPC (26657), REST and gRPC listeners, probes readiness on GET / :8545 instead of /lag_status, and attaches no cosmos-exporter — do not set evm-only, rpc.laddr, api.enable, grpc.enable or grpc-web.enable via --config-value (nor via --set spec.configOverrides). Empty blocks are off by default under Autobahn, so height stays 0 until load arrives.",
 		},
 		&cli.StringSliceFlag{
 			Name:  "set",

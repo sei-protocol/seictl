@@ -20,6 +20,7 @@ func TestApplyConsensus(t *testing.T) {
 		{name: "exact", engine: "Autobahn", wantEngine: "Autobahn"},
 		{name: "case-insensitive", engine: "tendermint", wantEngine: "Tendermint"},
 		{name: "autobahn evm-only", engine: "autobahn", evmOnly: true, wantEngine: "Autobahn", wantEvmOnly: true},
+		{name: "evm-only alone writes evmOnly and leaves the refusal to ValidateConsensus", evmOnly: true, wantEvmOnly: true},
 		{name: "unknown engine", engine: "Narwhal", wantErr: "not one of Tendermint, Autobahn"},
 	}
 	for _, tc := range cases {
