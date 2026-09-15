@@ -7,16 +7,13 @@
 # A review request is read from a top-level comment, an inline review comment or a
 # review body. A teardown is read from a top-level comment only.
 #
-# Four things here diverge from this repository's other workflows on purpose. Each is
-# commented where it appears: the sha pin below, the lowercase `name:`, the empty
-# top-level `permissions:`, and the absence of a `concurrency:` block.
+# Three things here diverge from this repository's other workflows on purpose. Each is
+# commented where it appears: the lowercase `name:`, the empty top-level
+# `permissions:`, and the absence of a `concurrency:` block.
 #
-# The `uses:` lines pin a raw commit sha, where uci-lint.yml, uci-release-check.yml,
-# uci-release-publish.yml and uci-stale-check.yml each pin a uci tag. That is
-# availability, not preference: this callee is on no uci tag and on no uci default
-# branch -- the workflow file has no history on uci's `main` -- so there is no tag to
-# name. Every other repository wiring this reviewer pins the same sha, and this file is
-# bumped with them by path, so keep the three occurrences below identical.
+# The `uses:` lines pin a uci tag, as uci-lint.yml, uci-release-check.yml,
+# uci-release-publish.yml and uci-stale-check.yml each do. Keep the three occurrences
+# below identical.
 #
 # Lowercase, where this repository Title-Cases (`Go Linter`, `Releaser`, `Stale
 # Checker`). `seidroid review` is the literal command a person types, and the callee
@@ -102,7 +99,7 @@ jobs:
           '@seidroid review') &&
         !contains(github.event.comment.body || github.event.review.body,
           '@seidroid review close'))
-    uses: sei-protocol/uci/.github/workflows/seidroid-review.yml@92f74c9a68e4967c59b289b8e2632da7a63a6910
+    uses: sei-protocol/uci/.github/workflows/seidroid-review.yml@v0.0.22
     permissions:
       contents: read
       pull-requests: write
@@ -139,7 +136,7 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request != null &&
       startsWith(github.event.comment.body, '@seidroid review close')
-    uses: sei-protocol/uci/.github/workflows/seidroid-review.yml@92f74c9a68e4967c59b289b8e2632da7a63a6910
+    uses: sei-protocol/uci/.github/workflows/seidroid-review.yml@v0.0.22
     permissions:
       contents: read
       pull-requests: write
@@ -165,7 +162,7 @@ jobs:
   # so ask an admitted collaborator or a maintainer if your own association is not one.
   seidroid-review-reclaim:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
-    uses: sei-protocol/uci/.github/workflows/seidroid-review.yml@92f74c9a68e4967c59b289b8e2632da7a63a6910
+    uses: sei-protocol/uci/.github/workflows/seidroid-review.yml@v0.0.22
     permissions:
       contents: read
       pull-requests: write
