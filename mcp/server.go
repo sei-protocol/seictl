@@ -12,8 +12,8 @@ import (
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sei-protocol/sei-k8s-controller/harness/bench"
-	"github.com/sei-protocol/sei-k8s-controller/harness/faults"
+	"github.com/sei-protocol/sei-k8s-controller/test/manifests/bench"
+	"github.com/sei-protocol/sei-k8s-controller/test/manifests/faults"
 	"github.com/urfave/cli/v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

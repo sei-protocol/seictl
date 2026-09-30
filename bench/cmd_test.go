@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sei-protocol/sei-k8s-controller/harness/bench"
+	"github.com/sei-protocol/sei-k8s-controller/test/manifests/bench"
 	"sigs.k8s.io/yaml"
 )
 

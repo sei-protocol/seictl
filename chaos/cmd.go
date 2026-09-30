@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sei-protocol/sei-k8s-controller/harness/faults"
+	"github.com/sei-protocol/sei-k8s-controller/test/manifests/faults"
 	"github.com/urfave/cli/v3"
 
 	"github.com/sei-protocol/seictl/internal/cliutil"
