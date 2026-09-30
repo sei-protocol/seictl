@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sei-protocol/sei-k8s-controller/harness/bench"
+	"github.com/sei-protocol/sei-k8s-controller/test/manifests/bench"
 	"github.com/urfave/cli/v3"
 
 	"github.com/sei-protocol/seictl/internal/cliutil"

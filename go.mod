@@ -13,7 +13,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sei-protocol/sei-config v0.0.28
-	github.com/sei-protocol/sei-k8s-controller v0.0.0-20260911182239-badf30d8d757
+	github.com/sei-protocol/sei-k8s-controller v0.0.0-20260930153401-a6d5bd64305f
 	github.com/sei-protocol/sei-k8s-controller/sidecarapi v0.0.0
 	github.com/sei-protocol/seilog v0.0.3
 	github.com/urfave/cli/v3 v3.6.1

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sei-protocol/sei-k8s-controller/harness/faults"
+	"github.com/sei-protocol/sei-k8s-controller/test/manifests/faults"
 )
 
 func TestRender(t *testing.T) {
